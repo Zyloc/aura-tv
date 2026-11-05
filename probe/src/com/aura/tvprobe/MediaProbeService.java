@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets;
 public class MediaProbeService extends NotificationListenerService {
     private ServerSocket serverSocket;
     private volatile boolean running = false;
-    private final java.util.concurrent.ExecutorService httpPool = java.util.concurrent.Executors.newFixedThreadPool(4);
+    private final java.util.concurrent.ExecutorService httpPool = java.util.concurrent.Executors.newFixedThreadPool(2);
     private AuraDb db;
     private AiRecommender ai;
     private SessionInspector inspector;
@@ -26,7 +26,7 @@ public class MediaProbeService extends NotificationListenerService {
     @Override
     public void onCreate() {
         super.onCreate();
-        db = new AuraDb(this);
+        db = AuraDb.getInstance(this);
         ai = new AiRecommender(db);
         inspector = new SessionInspector(this, new ComponentName(this, MediaProbeService.class), db, ai);
         overlay = new TvOverlayManager(this);

@@ -21,14 +21,32 @@ public class AuraDb extends SQLiteOpenHelper {
     public static final String DEFAULT_PROFILE = "member1";
     private static final int MAX_TV_HISTORY = 500;
     private static final long RECO_TTL_SEC = 3600L; // 1 hour cache TTL
+    private static AuraDb sInstance;
     private final Context appCtx;
 
+    public static synchronized AuraDb getInstance(Context ctx) {
+        if (sInstance == null) {
+            sInstance = new AuraDb(ctx.getApplicationContext());
+        }
+        return sInstance;
+    }
+
     public AuraDb(Context ctx) {
-        super(ctx, "aura_tv_local.db", null, 8);
+        super(ctx.getApplicationContext(), "aura_tv_local.db", null, 8);
         setWriteAheadLoggingEnabled(true);
         this.appCtx = ctx.getApplicationContext();
         applyBundledEnvIfPresent();
         ensureDefaultProfileExists();
+        if (sInstance == null) sInstance = this;
+    }
+
+    @Override
+    public void onConfigure(SQLiteDatabase db) {
+        super.onConfigure(db);
+        try {
+            db.execSQL("PRAGMA cache_size = -256");
+            db.execSQL("PRAGMA synchronous = NORMAL");
+        } catch (Exception ignored) {}
     }
 
     @Override
