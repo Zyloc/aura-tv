@@ -812,8 +812,8 @@ public class AuraActivity extends Activity {
             rawReason = "Recommended for " + db.getProfileLabel(memProfile) + " based on your interest in " + genres + " and top-rated titles.";
         }
 
-        String cleanReason = formatCompleteSentences(rawReason, 175);
-        String cleanSyn = formatCompleteSentences(rawSyn, 155);
+        String cleanReason = formatCompleteSentences(rawReason, 280);
+        String cleanSyn = formatCompleteSentences(rawSyn, 280);
 
         drawerAvailableBadge.setText(appName);
         drawerMeta.setText(year + "   ·   " + rt + " min   ·   IMDb " + rawImdb);
