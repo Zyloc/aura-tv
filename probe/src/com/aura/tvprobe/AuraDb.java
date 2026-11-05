@@ -182,6 +182,76 @@ public class AuraDb extends SQLiteOpenHelper {
         setSetting("filters_" + profileId, "");
     }
 
+    public String getProfileTaste(String profileId) {
+        return getSetting("profile_taste_" + profileId, "");
+    }
+
+    public void setProfileTaste(String profileId, String taste) {
+        setSetting("profile_taste_" + profileId, taste != null ? taste.trim() : "");
+    }
+
+    public List<String> getDynamicTasteAnchors(String profileId) {
+        List<String> anchors = new ArrayList<>();
+        JSONArray watched = listManuallyWatched();
+        for (int i = 0; i < watched.length() && anchors.size() < 2; i++) {
+            JSONObject o = watched.optJSONObject(i);
+            if (o != null && o.optInt("user_rating", 0) >= 8) {
+                String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
+                if (!t.isEmpty() && !anchors.contains(t)) anchors.add(t);
+            }
+        }
+        JSONArray hist = listHistory(profileId);
+        for (int i = 0; i < hist.length() && anchors.size() < 3; i++) {
+            JSONObject h = hist.optJSONObject(i);
+            if (h == null) continue;
+            if (h.optString("app_pkg").contains("youtube")) continue;
+            String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
+            if (!t.isEmpty() && !anchors.contains(t)) anchors.add(t);
+        }
+        return anchors;
+    }
+
+    public void rateTitle(JSONObject item, int ratingOutOf10) {
+        try {
+            JSONObject copy = new JSONObject(item.toString());
+            copy.put("user_rating", ratingOutOf10);
+            markTitleWatched(copy, true);
+        } catch (Exception ignored) {}
+    }
+
+    public java.util.Map<String, Integer> getUserRatingsMap() {
+        java.util.Map<String, Integer> map = new java.util.HashMap<>();
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.rawQuery("SELECT title_key, payload_json FROM watched_items", null)) {
+            while (c.moveToNext()) {
+                String k = c.getString(0);
+                JSONObject o = new JSONObject(c.getString(1));
+                int r = o.optInt("user_rating", 0);
+                if (r > 0) map.put(k, r);
+            }
+        } catch (Exception ignored) {}
+        return map;
+    }
+
+    public String getRatingFeedbackSummary() {
+        List<String> loved = new ArrayList<>();
+        List<String> disliked = new ArrayList<>();
+        JSONArray watched = listManuallyWatched();
+        for (int i = 0; i < watched.length(); i++) {
+            JSONObject o = watched.optJSONObject(i);
+            if (o == null) continue;
+            int r = o.optInt("user_rating", 0);
+            if (r <= 0) continue;
+            String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
+            if (r >= 7) loved.add(t + " (" + r + "/10)");
+            else if (r <= 5) disliked.add(t + " (" + r + "/10)");
+        }
+        StringBuilder sb = new StringBuilder();
+        if (!loved.isEmpty()) sb.append("Highly Rated by User (recommend more like these): ").append(loved.toString()).append(". ");
+        if (!disliked.isEmpty()) sb.append("Low Rated by User (avoid similar tone/style): ").append(disliked.toString()).append(".");
+        return sb.toString();
+    }
+
     public void markTitleWatched(JSONObject item, boolean watched) {
         String rawTitle = item.optString("series_title").isEmpty()
             ? item.optString("title")

@@ -7,6 +7,7 @@ from config import DEFAULT_PROFILE, GEMINI_API_KEY, GEMINI_MODELS, PROFILE_LABEL
 from db import (
     get_active_filters,
     get_profile_recos,
+    get_setting,
     get_voice_session,
     get_watched_keys,
     is_reco_cache_fresh,
@@ -20,29 +21,6 @@ from db import (
 )
 from resolvers import enrich_open_source_meta, fetch_justwatch_similar
 
-PROFILE_HINTS = {
-    "member1": f"{PROFILE_LABELS.get('member1', 'Member 1')} (loves high-concept sci-fi like Severance, Foundation, Dark, intense K-dramas, and mind-bending thrillers).",
-    "partner": f"{PROFILE_LABELS.get('partner', 'Partner')} (loves romantic K-dramas like Marry My Husband, Lovely Runner, emotional drama, and bingeable mystery).",
-    "member3": f"{PROFILE_LABELS.get('member3', 'Member 3')} (loves action blockbusters, crime thrillers, Indian web series, and standup/short comedies).",
-    "kids": f"{PROFILE_LABELS.get('kids', 'Kids')} (animated movies, Pixar/Disney, adventure, science & nature shorts).",
-    "family": f"{PROFILE_LABELS.get('family', 'Family')} (crowd-pleasing movies, mystery, comedy, and universally loved series).",
-}
-
-OPEN_SOURCE_FALLBACK = [
-    {"title": "Lovely Runner", "app": "Prime Video", "genre": "Romance, Drama", "runtime_min": 60, "reason": "Time-slip K-drama romance matching Marry My Husband."},
-    {"title": "Dark", "app": "Netflix", "genre": "Sci-Fi, Mystery", "runtime_min": 55, "reason": "Mind-bending sci-fi mystery matching Severance."},
-    {"title": "The Bear", "app": "Hotstar", "genre": "Comedy, Drama", "runtime_min": 28, "reason": "Fast-paced 28-minute episodes with gripping tension."},
-    {"title": "Love, Death & Robots", "app": "Netflix", "genre": "Sci-Fi, Short", "runtime_min": 15, "reason": "15-minute sci-fi anthology shorts for quick watching."},
-    {"title": "3 Body Problem", "app": "Netflix", "genre": "Sci-Fi, Thriller", "runtime_min": 55, "reason": "Hard sci-fi epic matching Foundation and Dune."},
-    {"title": "Panchayat", "app": "Prime Video", "genre": "Comedy, Drama", "runtime_min": 32, "reason": "Heartwarming Indian dramedy on Prime Video."},
-    {"title": "The Glory", "app": "Netflix", "genre": "Drama, Thriller", "runtime_min": 50, "reason": "Meticulously plotted K-drama revenge thriller."},
-    {"title": "Modern Family", "app": "Hotstar", "genre": "Comedy, Family", "runtime_min": 22, "reason": "Quick 22-minute comedy episodes great for any mood."},
-    {"title": "Silo", "app": "Apple TV+", "genre": "Sci-Fi, Mystery", "runtime_min": 50, "reason": "Dystopian bunker mystery on Apple TV+."},
-    {"title": "Farzi", "app": "Prime Video", "genre": "Crime, Thriller", "runtime_min": 55, "reason": "Slick crime thriller series on Prime Video."},
-    {"title": "Blue Eye Samurai", "app": "Netflix", "genre": "Action, Animation", "runtime_min": 45, "reason": "Critically acclaimed action revenge epic."},
-    {"title": "Brooklyn Nine-Nine", "app": "Netflix", "genre": "Comedy, Short", "runtime_min": 22, "reason": "Quick 22-minute workplace comedy."},
-]
-
 
 def get_recommendations_for_profile(
     profile: str, current: Dict, history: List[Dict], force_refresh: bool = False
@@ -54,7 +32,7 @@ def get_recommendations_for_profile(
 
     raw_picks = fetch_gemini_picks(profile, current, history) if GEMINI_API_KEY else []
     if not raw_picks:
-        raw_picks = OPEN_SOURCE_FALLBACK
+        return get_profile_recos(profile)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         cards = list(pool.map(enrich_pick, raw_picks[:14]))
@@ -74,28 +52,45 @@ def fetch_gemini_picks(profile: str, current: Dict, history: List[Dict]) -> List
 
 def build_gemini_prompt(profile: str, current: Dict, history: List[Dict]) -> str:
     seen = []
+    loved = []
+    disliked = []
+    for w in list_manually_watched():
+        t = (w.get("series_title") or w.get("title") or "").strip()
+        if t and t not in seen:
+            seen.append(t)
+        r = int(w.get("user_rating") or 0)
+        if r >= 7:
+            loved.append(f"{t} ({r}/10)")
+        elif 0 < r <= 5:
+            disliked.append(f"{t} ({r}/10)")
+
     for h in history:
         name = (h.get("series_title") or h.get("title") or "").strip()
         if name and name not in seen:
             seen.append(name)
-        if len(seen) >= 35:
+        if len(seen) >= 45:
             break
-    now_name = current.get("series_title") or current.get("title") or "Unknown"
-    hint = PROFILE_HINTS.get(profile, PROFILE_HINTS[DEFAULT_PROFILE])
+
+    now_name = current.get("series_title") or current.get("title") or ""
+    profile_name = PROFILE_LABELS.get(profile, profile)
+    custom_taste = get_setting(f"profile_taste_{profile}", "")
+    active_filters = get_active_filters(profile)
+
     return (
-        f"Active Household Profile: {hint}\n"
+        f"You are Aura, an AI TV & movie recommendation engine.\n"
+        f"Active Household Profile: '{profile_name}' (id: {profile}).\n"
+        f"User's Explicit Taste Guidance: {custom_taste or '(Infer from profile name, ratings, and watch history)'}\n"
+        f"Highly Rated by User (1-10 scale, recommend more like these): {loved}\n"
+        f"Low Rated by User (1-10 scale, avoid similar style): {disliked}\n"
+        f"Active Filters: {active_filters}\n"
         f"Currently watching on TV: '{now_name}'.\n"
-        f"Recent TV Watch History: {seen}.\n"
-        "Recommend 12 specific shows or movies they have NOT watched yet. Include:\n"
-        "- 4 Quick Watch / Short episodes (< 30 mins, sitcoms, anthology shorts, or standup)\n"
-        "- 3 Sci-Fi / Mystery / Mind-bending Thrillers\n"
-        "- 3 Drama / Romance / K-Drama\n"
-        "- 2 Action / Crime / Blockbuster Movies\n"
-        "Return ONLY a JSON array of 12 objects with keys: "
-        "'title', 'app' (Prime Video, Netflix, Hotstar, Apple TV+, SmartTube), "
-        "'genre' (e.g. 'Sci-Fi, Thriller' or 'Comedy, Short'), "
-        "'runtime_min' (integer minutes per episode or movie), "
-        "and 'reason' (1 punchy sentence under 18 words)."
+        f"Already Watched (STRICT EXCLUSION — DO NOT recommend): {seen}.\n"
+        "Recommend 14 specific critically acclaimed shows or movies (IMDb >= 7.4) available in India that they have NOT watched yet.\n"
+        "Return ONLY a JSON array of 14 objects with keys: "
+        "'title', 'app' (Prime Video, Netflix, Disney+ Hotstar, Apple TV+, SonyLIV, or ZEE5), "
+        "'genre' (comma-separated genres), "
+        "'runtime_min' (integer minutes), "
+        "and 'reason' (1 concise sentence under 18 words)."
     )
 
 
