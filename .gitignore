@@ -1,0 +1,29 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Android Build & Generated Assets
+probe/build/
+probe/assets/
+probe/*.apk
+probe/*.idsig
+probe/debug.keystore
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
