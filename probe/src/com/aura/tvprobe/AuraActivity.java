@@ -15,9 +15,11 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.View;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -26,48 +28,57 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class AuraActivity extends Activity {
     private static final String[] PROFILE_IDS = {"member1", "partner", "member3", "kids", "family"};
     private static final String[][] PERSISTENT_FILTERS = {
-        {"movies", "🎬 Movies"},
-        {"series", "📺 Series"},
-        {"short", "⏱️ <30m"},
-        {"scifi", "🚀 Sci-Fi"},
-        {"horror", "🧟 Horror/Thriller"},
-        {"comedy", "😂 Comedy"},
-        {"drama", "🎭 Drama"},
-        {"action", "💥 Action"},
-        {"hotstar", "Disney+ Hotstar"},
+        {"movies", "Movies"},
+        {"series", "Series"},
+        {"short", "< 30m"},
+        {"scifi", "Sci-Fi"},
+        {"horror", "Thriller & Horror"},
+        {"comedy", "Comedy"},
+        {"drama", "Drama"},
+        {"action", "Action"},
+        {"hotstar", "Hotstar"},
         {"netflix", "Netflix"},
         {"prime", "Prime Video"}
     };
 
-    // Material Design 3 Dark + IMDb Gold tokens
-    private static final String M3_BG = "#121212";
-    private static final String M3_CARD = "#1E1E1E";
-    private static final String M3_CARD_BORDER = "#333333";
-    private static final String M3_CHIP_BG = "#252525";
-    private static final String M3_CHIP_BORDER = "#444444";
-    private static final String M3_CHIP_ACTIVE_BG = "#1B364D";
-    private static final String M3_CHIP_ACTIVE_BORDER = "#64B5F6";
+    private static final String BG_OBSIDIAN = "#090A0F";
+    private static final String SURFACE_PILL = "#161821";
+    private static final String BORDER_SUBTLE = "#2A2E3D";
+    private static final String ACTIVE_FILTER_BG = "#2B2310";
     private static final String IMDB_GOLD = "#F5C518";
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService bgPool = Executors.newFixedThreadPool(3);
+
     private AuraDb db;
     private AiRecommender ai;
     private SessionInspector inspector;
     private SyncManager sync;
     private VoiceConcierge voice;
 
+    // Lock-free in-memory UI state (zero SQLite calls on UI thread)
+    private String memProfile = AuraDb.DEFAULT_PROFILE;
+    private final List<String> memFilters = new ArrayList<>();
+    private final Set<String> memWatchedKeys = new HashSet<>();
+    private JSONArray memRecos = new JSONArray();
+    private JSONArray memWatchedList = new JSONArray();
+    private JSONObject memVoiceSession = new JSONObject();
     private boolean showingWatchedList = false;
-    private boolean isLoading = false;
-    private String statusText = "";
-    private JSONObject currentState = new JSONObject();
 
     private LinearLayout rootBox;
     private EditText voiceInput;
+    private TextView resetBtn;
     private LinearLayout statusBox;
     private ProgressBar spinner;
     private TextView statusLabel;
@@ -75,15 +86,21 @@ public class AuraActivity extends Activity {
     private TextView watchedToggleBtn;
 
     private LinearLayout filterChipsRow;
-    private TextView sessionFlowLabel;
+    private TextView spotlightTitle;
+    private TextView spotlightRating;
+    private TextView spotlightMeta;
+    private TextView spotlightAppBadge;
+    private TextView spotlightDesc;
+    private TextView spotlightHint;
     private LinearLayout followUpRow;
     private LinearLayout carouselRow;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         startService(new Intent(this, MediaProbeService.class));
+
         db = new AuraDb(this);
         ai = new AiRecommender(db);
         inspector = new SessionInspector(this, new ComponentName(this, MediaProbeService.class), db, ai);
@@ -92,68 +109,95 @@ public class AuraActivity extends Activity {
 
         rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
-        rootBox.setBackgroundColor(Color.parseColor(M3_BG));
-        rootBox.setPadding(44, 28, 44, 24);
+        rootBox.setBackgroundColor(Color.parseColor(BG_OBSIDIAN));
+        rootBox.setPadding(52, 32, 52, 24);
         setContentView(rootBox);
 
-        currentState = inspector.buildFastCachedState();
         buildStaticShell();
-        refreshAllSections(true);
+        loadMemoryStateAsync(true);
+    }
 
-        new Thread(() -> {
+    private void loadMemoryStateAsync(final boolean initialLaunch) {
+        bgPool.submit(() -> {
+            final String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+            final List<String> flt = db.getActiveFilters(prof);
+            final Set<String> wKeys = db.getWatchedTitleKeys();
+            final JSONArray recos = db.getProfileRecommendations(prof);
+            final JSONArray wList = db.listManuallyWatched();
+            final JSONObject vSess = db.getVoiceSession(prof);
+
+            uiHandler.post(() -> {
+                memProfile = prof;
+                memFilters.clear();
+                memFilters.addAll(flt);
+                memWatchedKeys.clear();
+                memWatchedKeys.addAll(wKeys);
+                memRecos = recos;
+                memWatchedList = wList;
+                memVoiceSession = vSess;
+                refreshAllSections(initialLaunch);
+            });
+
             sync.syncWithHost();
-            String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
-            if (!db.isRecoCacheFresh(prof) || db.getProfileRecommendations(prof).length() == 0) {
-                final JSONObject fresh = inspector.syncAndBuildState(false);
+            if (!db.isRecoCacheFresh(prof) || recos.length() == 0) {
+                uiHandler.post(() -> setLoader(true, "Curating recommendations…"));
+                inspector.syncAndBuildState(false);
+                final JSONArray freshRecos = db.getProfileRecommendations(prof);
                 uiHandler.post(() -> {
-                    currentState = fresh;
-                    refreshCardsOnly(false);
+                    memRecos = freshRecos;
+                    setLoader(false, "");
+                    refreshCardsOnly(initialLaunch);
                 });
             }
-        }).start();
+        });
     }
 
     private void buildStaticShell() {
         rootBox.removeAllViews();
-        rootBox.addView(buildTopInputAndProfileRow());
-        rootBox.addView(buildPersistentFilterRow());
-        rootBox.addView(buildSessionFlowRow());
+        rootBox.addView(buildTopNavRow());
+        rootBox.addView(buildSpotlightStage());
+        rootBox.addView(buildFilterStripRow());
+        rootBox.addView(buildSessionRefinementRow());
 
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         hsv.setHorizontalScrollBarEnabled(false);
+        hsv.setClipChildren(false);
+        hsv.setClipToPadding(false);
         carouselRow = new LinearLayout(this);
         carouselRow.setOrientation(LinearLayout.HORIZONTAL);
-        carouselRow.setPadding(2, 8, 2, 8);
+        carouselRow.setClipChildren(false);
+        carouselRow.setClipToPadding(false);
+        carouselRow.setPadding(12, 16, 24, 12);
         hsv.addView(carouselRow);
         rootBox.addView(hsv, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
-    private View buildTopInputAndProfileRow() {
+    private View buildTopNavRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, 0, 0, 14);
 
-        TextView brand = makeText("AURA", 15f, "#000000", true, 1);
-        brand.setPadding(16, 8, 16, 8);
+        TextView brand = makeText("AURA", 14f, "#000000", true, 1);
+        brand.setPadding(16, 7, 16, 7);
         GradientDrawable bBg = new GradientDrawable();
         bBg.setColor(Color.parseColor(IMDB_GOLD));
-        bBg.setCornerRadius(8f);
+        bBg.setCornerRadius(6f);
         brand.setBackground(bBg);
         LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        bLp.setMargins(0, 0, 14, 0);
+        bLp.setMargins(0, 0, 16, 0);
         row.addView(brand, bLp);
 
         voiceInput = new EditText(this);
-        voiceInput.setHint("🎙️ Speak or type to search/refine (e.g. 'sci-fi movie or horror show')…");
-        voiceInput.setHintTextColor(Color.parseColor("#8E8E93"));
+        voiceInput.setHint("Ask Aura or search (e.g. 'mind-bending sci-fi' or 'dark thriller')…");
+        voiceInput.setHintTextColor(Color.parseColor("#6E7385"));
         voiceInput.setTextColor(Color.WHITE);
         voiceInput.setTextSize(13f);
         voiceInput.setSingleLine(true);
         voiceInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        voiceInput.setPadding(20, 10, 20, 10);
+        voiceInput.setPadding(22, 9, 22, 9);
         styleInputBox(voiceInput, false);
         voiceInput.setOnFocusChangeListener((v, hasFocus) -> styleInputBox(voiceInput, hasFocus));
         voiceInput.setOnEditorActionListener((v, actionId, event) -> {
@@ -168,19 +212,20 @@ public class AuraActivity extends Activity {
         inLp.setMargins(0, 0, 10, 0);
         row.addView(voiceInput, inLp);
 
-        row.addView(makeM3Button("Ask", false, this::submitVoiceInput));
-        row.addView(makeM3Button("Reset", false, () -> runSessionTurn("", true)));
+        row.addView(makePillBtn("Search", false, this::submitVoiceInput));
+        resetBtn = makePillBtn("Reset Session", false, () -> runSessionTurn("", true));
+        row.addView(resetBtn);
 
         statusBox = new LinearLayout(this);
         statusBox.setOrientation(LinearLayout.HORIZONTAL);
         statusBox.setGravity(Gravity.CENTER_VERTICAL);
-        statusBox.setPadding(14, 8, 14, 8);
+        statusBox.setPadding(14, 7, 14, 7);
         spinner = new ProgressBar(this);
         spinner.setIndeterminate(true);
-        LinearLayout.LayoutParams spLp = new LinearLayout.LayoutParams(22, 22);
+        LinearLayout.LayoutParams spLp = new LinearLayout.LayoutParams(18, 18);
         spLp.setMargins(0, 0, 8, 0);
         statusBox.addView(spinner, spLp);
-        statusLabel = makeText("", 12f, IMDB_GOLD, true, 1);
+        statusLabel = makeText("", 11f, IMDB_GOLD, true, 1);
         statusBox.addView(statusLabel);
         statusBox.setVisibility(View.GONE);
         LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
@@ -188,70 +233,134 @@ public class AuraActivity extends Activity {
         stLp.setMargins(0, 0, 10, 0);
         row.addView(statusBox, stLp);
 
-        profileDropdownBtn = makeM3Button("👤 Profile ▾", false, this::showProfileDropdown);
+        profileDropdownBtn = makePillBtn("Profile ▾", false, this::showProfileDropdown);
         row.addView(profileDropdownBtn);
 
-        watchedToggleBtn = makeM3Button("✓ Watched", false, () -> {
+        watchedToggleBtn = makePillBtn("Watched", false, () -> {
             showingWatchedList = !showingWatchedList;
-            styleM3Button(watchedToggleBtn, watchedToggleBtn.hasFocus(), showingWatchedList);
+            stylePillBtn(watchedToggleBtn, watchedToggleBtn.hasFocus(), showingWatchedList);
             refreshCardsOnly(false);
         });
         row.addView(watchedToggleBtn);
 
-        row.addView(makeM3Button("↻", false, this::triggerManualRefresh));
+        row.addView(makePillBtn("↻", false, this::triggerManualRefresh));
         return row;
     }
 
-    private View buildPersistentFilterRow() {
+    private View buildFilterStripRow() {
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         hsv.setHorizontalScrollBarEnabled(false);
         filterChipsRow = new LinearLayout(this);
         filterChipsRow.setOrientation(LinearLayout.HORIZONTAL);
         filterChipsRow.setGravity(Gravity.CENTER_VERTICAL);
-        filterChipsRow.setPadding(0, 0, 0, 10);
+        filterChipsRow.setPadding(0, 0, 0, 14);
         hsv.addView(filterChipsRow);
         return hsv;
     }
 
-    private View buildSessionFlowRow() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.HORIZONTAL);
-        box.setGravity(Gravity.CENTER_VERTICAL);
-        box.setPadding(0, 0, 0, 12);
+    private View buildSpotlightStage() {
+        LinearLayout stage = new LinearLayout(this);
+        stage.setOrientation(LinearLayout.VERTICAL);
+        stage.setPadding(4, 10, 4, 16);
 
-        sessionFlowLabel = makeText("Session Flow: Ready", 12f, "#B0B0B8", true, 1);
-        sessionFlowLabel.setMaxWidth(620);
-        sessionFlowLabel.setEllipsize(TextUtils.TruncateAt.START);
-        LinearLayout.LayoutParams sfLp = new LinearLayout.LayoutParams(
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        spotlightTitle = makeText("Select a Title", 32f, "#FFFFFF", true, 1);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        sfLp.setMargins(0, 0, 14, 0);
-        box.addView(sessionFlowLabel, sfLp);
+        tLp.setMargins(0, 0, 18, 0);
+        titleRow.addView(spotlightTitle, tLp);
 
+        spotlightRating = makeText("★ 8.5", 13f, "#000000", true, 1);
+        spotlightRating.setPadding(10, 4, 10, 4);
+        GradientDrawable rBg = new GradientDrawable();
+        rBg.setColor(Color.parseColor(IMDB_GOLD));
+        rBg.setCornerRadius(6f);
+        spotlightRating.setBackground(rBg);
+        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rLp.setMargins(0, 0, 12, 0);
+        titleRow.addView(spotlightRating, rLp);
+
+        spotlightAppBadge = makeText("Prime Video", 12f, "#E8EAED", true, 1);
+        spotlightAppBadge.setPadding(12, 4, 12, 4);
+        GradientDrawable aBg = new GradientDrawable();
+        aBg.setColor(Color.parseColor("#1F2433"));
+        aBg.setStroke(1, Color.parseColor("#3B4259"));
+        aBg.setCornerRadius(6f);
+        spotlightAppBadge.setBackground(aBg);
+        LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        aLp.setMargins(0, 0, 14, 0);
+        titleRow.addView(spotlightAppBadge, aLp);
+
+        spotlightMeta = makeText("", 13f, "#9AA0B0", false, 1);
+        titleRow.addView(spotlightMeta);
+        stage.addView(titleRow);
+
+        spotlightDesc = makeText("", 14f, "#C8CCD8", false, 2);
+        spotlightDesc.setPadding(0, 8, 120, 6);
+        spotlightDesc.setMinLines(2);
+        stage.addView(spotlightDesc);
+
+        spotlightHint = makeText("Press OK on poster to open in app   •   Press DOWN on poster to mark Watched", 11f, "#7C8296", false, 1);
+        stage.addView(spotlightHint);
+        return stage;
+    }
+
+    private View buildSessionRefinementRow() {
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         hsv.setHorizontalScrollBarEnabled(false);
         followUpRow = new LinearLayout(this);
         followUpRow.setOrientation(LinearLayout.HORIZONTAL);
+        followUpRow.setGravity(Gravity.CENTER_VERTICAL);
+        followUpRow.setPadding(0, 0, 0, 6);
         hsv.addView(followUpRow);
-        box.addView(hsv, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        return box;
+        return hsv;
+    }
+
+    private void updateSpotlightForCard(JSONObject item) {
+        if (item == null) return;
+        String mainTitle = item.optString("series_title").isEmpty()
+            ? item.optString("title")
+            : item.optString("series_title");
+        String appName = item.optString("app", item.optString("app_name", "Streaming")).split("·")[0].trim();
+        String rat = item.optString("rating", "★ 8.2");
+        int rt = item.optInt("runtime_min", 45);
+        int year = item.optInt("year", 2024);
+        String genres = item.optString("genres", "Drama")
+            .replace("[", "").replace("]", "").replace("\"", "").replace(",", ", ").replaceAll("\\s+", " ").trim();
+        String desc = item.optString("reason", item.optString("synopsis", ""));
+        if (!item.optString("synopsis").isEmpty() && !desc.equals(item.optString("synopsis"))) {
+            desc = desc + " — " + item.optString("synopsis");
+        }
+
+        spotlightTitle.setText(mainTitle);
+        spotlightRating.setText(rat);
+        spotlightAppBadge.setText(appName);
+        spotlightMeta.setText(year + "   •   " + rt + " min   •   " + genres);
+        spotlightDesc.setText(desc);
+        spotlightHint.setText("Press OK to launch in " + appName + "   •   Press DOWN to mark Watched");
     }
 
     private void showProfileDropdown() {
-        String active = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
         PopupMenu popup = new PopupMenu(this, profileDropdownBtn);
         Menu menu = popup.getMenu();
         for (int i = 0; i < PROFILE_IDS.length; i++) {
             String pid = PROFILE_IDS[i];
-            String label = (pid.equals(active) ? "✓ " : "    ") + profileName(pid);
+            String label = (pid.equals(memProfile) ? "✓ " : "    ") + db.getProfileLabel(pid);
             menu.add(0, i, i, label);
         }
         popup.setOnMenuItemClickListener(item -> {
-            String chosen = PROFILE_IDS[item.getItemId()];
-            db.setSetting("active_profile", chosen);
-            new Thread(() -> sync.syncWithHost()).start();
-            currentState = inspector.buildFastCachedState();
-            setLoader(false, "✓ Profile: " + profileName(chosen));
-            refreshAllSections(false);
+            final String chosen = PROFILE_IDS[item.getItemId()];
+            memProfile = chosen;
+            bgPool.submit(() -> {
+                db.setSetting("active_profile", chosen);
+                sync.syncWithHost();
+            });
+            loadMemoryStateAsync(false);
             profileDropdownBtn.requestFocus();
             return true;
         });
@@ -259,284 +368,328 @@ public class AuraActivity extends Activity {
     }
 
     private void refreshAllSections(boolean focusFirstCard) {
-        String activeProf = currentState.optString("active_profile", AuraDb.DEFAULT_PROFILE);
-        profileDropdownBtn.setText("👤 " + profileName(activeProf) + " ▾");
-        int watchedCount = db.listManuallyWatched().length();
-        watchedToggleBtn.setText(showingWatchedList ? "← Back to Picks" : ("✓ Watched (" + watchedCount + ")"));
-        styleM3Button(watchedToggleBtn, watchedToggleBtn.hasFocus(), showingWatchedList);
+        profileDropdownBtn.setText(db.getProfileLabel(memProfile) + " ▾");
+        watchedToggleBtn.setText(showingWatchedList ? "← Back" : ("Watched (" + memWatchedKeys.size() + ")"));
+        stylePillBtn(watchedToggleBtn, watchedToggleBtn.hasFocus(), showingWatchedList);
 
-        populateFilterChips(activeProf);
-        populateSessionFlow(activeProf);
+        populateFilterChips();
+        populateSessionRow();
         refreshCardsOnly(focusFirstCard);
     }
 
-    private void populateFilterChips(final String activeProf) {
+    private void populateFilterChips() {
         filterChipsRow.removeAllViews();
-        List<String> active = db.getActiveFilters(activeProf);
-
-        TextView lbl = makeText("Filters:", 12f, "#9E9E9E", true, 1);
-        lbl.setPadding(0, 0, 10, 0);
-        filterChipsRow.addView(lbl);
-
         for (String[] f : PERSISTENT_FILTERS) {
             final String fid = f[0];
             final String fLabel = f[1];
-            boolean isAct = active.contains(fid);
-            final TextView chip = makeM3Button((isAct ? "✓ " : "") + fLabel, isAct, null);
+            boolean isAct = memFilters.contains(fid);
+            final TextView chip = makePillBtn((isAct ? "✓ " : "") + fLabel, isAct, null);
             chip.setOnClickListener(v -> {
-                db.toggleFilter(activeProf, fid);
-                boolean nowAct = db.isFilterActive(activeProf, fid);
+                toggleFilterInMemory(fid);
+                boolean nowAct = memFilters.contains(fid);
                 chip.setText((nowAct ? "✓ " : "") + fLabel);
-                styleM3Button(chip, chip.hasFocus(), nowAct);
-                populateSessionFlow(activeProf);
+                stylePillBtn(chip, chip.hasFocus(), nowAct);
+                populateFilterChips();
                 refreshCardsOnly(false);
-                // Keep focus on this exact chip — never reset cursor!
-                chip.requestFocus();
-                if (!showingWatchedList && nowAct && getFilteredItems().length() < 3) {
-                    runSessionTurnKeepFocus("Show picks matching filters: " + db.getActiveFilters(activeProf).toString(), chip);
-                } else {
-                    new Thread(() -> sync.syncWithHost()).start();
+                focusChipById(fid);
+                if (!showingWatchedList && nowAct && getFilteredItemsFromMemory().length() < 4) {
+                    runSessionTurnKeepFocus("Recommend critically acclaimed titles matching filters: " + memFilters.toString(), fid);
                 }
             });
+            chip.setTag("filter_" + fid);
             filterChipsRow.addView(chip);
         }
 
-        if (!active.isEmpty()) {
-            TextView clearBtn = makeM3Button("✕ Clear Filters", false, () -> {
-                db.clearFilters(activeProf);
-                populateFilterChips(activeProf);
-                populateSessionFlow(activeProf);
+        if (!memFilters.isEmpty()) {
+            TextView clearBtn = makePillBtn("✕ Clear", false, () -> {
+                memFilters.clear();
+                bgPool.submit(() -> {
+                    db.clearFilters(memProfile);
+                    sync.syncWithHost();
+                });
+                populateFilterChips();
                 refreshCardsOnly(false);
-                new Thread(() -> sync.syncWithHost()).start();
             });
             filterChipsRow.addView(clearBtn);
         }
     }
 
-    private void populateSessionFlow(String activeProf) {
-        JSONObject vs = db.getVoiceSession(activeProf);
-        JSONArray turns = vs.optJSONArray("turns");
-        List<String> activeFilters = db.getActiveFilters(activeProf);
+    private void focusChipById(String fid) {
+        for (int i = 0; i < filterChipsRow.getChildCount(); i++) {
+            View child = filterChipsRow.getChildAt(i);
+            if (("filter_" + fid).equals(child.getTag())) {
+                child.requestFocus();
+                return;
+            }
+        }
+    }
 
-        StringBuilder sb = new StringBuilder("Session: ");
-        if (turns != null && turns.length() > 0) {
-            int count = 0;
-            for (int i = 0; i < turns.length(); i++) {
+    private void toggleFilterInMemory(final String fid) {
+        if (memFilters.contains(fid)) {
+            memFilters.remove(fid);
+        } else {
+            if ("movies".equals(fid)) memFilters.remove("series");
+            if ("series".equals(fid)) memFilters.remove("movies");
+            memFilters.add(fid);
+        }
+        final String prof = memProfile;
+        bgPool.submit(() -> {
+            db.toggleFilter(prof, fid);
+            sync.syncWithHost();
+        });
+    }
+
+    private void populateSessionRow() {
+        followUpRow.removeAllViews();
+        JSONArray turns = memVoiceSession.optJSONArray("turns");
+        boolean hasTurns = turns != null && turns.length() > 0;
+        resetBtn.setVisibility(hasTurns ? View.VISIBLE : View.GONE);
+
+        if (hasTurns) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = Math.max(0, turns.length() - 4); i < turns.length(); i++) {
                 JSONObject t = turns.optJSONObject(i);
                 if (t != null && "user".equals(t.optString("role"))) {
-                    if (count > 0) sb.append(" → ");
+                    if (sb.length() > 0) sb.append("  →  ");
                     sb.append("\"").append(t.optString("text")).append("\"");
-                    count++;
                 }
             }
-        } else {
-            sb.append("All Recommendations");
+            TextView crumb = makeText("Session: " + sb.toString(), 11f, IMDB_GOLD, true, 1);
+            crumb.setMaxWidth(520);
+            crumb.setEllipsize(TextUtils.TruncateAt.START);
+            crumb.setPadding(0, 0, 14, 0);
+            followUpRow.addView(crumb);
         }
-        if (!activeFilters.isEmpty()) {
-            sb.append("  •  Filters: ").append(activeFilters.toString());
-        }
-        sessionFlowLabel.setText(sb.toString());
 
-        followUpRow.removeAllViews();
-        JSONArray chips = vs.optJSONArray("follow_ups");
+        JSONArray chips = memVoiceSession.optJSONArray("follow_ups");
         if (chips != null) {
-            for (int i = 0; i < chips.length(); i++) {
+            for (int i = 0; i < Math.min(chips.length(), 4); i++) {
                 final String prompt = chips.optString(i);
-                followUpRow.addView(makeM3Button("+ " + prompt, false, () -> runSessionTurn(prompt, false)));
+                TextView chip = makeSubtleRefinementChip("+ " + prompt, () -> runSessionTurn(prompt, false));
+                followUpRow.addView(chip);
             }
         }
     }
 
     private void refreshCardsOnly(boolean focusFirstCard) {
         carouselRow.removeAllViews();
-        JSONArray items = getFilteredItems();
-        int limit = Math.min(items.length(), 25);
+        JSONArray items = getFilteredItemsFromMemory();
+        int limit = Math.min(items.length(), 22);
         for (int i = 0; i < limit; i++) {
             JSONObject item = items.optJSONObject(i);
-            if (item != null) carouselRow.addView(buildImdbCard(item));
+            if (item != null) carouselRow.addView(buildMinimalistPosterTile(item));
+        }
+        if (items.length() > 0) {
+            updateSpotlightForCard(items.optJSONObject(0));
         }
         if (focusFirstCard && carouselRow.getChildCount() > 0) {
-            carouselRow.getChildAt(0).requestFocus();
+            View firstTile = carouselRow.getChildAt(0);
+            if (firstTile instanceof LinearLayout && ((LinearLayout) firstTile).getChildCount() > 0) {
+                ((LinearLayout) firstTile).getChildAt(0).requestFocus();
+            }
         }
     }
 
-    private View buildImdbCard(final JSONObject item) {
-        final LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(14, 14, 14, 16);
-        styleImdbCard(card, false);
-
-        ImageView img = new ImageView(this);
-        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        img.setBackgroundColor(Color.parseColor("#2A2A2A"));
-        ImageLoader.applyRoundedCorners(img, 10f);
-        // True 2:3 Movie Poster Aspect Ratio: 236 x 344 px
-        LinearLayout.LayoutParams imgLp = new LinearLayout.LayoutParams(236, 344);
-        imgLp.setMargins(0, 0, 0, 10);
-        card.addView(img, imgLp);
-        ImageLoader.load(this, item.optString("poster_url"), img);
-
+    private View buildMinimalistPosterTile(final JSONObject item) {
         final String mainTitle = item.optString("series_title").isEmpty()
             ? item.optString("title")
             : item.optString("series_title");
-        final String appName = item.optString("app", item.optString("app_name", "TV")).split("·")[0].trim();
-        String rat = item.optString("rating", "★ 8.1");
-        int rt = item.optInt("runtime_min", 45);
+        final String appName = item.optString("app", item.optString("app_name", "Streaming")).split("·")[0].trim();
 
-        // IMDb Rating + Runtime + App line
-        LinearLayout metaRow = new LinearLayout(this);
-        metaRow.setOrientation(LinearLayout.HORIZONTAL);
-        metaRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView starTv = makeText(rat, 12f, IMDB_GOLD, true, 1);
-        TextView appTv = makeText("  •  " + rt + "m  •  " + shortAppLabel(appName), 11f, "#BDBDBD", true, 1);
-        metaRow.addView(starTv);
-        metaRow.addView(appTv);
-        card.addView(metaRow);
+        final LinearLayout tileWrap = new LinearLayout(this);
+        tileWrap.setOrientation(LinearLayout.VERTICAL);
+        tileWrap.setGravity(Gravity.CENTER_HORIZONTAL);
+        tileWrap.setClipChildren(false);
+        tileWrap.setClipToPadding(false);
 
-        // Title
-        TextView titleTv = makeText(mainTitle, 15f, "#FFFFFF", true, 1);
-        titleTv.setPadding(0, 4, 0, 2);
-        card.addView(titleTv);
+        // Frameless 2:3 Poster Frame (226 x 334 px — pressing OK opens directly in app!)
+        final FrameLayout posterFrame = new FrameLayout(this);
+        posterFrame.setPadding(4, 4, 4, 4);
+        posterFrame.setFocusable(true);
+        posterFrame.setClickable(true);
+        posterFrame.setAlpha(0.76f);
+        stylePosterFrame(posterFrame, false);
 
-        // Genres
-        String genres = item.optString("genres", "Drama")
-            .replace("[", "").replace("]", "").replace("\"", "").replace(",", ", ").replaceAll("\\s+", " ").trim();
-        card.addView(makeText(genres, 11f, "#9E9E9E", false, 1));
+        ImageView img = new ImageView(this);
+        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        img.setBackgroundColor(Color.parseColor("#181B24"));
+        ImageLoader.applyRoundedCorners(img, 12f);
+        posterFrame.addView(img, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        ImageLoader.load(this, item.optString("poster_url"), img);
 
-        // 2-line concise description inside card (eliminates need for repetitive top hero!)
-        String reason = item.optString("reason", item.optString("synopsis", ""));
-        TextView descTv = makeText(reason, 11f, "#D0D0D0", false, 2);
-        descTv.setPadding(0, 4, 0, 10);
-        descTv.setMinLines(2);
-        card.addView(descTv);
+        // Subtle top-right streaming badge on poster
+        TextView badge = makeText(shortAppLabel(appName), 10f, "#FFFFFF", true, 1);
+        badge.setPadding(8, 3, 8, 3);
+        GradientDrawable bBg = new GradientDrawable();
+        bBg.setColor(Color.parseColor("#CC0D1017"));
+        bBg.setCornerRadius(6f);
+        badge.setBackground(bBg);
+        FrameLayout.LayoutParams bLp = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        bLp.gravity = Gravity.TOP | Gravity.END;
+        bLp.setMargins(8, 8, 8, 8);
+        posterFrame.addView(badge, bLp);
 
-        // Action Buttons Row at bottom of IMDb card
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        // Subtle bottom-left IMDb score pill on poster
+        TextView star = makeText(item.optString("rating", "★ 8.2"), 10f, "#000000", true, 1);
+        star.setPadding(7, 2, 7, 2);
+        GradientDrawable sBg = new GradientDrawable();
+        sBg.setColor(Color.parseColor(IMDB_GOLD));
+        sBg.setCornerRadius(5f);
+        star.setBackground(sBg);
+        FrameLayout.LayoutParams sLp = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        sLp.gravity = Gravity.BOTTOM | Gravity.START;
+        sLp.setMargins(8, 8, 8, 8);
+        posterFrame.addView(star, sLp);
 
-        final TextView openBtn = makeCardActionBtn("▶ Open", () -> {
+        // Secondary action below poster (reached by pressing DOWN from poster)
+        final boolean isW = memWatchedKeys.contains(AuraDb.normalizeTitleKey(mainTitle));
+        final TextView watchPill = makeText(isW ? "✕ Unwatch" : "✓ Watched", 10f, "#9AA0B0", true, 1);
+        watchPill.setGravity(Gravity.CENTER);
+        watchPill.setPadding(14, 5, 14, 5);
+        watchPill.setFocusable(true);
+        watchPill.setClickable(true);
+        watchPill.setAlpha(0.0f); // Hidden until poster or pill is focused for pure minimalism!
+        stylePillBtn(watchPill, false, isW);
+
+        posterFrame.setOnFocusChangeListener((v, hasFocus) -> {
+            stylePosterFrame(posterFrame, hasFocus);
+            posterFrame.animate()
+                .scaleX(hasFocus ? 1.07f : 1.0f)
+                .scaleY(hasFocus ? 1.07f : 1.0f)
+                .alpha(hasFocus ? 1.0f : 0.76f)
+                .setDuration(130)
+                .start();
+            watchPill.setAlpha((hasFocus || watchPill.hasFocus()) ? 1.0f : 0.0f);
+            if (hasFocus) updateSpotlightForCard(item);
+        });
+
+        posterFrame.setOnClickListener(v -> {
             String uri = item.optString("launch_uri");
-            if (uri.isEmpty()) uri = db.findNativeLaunchUri(mainTitle);
             String pkg = item.optString("launch_pkg", item.optString("app_pkg"));
             if (pkg.isEmpty() || pkg.contains("smarttube")) pkg = AuraDb.resolveAppPackage(appName);
             TvOverlayManager.launchNativeStreamingApp(this, uri, pkg.isEmpty() ? appName : pkg, mainTitle);
         });
-        openBtn.setOnFocusChangeListener((v, hasFocus) -> {
-            styleM3Button(openBtn, hasFocus, false);
-            styleImdbCard(card, hasFocus);
+
+        watchPill.setOnFocusChangeListener((v, hasFocus) -> {
+            stylePillBtn(watchPill, hasFocus, isW);
+            watchPill.setAlpha((hasFocus || posterFrame.hasFocus()) ? 1.0f : 0.0f);
+            posterFrame.setAlpha((hasFocus || posterFrame.hasFocus()) ? 1.0f : 0.76f);
+            if (hasFocus) updateSpotlightForCard(item);
         });
-        LinearLayout.LayoutParams oLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        oLp.setMargins(0, 0, 8, 0);
-        btnRow.addView(openBtn, oLp);
 
-        final boolean isW = db.isTitleWatched(mainTitle);
-        final TextView watchBtn = makeCardActionBtn(isW ? "✕ Unwatch" : "✓ Watched", null);
-        watchBtn.setOnFocusChangeListener((v, hasFocus) -> {
-            styleM3Button(watchBtn, hasFocus, isW);
-            styleImdbCard(card, hasFocus);
-        });
-        watchBtn.setOnClickListener(v -> handleMarkWatchedInPlace(card, item, mainTitle));
-        LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.15f);
-        btnRow.addView(watchBtn, wLp);
+        watchPill.setOnClickListener(v -> handleMarkWatchedInPlace(tileWrap, item, mainTitle));
 
-        card.addView(btnRow);
+        tileWrap.addView(posterFrame, new LinearLayout.LayoutParams(224, 332));
+        LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        wLp.setMargins(0, 10, 0, 0);
+        tileWrap.addView(watchPill, wLp);
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(264, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, 0, 18, 0);
-        card.setLayoutParams(lp);
-        return card;
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, 22, 0);
+        tileWrap.setLayoutParams(lp);
+        return tileWrap;
     }
 
-    private void handleMarkWatchedInPlace(View cardView, JSONObject item, String title) {
-        int idx = carouselRow.indexOfChild(cardView);
-        boolean nowWatched = !db.isTitleWatched(title);
-        db.markTitleWatched(item, nowWatched);
-        // Push update to server immediately in background
-        new Thread(() -> sync.syncWithHost()).start();
+    private void handleMarkWatchedInPlace(View tileWrap, final JSONObject item, final String title) {
+        int idx = carouselRow.indexOfChild(tileWrap);
+        String key = AuraDb.normalizeTitleKey(title);
+        final boolean nowWatched = !memWatchedKeys.contains(key);
+        if (nowWatched) {
+            memWatchedKeys.add(key);
+            memWatchedList.put(item);
+        } else {
+            memWatchedKeys.remove(key);
+        }
 
-        int watchedCount = db.listManuallyWatched().length();
-        watchedToggleBtn.setText(showingWatchedList ? "← Back to Picks" : ("✓ Watched (" + watchedCount + ")"));
+        watchedToggleBtn.setText(showingWatchedList ? "← Back" : ("Watched (" + memWatchedKeys.size() + ")"));
         setLoader(false, nowWatched ? ("✓ Marked '" + title + "' watched") : ("Unmarked '" + title + "'"));
 
-        // Remove card in-place and preserve focus on neighbor card (no cursor reset!)
         if (idx >= 0) {
             carouselRow.removeViewAt(idx);
             int remaining = carouselRow.getChildCount();
             if (remaining > 0) {
                 int targetIdx = Math.min(idx, remaining - 1);
-                View nextCard = carouselRow.getChildAt(targetIdx);
-                if (nextCard != null) nextCard.requestFocus();
-            }
-        }
-    }
-
-    private JSONArray getFilteredItems() {
-        String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
-        if (showingWatchedList) {
-            return db.listManuallyWatched();
-        }
-        JSONObject vs = db.getVoiceSession(prof);
-        JSONArray vr = vs != null ? vs.optJSONArray("results") : null;
-        JSONArray recos = db.getProfileRecommendations(prof);
-        JSONArray hist = db.listHistory(prof);
-
-        JSONArray source = (vr != null && vr.length() > 0) ? vr : recos;
-        JSONArray unwatched = db.filterOutWatched(source);
-
-        List<String> filters = db.getActiveFilters(prof);
-        if (filters.isEmpty()) return unwatched;
-
-        // Combine voice session + recommendations + unwatched history when filtering locally
-        JSONArray pool = new JSONArray();
-        java.util.Set<String> seenKeys = new java.util.HashSet<>();
-        JSONArray[] sources = new JSONArray[] {
-            vr != null ? db.filterOutWatched(vr) : new JSONArray(),
-            db.filterOutWatched(recos),
-            db.filterOutWatched(hist)
-        };
-        for (JSONArray arr : sources) {
-            for (int i = 0; i < arr.length() && pool.length() < 90; i++) {
-                JSONObject item = arr.optJSONObject(i);
-                if (item == null || item.optString("poster_url").isEmpty()) continue;
-                String t = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
-                String k = AuraDb.normalizeTitleKey(t);
-                if (!k.isEmpty() && !seenKeys.contains(k)) {
-                    seenKeys.add(k);
-                    pool.put(item);
+                View nextTile = carouselRow.getChildAt(targetIdx);
+                if (nextTile instanceof LinearLayout && ((LinearLayout) nextTile).getChildCount() > 0) {
+                    ((LinearLayout) nextTile).getChildAt(0).requestFocus();
                 }
             }
         }
 
-        JSONArray out = new JSONArray();
-        for (int i = 0; i < pool.length() && out.length() < 24; i++) {
-            JSONObject o = pool.optJSONObject(i);
-            if (o != null && matchesAllFilters(o, filters)) out.put(o);
-        }
-        // Fallback if strict intersection is empty while waiting for AI filter turn: match any active filter
-        if (out.length() == 0) {
-            for (int i = 0; i < pool.length() && out.length() < 12; i++) {
-                JSONObject o = pool.optJSONObject(i);
-                if (o != null && matchesAnyFilter(o, filters)) out.put(o);
+        bgPool.submit(() -> {
+            db.markTitleWatched(item, nowWatched);
+            sync.syncWithHost();
+        });
+    }
+
+    private JSONArray getFilteredItemsFromMemory() {
+        if (showingWatchedList) return memWatchedList;
+
+        JSONArray vr = memVoiceSession.optJSONArray("results");
+        JSONArray primary = (vr != null && vr.length() > 0) ? vr : memRecos;
+
+        JSONArray pool = new JSONArray();
+        Set<String> seenKeys = new HashSet<>();
+        JSONArray[] sources = new JSONArray[]{primary, memRecos};
+        for (JSONArray arr : sources) {
+            if (arr == null) continue;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null || o.optString("poster_url").isEmpty()) continue;
+                String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
+                String k = AuraDb.normalizeTitleKey(t);
+                if (!k.isEmpty() && !memWatchedKeys.contains(k) && !seenKeys.contains(k)) {
+                    seenKeys.add(k);
+                    pool.put(o);
+                }
             }
         }
-        return out.length() > 0 ? out : unwatched;
+
+        if (memFilters.isEmpty()) return pool;
+
+        JSONArray strict = new JSONArray();
+        Set<String> added = new HashSet<>();
+        for (int i = 0; i < pool.length(); i++) {
+            JSONObject o = pool.optJSONObject(i);
+            if (o != null && matchesAllFilters(o, memFilters)) {
+                strict.put(o);
+                added.add(AuraDb.normalizeTitleKey(o.optString("title")));
+            }
+        }
+        if (strict.length() < 6) {
+            for (int i = 0; i < pool.length() && strict.length() < 10; i++) {
+                JSONObject o = pool.optJSONObject(i);
+                String k = o != null ? AuraDb.normalizeTitleKey(o.optString("title")) : "";
+                if (o != null && !added.contains(k) && matchesAnyFilter(o, memFilters)) {
+                    strict.put(o);
+                    added.add(k);
+                }
+            }
+        }
+        return strict.length() > 0 ? strict : pool;
     }
 
     private boolean matchesAnyFilter(JSONObject o, List<String> filters) {
         for (String f : filters) {
-            if (matchesAllFilters(o, java.util.Collections.singletonList(f))) return true;
+            if (matchesAllFilters(o, Collections.singletonList(f))) return true;
         }
         return false;
     }
 
     private boolean matchesAllFilters(JSONObject o, List<String> filters) {
         int rt = o.optInt("runtime_min", 45);
-        String text = (o.optString("genres") + " " + o.optString("reason") + " " + o.optString("synopsis") + " " + o.optString("app") + " " + o.optString("app_name")).toLowerCase();
+        String type = o.optString("type", "").toLowerCase();
+        String text = (o.optString("genres") + " " + o.optString("reason") + " " + o.optString("synopsis") + " " + o.optString("app")).toLowerCase();
         for (String f : filters) {
-            if ("short".equals(f) && rt > 32) return false;
-            if ("movies".equals(f) && rt < 75 && !text.contains("movie") && !text.contains("film")) return false;
-            if ("series".equals(f) && rt > 80) return false;
-            if ("scifi".equals(f) && !text.matches(".*(sci-fi|science|fantasy|mystery|space|future).*")) return false;
+            if ("short".equals(f) && rt > 35) return false;
+            if ("movies".equals(f) && !"movie".equals(type) && rt < 80 && !text.contains("movie") && !text.contains("film")) return false;
+            if ("series".equals(f) && ("movie".equals(type) || rt > 80)) return false;
+            if ("scifi".equals(f) && !text.matches(".*(sci-fi|science|fantasy|space|future|dystop).*")) return false;
             if ("horror".equals(f) && !text.matches(".*(horror|thriller|dark|suspense|mystery).*")) return false;
             if ("comedy".equals(f) && !text.contains("comedy") && !text.contains("sitcom") && !text.contains("funny")) return false;
             if ("drama".equals(f) && !text.contains("drama") && !text.contains("romance")) return false;
@@ -564,76 +717,75 @@ public class AuraActivity extends Activity {
 
     private void runSessionTurn(final String query, final boolean reset) {
         showingWatchedList = false;
-        setLoader(true, reset ? "Resetting session…" : ("Searching: \"" + query + "\"…"));
-        new Thread(() -> {
-            String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        setLoader(true, reset ? "Resetting…" : ("Curating: \"" + query + "\"…"));
+        final String prof = memProfile;
+        bgPool.submit(() -> {
             final JSONObject res = voice.handleTurn(prof, query, reset);
-            final JSONObject fast = inspector.buildFastCachedState();
+            final JSONArray recos = db.getProfileRecommendations(prof);
             uiHandler.post(() -> {
-                currentState = fast;
+                memVoiceSession = res;
+                memRecos = recos;
                 int count = res.optJSONArray("results") != null ? res.optJSONArray("results").length() : 0;
-                setLoader(false, reset ? "✓ Session Reset" : ("✓ " + count + " Results Ready"));
+                setLoader(false, reset ? "" : ("✓ " + count + " Picks"));
                 refreshAllSections(true);
             });
-        }).start();
+        });
     }
 
-    private void runSessionTurnKeepFocus(final String query, final View keepFocusedView) {
-        setLoader(true, "Filtering with AI…");
-        new Thread(() -> {
-            String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+    private void runSessionTurnKeepFocus(final String query, final String keepFilterId) {
+        setLoader(true, "Curating matches…");
+        final String prof = memProfile;
+        bgPool.submit(() -> {
             final JSONObject res = voice.handleTurn(prof, query, false);
-            final JSONObject fast = inspector.buildFastCachedState();
             uiHandler.post(() -> {
-                currentState = fast;
-                int count = res.optJSONArray("results") != null ? res.optJSONArray("results").length() : 0;
-                setLoader(false, "✓ " + count + " Filtered Picks");
-                populateSessionFlow(prof);
+                memVoiceSession = res;
+                setLoader(false, "");
+                populateSessionRow();
                 refreshCardsOnly(false);
-                if (keepFocusedView != null) keepFocusedView.requestFocus();
+                focusChipById(keepFilterId);
             });
-        }).start();
+        });
     }
 
     private void triggerManualRefresh() {
-        setLoader(true, "Syncing & refreshing…");
-        new Thread(() -> {
+        setLoader(true, "Refreshing taste graph…");
+        final String prof = memProfile;
+        bgPool.submit(() -> {
             sync.syncWithHost();
-            final JSONObject fresh = inspector.syncAndBuildState(true);
+            inspector.syncAndBuildState(true);
+            final JSONArray freshRecos = db.getProfileRecommendations(prof);
             uiHandler.post(() -> {
-                currentState = fresh;
-                setLoader(false, "✓ Refreshed");
+                memRecos = freshRecos;
+                setLoader(false, "✓ Updated");
                 refreshAllSections(false);
             });
-        }).start();
+        });
     }
 
     private void setLoader(boolean loading, String msg) {
-        isLoading = loading;
-        statusText = msg != null ? msg : "";
-        if (statusText.isEmpty() && !loading) {
+        String text = msg != null ? msg : "";
+        if (text.isEmpty() && !loading) {
             statusBox.setVisibility(View.GONE);
             return;
         }
         statusBox.setVisibility(View.VISIBLE);
         spinner.setVisibility(loading ? View.VISIBLE : View.GONE);
-        statusLabel.setText(statusText);
+        statusLabel.setText(text);
         GradientDrawable d = new GradientDrawable();
-        d.setColor(Color.parseColor(loading ? "#262210" : "#142E1F"));
+        d.setColor(Color.parseColor("#1D202B"));
         d.setCornerRadius(99f);
-        d.setStroke(2, Color.parseColor(loading ? IMDB_GOLD : "#4CAF50"));
+        d.setStroke(1, Color.parseColor(loading ? IMDB_GOLD : "#4CAF50"));
         statusBox.setBackground(d);
         statusLabel.setTextColor(Color.parseColor(loading ? IMDB_GOLD : "#81C784"));
-        if (carouselRow != null) carouselRow.setAlpha(loading ? 0.4f : 1.0f);
     }
 
-    private TextView makeM3Button(String text, final boolean isSelectedFilter, final Runnable onClick) {
-        final TextView btn = makeText(text, 12f, "#E3E3E3", true, 1);
-        btn.setPadding(16, 8, 16, 8);
+    private TextView makePillBtn(String text, final boolean isSelected, final Runnable onClick) {
+        final TextView btn = makeText(text, 12f, "#D8DCE6", true, 1);
+        btn.setPadding(16, 7, 16, 7);
         btn.setFocusable(true);
         btn.setClickable(true);
-        styleM3Button(btn, false, isSelectedFilter);
-        btn.setOnFocusChangeListener((v, hasFocus) -> styleM3Button(btn, hasFocus, isSelectedFilter));
+        stylePillBtn(btn, false, isSelected);
+        btn.setOnFocusChangeListener((v, hasFocus) -> stylePillBtn(btn, hasFocus, isSelected));
         if (onClick != null) btn.setOnClickListener(v -> onClick.run());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -642,66 +794,65 @@ public class AuraActivity extends Activity {
         return btn;
     }
 
-    private TextView makeCardActionBtn(String text, final Runnable onClick) {
-        final TextView btn = makeText(text, 11f, "#E3E3E3", true, 1);
-        btn.setGravity(Gravity.CENTER);
-        btn.setPadding(6, 8, 6, 8);
+    private TextView makeSubtleRefinementChip(String text, final Runnable onClick) {
+        final TextView btn = makeText(text, 11f, "#9AA0B0", false, 1);
+        btn.setPadding(12, 5, 12, 5);
         btn.setFocusable(true);
         btn.setClickable(true);
-        styleM3Button(btn, false, false);
+        stylePillBtn(btn, false, false);
+        btn.setOnFocusChangeListener((v, hasFocus) -> stylePillBtn(btn, hasFocus, false));
         if (onClick != null) btn.setOnClickListener(v -> onClick.run());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, 8, 0);
+        btn.setLayoutParams(lp);
         return btn;
     }
 
-    private void styleM3Button(TextView btn, boolean focused, boolean selected) {
+    private void stylePillBtn(TextView btn, boolean focused, boolean selected) {
         GradientDrawable d = new GradientDrawable();
         d.setCornerRadius(99f);
         if (focused) {
-            // Unmistakable High-Contrast Material 3 / IMDb Focus: Solid Gold bg + Black text + White border
             d.setColor(Color.parseColor(IMDB_GOLD));
             d.setStroke(3, Color.WHITE);
             btn.setTextColor(Color.BLACK);
         } else if (selected) {
-            d.setColor(Color.parseColor(M3_CHIP_ACTIVE_BG));
-            d.setStroke(2, Color.parseColor(M3_CHIP_ACTIVE_BORDER));
-            btn.setTextColor(Color.parseColor("#E3F2FD"));
+            d.setColor(Color.parseColor(ACTIVE_FILTER_BG));
+            d.setStroke(2, Color.parseColor(IMDB_GOLD));
+            btn.setTextColor(Color.parseColor(IMDB_GOLD));
         } else {
-            d.setColor(Color.parseColor(M3_CHIP_BG));
-            d.setStroke(1, Color.parseColor(M3_CHIP_BORDER));
-            btn.setTextColor(Color.parseColor("#E3E3E3"));
+            d.setColor(Color.parseColor(SURFACE_PILL));
+            d.setStroke(1, Color.parseColor(BORDER_SUBTLE));
+            btn.setTextColor(Color.parseColor("#C8CCD8"));
         }
         btn.setBackground(d);
+    }
+
+    private void stylePosterFrame(FrameLayout frame, boolean focused) {
+        GradientDrawable d = new GradientDrawable();
+        d.setCornerRadius(15f);
+        d.setColor(Color.TRANSPARENT);
+        d.setStroke(focused ? 4 : 1, Color.parseColor(focused ? IMDB_GOLD : "#222634"));
+        frame.setBackground(d);
     }
 
     private void styleInputBox(EditText et, boolean focused) {
         GradientDrawable d = new GradientDrawable();
         d.setCornerRadius(99f);
-        d.setColor(Color.parseColor(focused ? "#262626" : "#1A1A1A"));
-        d.setStroke(focused ? 3 : 1, Color.parseColor(focused ? IMDB_GOLD : "#444444"));
+        d.setColor(Color.parseColor(focused ? "#1E2230" : "#13151E"));
+        d.setStroke(focused ? 3 : 1, Color.parseColor(focused ? IMDB_GOLD : "#2A2E3D"));
         et.setBackground(d);
-    }
-
-    private void styleImdbCard(View card, boolean focused) {
-        GradientDrawable d = new GradientDrawable();
-        d.setCornerRadius(14f);
-        d.setColor(Color.parseColor(focused ? "#282828" : M3_CARD));
-        d.setStroke(focused ? 3 : 1, Color.parseColor(focused ? IMDB_GOLD : M3_CARD_BORDER));
-        card.setBackground(d);
     }
 
     private String shortAppLabel(String app) {
         String a = app.toLowerCase();
-        if (a.contains("hotstar") || a.contains("disney")) return "Hotstar";
+        if (a.contains("hotstar") || a.contains("disney") || a.contains("jio")) return "Hotstar";
         if (a.contains("netflix")) return "Netflix";
         if (a.contains("prime")) return "Prime";
         if (a.contains("apple")) return "Apple TV+";
         if (a.contains("sony")) return "SonyLIV";
         if (a.contains("zee")) return "ZEE5";
-        return "Open";
-    }
-
-    private String profileName(String pid) {
-        return db.getProfileLabel(pid);
+        return "Stream";
     }
 
     private TextView makeText(String txt, float sp, String hex, boolean bold, int maxLines) {

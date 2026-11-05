@@ -164,20 +164,122 @@ def resolve_generic_meta(meta: Dict, pkg: str, media_id: str) -> Dict:
 def enrich_open_source_meta(query: str) -> Dict:
     if not query:
         return {}
-    cache_key = "imdb_meta_v2:" + query.strip().lower()
+    cache_key = "jw_imdb_v3:" + query.strip().lower()
     cached = get_cached_gti(cache_key)
     if cached:
         try:
             return json.loads(cached)
         except Exception:
             pass
-    imdb = enrich_from_imdb(query)
-    tv = enrich_from_tvmaze(query)
-    if imdb.get("poster_url"):
-        tv["poster_url"] = imdb["poster_url"]
-    if tv.get("poster_url"):
-        save_cached_gti(cache_key, json.dumps(tv))
-    return tv
+    jw = enrich_from_justwatch(query)
+    if not jw.get("poster_url"):
+        imdb = enrich_from_imdb(query)
+        if imdb.get("poster_url"):
+            jw["poster_url"] = imdb["poster_url"]
+    if jw.get("poster_url"):
+        save_cached_gti(cache_key, json.dumps(jw))
+    return jw
+
+
+def enrich_from_justwatch(query: str) -> Dict:
+    gql = (
+        "query GetTitle($searchQuery: String!, $country: Country!, $language: Language!) {"
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery }, first: 1) {"
+        "    edges { node {"
+        "      objectType"
+        "      content(country: $country, language: $language) {"
+        "        title originalReleaseYear runtime shortDescription"
+        "        genres { shortName } scoring { imdbScore } posterUrl"
+        "      }"
+        "      offers(country: $country, platform: ANDROID_TV) {"
+        "        monetizationType standardWebURL deeplinkURL(platform: ANDROID_TV)"
+        "        package { clearName }"
+        "      }"
+        "    }}"
+        "  }"
+        "}"
+    )
+    try:
+        r = httpx.post(
+            "https://apis.justwatch.com/graphql",
+            json={"query": gql, "variables": {"searchQuery": query, "country": "IN", "language": "en"}},
+            headers=HEADERS,
+            timeout=4.0,
+        )
+        edges = (((r.json().get("data") or {}).get("popularTitles") or {}).get("edges")) or []
+        if not edges:
+            return {}
+        return parse_justwatch_node(edges[0].get("node") or {})
+    except Exception:
+        return {}
+
+
+def fetch_justwatch_similar(seed_title: str) -> list:
+    gql = (
+        "query GetSimilar($searchQuery: String!, $country: Country!, $language: Language!) {"
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery }, first: 1) {"
+        "    edges { node { ... on MovieOrShow {"
+        "      similarTitles(country: $country) {"
+        "        objectType"
+        "        content(country: $country, language: $language) {"
+        "          title originalReleaseYear runtime shortDescription"
+        "          genres { shortName } scoring { imdbScore } posterUrl"
+        "        }"
+        "        offers(country: $country, platform: ANDROID_TV) {"
+        "          monetizationType standardWebURL deeplinkURL(platform: ANDROID_TV)"
+        "          package { clearName }"
+        "        }"
+        "      }"
+        "    }}}"
+        "  }"
+        "}"
+    )
+    try:
+        r = httpx.post(
+            "https://apis.justwatch.com/graphql",
+            json={"query": gql, "variables": {"searchQuery": seed_title, "country": "IN", "language": "en"}},
+            headers=HEADERS,
+            timeout=4.5,
+        )
+        edges = (((r.json().get("data") or {}).get("popularTitles") or {}).get("edges")) or []
+        if not edges:
+            return []
+        sim = (edges[0].get("node") or {}).get("similarTitles") or []
+        return [parse_justwatch_node(n) for n in sim if n]
+    except Exception:
+        return []
+
+
+def parse_justwatch_node(node: Dict) -> Dict:
+    c = node.get("content") or {}
+    obj_type = node.get("objectType", "SHOW")
+    imdb = ((c.get("scoring") or {}).get("imdbScore")) or 0
+    poster = c.get("posterUrl") or ""
+    if poster:
+        poster = "https://images.justwatch.com" + poster.replace("{profile}", "s332").replace("{format}", "jpg")
+    g_map = {"scf": "Sci-Fi", "trl": "Thriller", "drm": "Drama", "cmy": "Comedy", "act": "Action", "hor": "Horror", "crm": "Crime", "mys": "Mystery", "rma": "Romance"}
+    genres = ", ".join(g_map[g["shortName"]] for g in (c.get("genres") or []) if g.get("shortName") in g_map) or "Drama"
+    offers = node.get("offers") or []
+    flat = next((o for o in offers if o.get("monetizationType") == "FLATRATE"), offers[0] if offers else {})
+    app = ((flat.get("package") or {}).get("clearName")) or "Prime Video"
+    if "Hotstar" in app:
+        app = "Disney+ Hotstar"
+    elif "Amazon Prime" in app:
+        app = "Prime Video"
+    elif app == "Apple TV":
+        app = "Apple TV+"
+    return {
+        "title": c.get("title", ""),
+        "year": c.get("originalReleaseYear") or 2024,
+        "type": "Movie" if obj_type == "MOVIE" else "Series",
+        "runtime_min": int(c.get("runtime") or (115 if obj_type == "MOVIE" else 48)),
+        "synopsis": c.get("shortDescription", ""),
+        "rating": f"★ {imdb:.1f}" if imdb else "★ 8.1",
+        "poster_url": poster,
+        "genres": genres,
+        "app": app,
+        "launch_uri": flat.get("deeplinkURL") or flat.get("standardWebURL") or "",
+    }
 
 
 def enrich_from_tvmaze(query: str) -> Dict:

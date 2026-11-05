@@ -49,7 +49,7 @@ public class SessionInspector {
         return root;
     }
 
-    public synchronized JSONObject buildFastCachedState() {
+    public JSONObject buildFastCachedState() {
         String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
         JSONArray history = db.listHistory(profile);
         JSONArray recos = db.getProfileRecommendations(profile);
@@ -73,7 +73,7 @@ public class SessionInspector {
         return out;
     }
 
-    public synchronized JSONObject syncAndBuildState(boolean forceAiRefresh) {
+    public JSONObject syncAndBuildState(boolean forceAiRefresh) {
         String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
         long nowMs = System.currentTimeMillis();
         JSONObject raw;

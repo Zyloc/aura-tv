@@ -18,7 +18,7 @@ from db import (
     save_voice_session,
     set_setting,
 )
-from resolvers import enrich_open_source_meta
+from resolvers import enrich_open_source_meta, fetch_justwatch_similar
 
 PROFILE_HINTS = {
     "member1": f"{PROFILE_LABELS.get('member1', 'Member 1')} (loves high-concept sci-fi like Severance, Foundation, Dark, intense K-dramas, and mind-bending thrillers).",
@@ -119,20 +119,24 @@ def call_gemini_model(model: str, prompt: str) -> List[Dict]:
 def enrich_pick(pick: Dict) -> Dict:
     title = pick.get("title", "")
     meta = enrich_open_source_meta(title)
-    app_name = pick.get("app", "Prime Video")
+    app_name = meta.get("app") or pick.get("app", "Prime Video")
     genres = meta.get("genres") or pick.get("genre") or pick.get("genres") or "Drama"
-    runtime_min = int(pick.get("runtime_min") or meta.get("runtime_min") or 45)
+    runtime_min = int(meta.get("runtime_min") or pick.get("runtime_min") or 45)
     launch_pkg = resolve_app_package(app_name)
+    reason = pick.get("reason") or meta.get("synopsis", "")
     return {
         "title": title,
+        "year": meta.get("year", 2024),
+        "type": meta.get("type", "Series"),
         "badge": app_name,
         "app": app_name,
-        "reason": pick.get("reason", ""),
+        "reason": reason,
+        "synopsis": meta.get("synopsis") or reason,
         "poster_url": meta.get("poster_url", ""),
         "genres": genres,
         "runtime_min": runtime_min,
-        "rating": meta.get("rating", "★ 8.4"),
-        "launch_uri": "",
+        "rating": meta.get("rating", "★ 8.2"),
+        "launch_uri": meta.get("launch_uri", ""),
         "launch_pkg": launch_pkg,
         "trailer_uri": build_smarttube_search(f"{title} official trailer"),
     }

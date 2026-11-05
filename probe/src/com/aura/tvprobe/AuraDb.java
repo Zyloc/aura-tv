@@ -25,6 +25,7 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public AuraDb(Context ctx) {
         super(ctx, "aura_tv_local.db", null, 7);
+        setWriteAheadLoggingEnabled(true);
         this.appCtx = ctx.getApplicationContext();
         applyBundledEnvIfPresent();
     }
@@ -62,8 +63,11 @@ public class AuraDb extends SQLiteOpenHelper {
         onCreate(db);
     }
 
+    private static boolean envLoadedThisProcess = false;
+
     private void applyBundledEnvIfPresent() {
-        if (appCtx == null) return;
+        if (appCtx == null || envLoadedThisProcess) return;
+        envLoadedThisProcess = true;
         try (InputStream is = appCtx.getAssets().open("aura.env");
              BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
             String line;
@@ -127,7 +131,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return "";
     }
 
-    public synchronized String findNativeLaunchUri(String title) {
+    public String findNativeLaunchUri(String title) {
         String key = normalizeTitleKey(title);
         if (key.isEmpty()) return "";
         SQLiteDatabase db = getReadableDatabase();
@@ -142,7 +146,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return "";
     }
 
-    public synchronized List<String> getActiveFilters(String profileId) {
+    public List<String> getActiveFilters(String profileId) {
         String raw = getSetting("filters_" + profileId, "");
         List<String> out = new ArrayList<>();
         if (!raw.isEmpty()) {
@@ -153,11 +157,11 @@ public class AuraDb extends SQLiteOpenHelper {
         return out;
     }
 
-    public synchronized boolean isFilterActive(String profileId, String filterId) {
+    public boolean isFilterActive(String profileId, String filterId) {
         return getActiveFilters(profileId).contains(filterId);
     }
 
-    public synchronized void toggleFilter(String profileId, String filterId) {
+    public void toggleFilter(String profileId, String filterId) {
         List<String> cur = getActiveFilters(profileId);
         if (cur.contains(filterId)) {
             cur.remove(filterId);
@@ -174,11 +178,11 @@ public class AuraDb extends SQLiteOpenHelper {
         setSetting("filters_" + profileId, sb.toString());
     }
 
-    public synchronized void clearFilters(String profileId) {
+    public void clearFilters(String profileId) {
         setSetting("filters_" + profileId, "");
     }
 
-    public synchronized void markTitleWatched(JSONObject item, boolean watched) {
+    public void markTitleWatched(JSONObject item, boolean watched) {
         String rawTitle = item.optString("series_title").isEmpty()
             ? item.optString("title")
             : item.optString("series_title");
@@ -201,7 +205,7 @@ public class AuraDb extends SQLiteOpenHelper {
         } catch (Exception ignored) {}
     }
 
-    public synchronized boolean isTitleWatched(String title) {
+    public boolean isTitleWatched(String title) {
         String key = normalizeTitleKey(title);
         if (key.isEmpty()) return false;
         SQLiteDatabase db = getReadableDatabase();
@@ -212,7 +216,7 @@ public class AuraDb extends SQLiteOpenHelper {
         }
     }
 
-    public synchronized Set<String> getWatchedTitleKeys() {
+    public Set<String> getWatchedTitleKeys() {
         Set<String> keys = new HashSet<>();
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.rawQuery("SELECT title_key FROM watched_items", null)) {
@@ -221,7 +225,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return keys;
     }
 
-    public synchronized JSONArray listManuallyWatched() {
+    public JSONArray listManuallyWatched() {
         JSONArray arr = new JSONArray();
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.rawQuery("SELECT payload_json FROM watched_items ORDER BY updated_at DESC", null)) {
@@ -232,7 +236,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return arr;
     }
 
-    public synchronized JSONArray filterOutWatched(JSONArray raw) {
+    public JSONArray filterOutWatched(JSONArray raw) {
         JSONArray filtered = new JSONArray();
         if (raw == null) return filtered;
         Set<String> watchedKeys = getWatchedTitleKeys();
@@ -255,7 +259,7 @@ public class AuraDb extends SQLiteOpenHelper {
         db.insertWithOnConflict("kv_settings", null, cv, SQLiteDatabase.CONFLICT_IGNORE);
     }
 
-    public synchronized String getSetting(String k, String def) {
+    public String getSetting(String k, String def) {
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.rawQuery("SELECT v FROM kv_settings WHERE k = ?", new String[]{k})) {
             if (c.moveToFirst()) return c.getString(0);
@@ -263,7 +267,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return def;
     }
 
-    public synchronized void setSetting(String k, String v) {
+    public void setSetting(String k, String v) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues cv = new ContentValues();
         cv.put("k", k);
@@ -271,7 +275,7 @@ public class AuraDb extends SQLiteOpenHelper {
         db.insertWithOnConflict("kv_settings", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
-    public synchronized void upsertWatchItem(JSONObject item) {
+    public void upsertWatchItem(JSONObject item) {
         String rawKey = item.optString("media_key").trim().toLowerCase();
         if (rawKey.isEmpty()) return;
         SQLiteDatabase db = getWritableDatabase();
@@ -295,13 +299,13 @@ public class AuraDb extends SQLiteOpenHelper {
         db.insertWithOnConflict("watch_history", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
-    public synchronized void enforceStorageCap() {
+    public void enforceStorageCap() {
         SQLiteDatabase db = getWritableDatabase();
         db.execSQL("DELETE FROM watch_history WHERE media_key NOT IN (" +
             "SELECT media_key FROM watch_history ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY + ")");
     }
 
-    public synchronized JSONArray listHistory(String profileId) {
+    public JSONArray listHistory(String profileId) {
         JSONArray arr = new JSONArray();
         Set<String> watchedKeys = getWatchedTitleKeys();
         SQLiteDatabase db = getReadableDatabase();
@@ -353,7 +357,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return i >= 0 && !c.isNull(i) ? c.getLong(i) : 0L;
     }
 
-    public synchronized String getCachedGti(String gti) {
+    public String getCachedGti(String gti) {
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.rawQuery("SELECT payload_json FROM gti_cache WHERE gti = ?", new String[]{gti})) {
             if (c.moveToFirst()) return c.getString(0);
@@ -361,7 +365,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return null;
     }
 
-    public synchronized void saveCachedGti(String gti, String json) {
+    public void saveCachedGti(String gti, String json) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues cv = new ContentValues();
         cv.put("gti", gti);
@@ -370,12 +374,12 @@ public class AuraDb extends SQLiteOpenHelper {
         db.insertWithOnConflict("gti_cache", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
-    public synchronized boolean isRecoCacheFresh(String profileId) {
+    public boolean isRecoCacheFresh(String profileId) {
         long age = getRecoCacheAgeSec(profileId);
         return age >= 0 && age < RECO_TTL_SEC;
     }
 
-    public synchronized long getRecoCacheAgeSec(String profileId) {
+    public long getRecoCacheAgeSec(String profileId) {
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.rawQuery("SELECT updated_at FROM profile_recos WHERE profile_id = ?", new String[]{profileId})) {
             if (c.moveToFirst()) {
@@ -386,7 +390,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return -1L;
     }
 
-    public synchronized void saveProfileRecommendations(String profileId, JSONArray recos) {
+    public void saveProfileRecommendations(String profileId, JSONArray recos) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues cv = new ContentValues();
         cv.put("profile_id", profileId);
@@ -395,7 +399,7 @@ public class AuraDb extends SQLiteOpenHelper {
         db.insertWithOnConflict("profile_recos", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
-    public synchronized JSONArray getProfileRecommendations(String profileId) {
+    public JSONArray getProfileRecommendations(String profileId) {
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.rawQuery("SELECT payload_json FROM profile_recos WHERE profile_id = ?", new String[]{profileId})) {
             if (c.moveToFirst()) {
@@ -405,7 +409,7 @@ public class AuraDb extends SQLiteOpenHelper {
         return new JSONArray();
     }
 
-    public synchronized void saveVoiceSession(String profileId, JSONObject session) {
+    public void saveVoiceSession(String profileId, JSONObject session) {
         try {
             if (session.has("results")) {
                 session.put("results", filterOutWatched(session.optJSONArray("results")));
@@ -414,7 +418,7 @@ public class AuraDb extends SQLiteOpenHelper {
         setSetting("voice_session_" + profileId, session.toString());
     }
 
-    public synchronized JSONObject getVoiceSession(String profileId) {
+    public JSONObject getVoiceSession(String profileId) {
         String s = getSetting("voice_session_" + profileId, "");
         if (!s.isEmpty()) {
             try {

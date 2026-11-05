@@ -53,24 +53,43 @@ public class AiRecommender {
 
     private String buildProfilePrompt(String profileId, JSONObject np, JSONArray history) {
         List<String> seen = new ArrayList<>();
-        for (int i = 0; i < history.length() && seen.size() < 40; i++) {
+        for (int i = 0; i < history.length() && seen.size() < 35; i++) {
             JSONObject h = history.optJSONObject(i);
             if (h == null) continue;
             String pkg = h.optString("app_pkg");
             if (pkg.contains("youtube")) continue;
             String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
-            if (!t.isEmpty() && !seen.contains(t)) seen.add(t + " (" + h.optString("app_name") + ")");
+            if (!t.isEmpty() && !seen.contains(t)) seen.add(t);
         }
+        List<String> cfPool = fetchCollaborativeCandidateNames(profileId);
         String persona = profilePersona(profileId);
         String cur = np != null ? (np.optString("series_title").isEmpty() ? np.optString("title") : np.optString("series_title")) : "";
         return "Active Household Profile: " + persona + ".\n" +
             "Currently/recently watched on TV: '" + cur + "'.\n" +
-            "TV watch history: " + seen.toString() + ".\n" +
-            "Recommend 14 specific next shows or movies not yet watched: include at least 4 Quick Watch / Short episodes (<30 min sitcoms/shorts) " +
-            "and 10 across Sci-Fi/Thriller, Drama/Romance/K-Drama, and Action/Movies. " +
-            "Return ONLY a JSON array of 14 objects with keys: 'title', 'app' (Prime Video, Netflix, Disney+ Hotstar, Apple TV+, ZEE5, or SmartTube), " +
-            "'genres' (e.g. 'Sci-Fi, Thriller' or 'Comedy, Short' or 'Drama, Romance' or 'Action, Crime'), " +
-            "'runtime_min' (integer minutes per episode or movie, e.g. 22 for short sitcoms, 55 for drama, 120 for movie), and 'reason' (max 16 words).";
+            "Already watched (DO NOT recommend these): " + seen.toString() + ".\n" +
+            "Collaborative Filtering Graph Candidates (high-affinity co-watched titles in India — prioritize selecting the best from these plus top critically acclaimed matches): " + cfPool.toString() + ".\n" +
+            "Recommend 14 critically acclaimed shows or movies (IMDb >= 7.5) not yet watched. " +
+            "Return ONLY a JSON array of 14 objects with keys: 'title', 'app' (Prime Video, Netflix, Disney+ Hotstar, Apple TV+, SonyLIV, or ZEE5), " +
+            "'genres' (e.g. 'Sci-Fi, Thriller'), 'runtime_min' (integer minutes), and 'reason' (1 sharp sentence explaining why it fits their taste, max 18 words).";
+    }
+
+    public List<String> fetchCollaborativeCandidateNames(String profileId) {
+        String[] anchors = "partner".equals(profileId)
+            ? new String[]{"Marry My Husband", "The Glory", "Crash Landing on You"}
+            : "kids".equals(profileId)
+            ? new String[]{"Spider-Man: Into the Spider-Verse", "Bluey", "Paddington 2"}
+            : new String[]{"Severance", "Dark Matter", "The Bear", "Prisoners"};
+        List<String> names = new ArrayList<>();
+        for (String seed : anchors) {
+            JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seed);
+            for (int i = 0; i < sim.length() && i < 6; i++) {
+                JSONObject o = sim.optJSONObject(i);
+                if (o != null && !o.optString("title").isEmpty() && !db.isTitleWatched(o.optString("title"))) {
+                    names.add(o.optString("title") + " (" + o.optString("rating") + ", " + o.optString("app", "Streaming") + ")");
+                }
+            }
+        }
+        return names;
     }
 
     private String profilePersona(String profileId) {
@@ -113,23 +132,34 @@ public class AiRecommender {
             if (p == null) continue;
             pool.submit(() -> {
                 String title = p.optString("title");
-                String app = p.optString("app", "Prime Video");
                 JSONObject meta = fetchOpenMetadata(title);
+                String verifiedApp = !meta.optString("app").isEmpty() ? meta.optString("app") : p.optString("app", "Prime Video");
                 JSONObject card = new JSONObject();
                 try {
                     card.put("title", title);
-                    card.put("badge", app);
-                    card.put("app", app);
-                    card.put("reason", p.optString("reason"));
+                    card.put("badge", verifiedApp);
+                    card.put("app", verifiedApp);
+                    card.put("year", meta.optInt("year", 2024));
+                    card.put("type", meta.optString("type", "Series"));
+                    String reason = p.optString("reason");
+                    if (reason.isEmpty()) reason = meta.optString("synopsis");
+                    card.put("reason", reason);
+                    card.put("synopsis", !meta.optString("synopsis").isEmpty() ? meta.optString("synopsis") : reason);
                     card.put("poster_url", meta.optString("poster_url"));
-                    String genres = meta.optString("genres", p.optString("genres", p.optString("genre", "Drama")));
+                    String genres = !meta.optString("genres").isEmpty()
+                        ? meta.optString("genres")
+                        : p.optString("genres", p.optString("genre", "Drama"));
                     card.put("genres", genres);
-                    int rt = p.optInt("runtime_min", meta.optInt("runtime_min", 45));
+                    int rt = meta.optInt("runtime_min", p.optInt("runtime_min", 45));
                     card.put("runtime_min", rt);
                     card.put("rating", meta.optString("rating", "★ 8.2"));
-                    String nativeUri = db.findNativeLaunchUri(title);
-                    String nativePkg = AuraDb.resolveAppPackage(app);
-                    card.put("launch_uri", nativeUri);
+                    String deepUri = !meta.optString("launch_uri").isEmpty()
+                        ? meta.optString("launch_uri")
+                        : db.findNativeLaunchUri(title);
+                    String nativePkg = !meta.optString("launch_pkg").isEmpty()
+                        ? meta.optString("launch_pkg")
+                        : AuraDb.resolveAppPackage(verifiedApp);
+                    card.put("launch_uri", deepUri);
                     card.put("launch_pkg", nativePkg);
                     results[idx] = card;
                 } catch (Exception ignored) {}
@@ -146,55 +176,36 @@ public class AiRecommender {
     public JSONObject fetchOpenMetadata(String title) {
         JSONObject res = new JSONObject();
         if (title == null || title.isEmpty()) return res;
-        String cacheKey = "imdb_meta_v2:" + title.trim().toLowerCase();
+        String cacheKey = "jw_imdb_v3:" + title.trim().toLowerCase();
         String cached = db.getCachedGti(cacheKey);
         if (cached != null) {
             try { return new JSONObject(cached); } catch (Exception ignored) {}
         }
-        // 1. Query IMDb Suggestion API first (covers both Movies and TV Shows accurately by popularity)
-        try {
-            String clean = title.trim().toLowerCase().replaceAll("[^a-z0-9 ]", "").replaceAll("\\s+", "_");
-            char first = clean.isEmpty() ? 'x' : clean.charAt(0);
-            String imdbUrl = "https://v3.sg.media-imdb.com/suggestion/" + first + "/" + Uri.encode(clean) + ".json";
-            JSONObject imdb = new JSONObject(httpGet(imdbUrl));
-            JSONArray d = imdb.optJSONArray("d");
-            if (d != null) {
-                for (int k = 0; k < d.length(); k++) {
-                    JSONObject item = d.optJSONObject(k);
-                    if (item == null) continue;
-                    JSONObject iObj = item.optJSONObject("i");
-                    if (iObj != null && !iObj.optString("imageUrl").isEmpty()) {
-                        res.put("poster_url", iObj.optString("imageUrl").replace("._V1_.jpg", "._V1_UX360_.jpg"));
-                        break;
+        // 1. Query JustWatch GraphQL first (India ANDROID_TV deep links + IMDb score + poster + runtime)
+        res = JustWatchGraph.lookupTitleInIndia(title);
+
+        // 2. Fallback to IMDb Suggestion API if poster is still empty
+        if (res.optString("poster_url").isEmpty()) {
+            try {
+                String clean = title.trim().toLowerCase().replaceAll("[^a-z0-9 ]", "").replaceAll("\\s+", "_");
+                char first = clean.isEmpty() ? 'x' : clean.charAt(0);
+                String imdbUrl = "https://v3.sg.media-imdb.com/suggestion/" + first + "/" + Uri.encode(clean) + ".json";
+                JSONObject imdb = new JSONObject(httpGet(imdbUrl));
+                JSONArray d = imdb.optJSONArray("d");
+                if (d != null) {
+                    for (int k = 0; k < d.length(); k++) {
+                        JSONObject item = d.optJSONObject(k);
+                        if (item == null) continue;
+                        JSONObject iObj = item.optJSONObject("i");
+                        if (iObj != null && !iObj.optString("imageUrl").isEmpty()) {
+                            res.put("poster_url", iObj.optString("imageUrl").replace("._V1_.jpg", "._V1_UX360_.jpg"));
+                            break;
+                        }
                     }
                 }
-            }
-        } catch (Exception ignored) {}
-
-        // 2. Query TVMaze only for exact-name TV show metadata (genres / rating) or fallback poster
-        try {
-            String tvmJson = httpGet("https://api.tvmaze.com/singlesearch/shows?q=" + Uri.encode(title));
-            JSONObject data = new JSONObject(tvmJson);
-            if (title.trim().equalsIgnoreCase(data.optString("name").trim())) {
-                if (res.optString("poster_url").isEmpty()) {
-                    JSONObject img = data.optJSONObject("image");
-                    if (img != null) res.put("poster_url", img.optString("medium", img.optString("original")));
-                }
-                JSONArray g = data.optJSONArray("genres");
-                if (g != null && g.length() > 0) res.put("genres", g.join(", ").replace("\"", ""));
-                int rt = data.optInt("averageRuntime", data.optInt("runtime", 45));
-                if (rt > 0) res.put("runtime_min", rt);
-                JSONObject rat = data.optJSONObject("rating");
-                if (rat != null && !rat.isNull("average")) res.put("rating", "★ " + rat.optDouble("average"));
-            }
-        } catch (Exception ignored) {}
-
-        if (res.optString("poster_url").isEmpty() && title.contains(":")) {
-            JSONObject baseMeta = fetchOpenMetadata(title.split(":")[0].trim());
-            if (!baseMeta.optString("poster_url").isEmpty()) {
-                try { res.put("poster_url", baseMeta.optString("poster_url")); } catch (Exception ignored) {}
-            }
+            } catch (Exception ignored) {}
         }
+
         if (!res.optString("poster_url").isEmpty()) {
             db.saveCachedGti(cacheKey, res.toString());
         }

@@ -121,15 +121,18 @@ public class VoiceConcierge {
             JSONObject t = turns.optJSONObject(i);
             if (t != null) conv.append(t.optString("role")).append(": ").append(t.optString("text")).append("\n");
         }
-        return "You are Aura, a concise IMDb-style movie & TV recommendation engine for profile '" + profileId + "'.\n" +
+        List<String> cfPool = ai.fetchCollaborativeCandidateNames(profileId);
+        return "You are Aura, a high-taste movie & TV concierge for profile '" + db.getProfileLabel(profileId) + "'.\n" +
             "STRICT EXCLUSION LIST — Already watched (NEVER recommend any of these): " + watched.toString() + "\n" +
+            "Collaborative Filtering Graph Candidates (co-watched high-affinity titles in India): " + cfPool.toString() + "\n" +
             "Active Persistent Filters (MUST obey): " + (filters.isEmpty() ? "None" : filters.toString()) + "\n" +
             "Session Flow so far:\n" + conv.toString() +
             "New User Input: \"" + userText + "\"\n\n" +
+            "Prioritize critically acclaimed hidden gems, recent prestige releases (2020-2026), and collaborative-filtering matches (IMDb >= 7.5) over cliché top-10 blockbusters.\n" +
             "Return a JSON object with:\n" +
             "1. 'reply': Short 1-sentence summary of what was matched.\n" +
-            "2. 'results': Array of 10 unwatched titles matching the session & filters, each with keys: 'title', 'app' (exact streaming service in India: 'Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (max 14 words).\n" +
-            "3. 'follow_ups': Array of 4 short 2-4 word refinement chips for the next step (e.g. 'Under 100 mins', 'More twist endings', 'Darker tone', '90s/2000s classics').";
+            "2. 'results': Array of 10 unwatched titles matching the session & filters, each with keys: 'title', 'app' (exact streaming service in India: 'Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (max 16 words explaining the taste match).\n" +
+            "3. 'follow_ups': Array of 4 short 2-3 word refinement chips (e.g. 'Post-2022 only', 'Slow-burn mystery', 'Under 100 mins', 'Korean thrillers').";
     }
 
     private List<String> collectWatchedNames(String profileId) {
@@ -145,7 +148,7 @@ public class VoiceConcierge {
         JSONArray hist = db.listHistory(profileId);
         for (int i = 0; i < hist.length() && list.size() < 45; i++) {
             JSONObject h = hist.optJSONObject(i);
-            if (h == null) continue;
+            if (h == null || h.optInt("position_sec", 0) < 120) continue;
             String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
             if (!t.isEmpty() && !list.contains(t)) list.add(t);
         }
