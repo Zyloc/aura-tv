@@ -48,6 +48,23 @@ public class JustWatchGraph {
         "  }" +
         "}";
 
+    private static final String CANDIDATE_POOL_QUERY =
+        "query GetCandidatePool($searchQuery: String!, $country: Country!, $language: Language!) {" +
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery }, first: 10) {" +
+        "    edges { node {" +
+        "      objectType" +
+        "      content(country: $country, language: $language) {" +
+        "        title originalReleaseYear runtime shortDescription" +
+        "        genres { shortName } scoring { imdbScore } posterUrl" +
+        "      }" +
+        "      offers(country: $country, platform: ANDROID_TV) {" +
+        "        monetizationType standardWebURL deeplinkURL(platform: ANDROID_TV)" +
+        "        package { clearName shortName }" +
+        "      }" +
+        "    }}" +
+        "  }" +
+        "}";
+
     public static JSONObject lookupTitleInIndia(String title) {
         try {
             JSONObject vars = new JSONObject()
@@ -64,6 +81,30 @@ public class JustWatchGraph {
         } catch (Exception e) {
             return new JSONObject();
         }
+    }
+
+    public static JSONArray fetchDeterministicSearchCandidates(String searchQuery) {
+        JSONArray out = new JSONArray();
+        try {
+            JSONObject vars = new JSONObject()
+                .put("searchQuery", searchQuery == null ? "" : searchQuery)
+                .put("country", "IN")
+                .put("language", "en");
+            JSONObject resp = postGraphQl(CANDIDATE_POOL_QUERY, vars);
+            JSONArray edges = resp.optJSONObject("data")
+                .optJSONObject("popularTitles")
+                .optJSONArray("edges");
+            if (edges == null) return out;
+            for (int i = 0; i < edges.length(); i++) {
+                JSONObject edge = edges.optJSONObject(i);
+                if (edge == null) continue;
+                JSONObject parsed = parseNode(edge.optJSONObject("node"));
+                if (!parsed.optString("title").isEmpty() && parsed.optDouble("imdb_raw", 7.4) >= 7.0) {
+                    out.put(parsed);
+                }
+            }
+        } catch (Exception ignored) {}
+        return out;
     }
 
     public static JSONArray fetchCollaborativeSimilar(String seedTitle) {

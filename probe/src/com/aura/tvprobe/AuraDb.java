@@ -24,10 +24,11 @@ public class AuraDb extends SQLiteOpenHelper {
     private final Context appCtx;
 
     public AuraDb(Context ctx) {
-        super(ctx, "aura_tv_local.db", null, 7);
+        super(ctx, "aura_tv_local.db", null, 8);
         setWriteAheadLoggingEnabled(true);
         this.appCtx = ctx.getApplicationContext();
         applyBundledEnvIfPresent();
+        ensureDefaultProfileExists();
     }
 
     @Override
@@ -46,6 +47,8 @@ public class AuraDb extends SQLiteOpenHelper {
             "title_key TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
         db.execSQL("CREATE TABLE IF NOT EXISTS kv_settings (" +
             "k TEXT PRIMARY KEY, v TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS user_profiles (" +
+            "profile_id TEXT PRIMARY KEY, name TEXT, interests TEXT, created_at INTEGER)");
         seedDefaultSettings(db);
     }
 
@@ -61,6 +64,77 @@ public class AuraDb extends SQLiteOpenHelper {
         try { db.execSQL("ALTER TABLE watch_history ADD COLUMN profile_id TEXT DEFAULT 'family'"); } catch (Exception ignored) {}
         try { db.execSQL("ALTER TABLE watch_history ADD COLUMN runtime_min INTEGER DEFAULT 45"); } catch (Exception ignored) {}
         onCreate(db);
+    }
+
+    private void ensureDefaultProfileExists() {
+        List<JSONObject> existing = listProfilesRaw();
+        if (!existing.isEmpty()) return;
+        String starterName = getSetting("profile_name_member1", "Explorer");
+        String starterTaste = getSetting("profile_taste_member1", "");
+        saveProfileRecord(DEFAULT_PROFILE, starterName, starterTaste);
+        setSetting("active_profile", DEFAULT_PROFILE);
+    }
+
+    private List<JSONObject> listProfilesRaw() {
+        List<JSONObject> list = new ArrayList<>();
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.rawQuery("SELECT profile_id, name, interests FROM user_profiles ORDER BY created_at ASC", null)) {
+            while (c.moveToNext()) {
+                JSONObject o = new JSONObject();
+                o.put("id", c.getString(0));
+                o.put("name", c.getString(1));
+                o.put("interests", c.isNull(2) ? "" : c.getString(2));
+                list.add(o);
+            }
+        } catch (Exception ignored) {}
+        return list;
+    }
+
+    public List<JSONObject> listProfiles() {
+        List<JSONObject> list = listProfilesRaw();
+        if (list.isEmpty()) {
+            ensureDefaultProfileExists();
+            list = listProfilesRaw();
+        }
+        return list;
+    }
+
+    public void saveProfileRecord(String profileId, String name, String interests) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put("profile_id", profileId);
+        cv.put("name", name != null && !name.trim().isEmpty() ? name.trim() : "Guest");
+        cv.put("interests", interests != null ? interests.trim() : "");
+        cv.put("created_at", System.currentTimeMillis() / 1000L);
+        db.insertWithOnConflict("user_profiles", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        setSetting("profile_name_" + profileId, cv.getAsString("name"));
+        setSetting("profile_taste_" + profileId, cv.getAsString("interests"));
+    }
+
+    public String addProfile(String name, String interests) {
+        String cleanName = (name == null || name.trim().isEmpty())
+            ? ("User_" + (100 + (int) (Math.random() * 899)))
+            : name.trim();
+        String pid = "prof_" + (System.currentTimeMillis() % 1000000L);
+        saveProfileRecord(pid, cleanName, interests);
+        setSetting("active_profile", pid);
+        return pid;
+    }
+
+    public String deleteProfile(String profileId) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete("user_profiles", "profile_id = ?", new String[]{profileId});
+        db.delete("profile_recos", "profile_id = ?", new String[]{profileId});
+        List<JSONObject> rem = listProfilesRaw();
+        if (rem.isEmpty()) {
+            String fallbackId = "prof_" + (System.currentTimeMillis() % 1000000L);
+            saveProfileRecord(fallbackId, "Temp_User", "");
+            setSetting("active_profile", fallbackId);
+            return fallbackId;
+        }
+        String nextId = rem.get(0).optString("id", DEFAULT_PROFILE);
+        setSetting("active_profile", nextId);
+        return nextId;
     }
 
     private static boolean envLoadedThisProcess = false;
@@ -91,19 +165,18 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     public String getProfileLabel(String profileId) {
-        String def = "Member 1";
-        if ("partner".equals(profileId)) def = "Partner";
-        else if ("member3".equals(profileId)) def = "Member 3";
-        else if ("kids".equals(profileId)) def = "Kids";
-        else if ("family".equals(profileId)) def = "Family";
-        return getSetting("profile_name_" + profileId, def);
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.rawQuery("SELECT name FROM user_profiles WHERE profile_id = ?", new String[]{profileId})) {
+            if (c.moveToFirst() && !c.getString(0).isEmpty()) return c.getString(0);
+        } catch (Exception ignored) {}
+        return getSetting("profile_name_" + profileId, "Guest");
     }
 
     public JSONObject getProfileLabelsJson() {
         JSONObject o = new JSONObject();
         try {
-            for (String p : new String[]{"member1", "partner", "member3", "kids", "family"}) {
-                o.put(p, getProfileLabel(p));
+            for (JSONObject p : listProfiles()) {
+                o.put(p.optString("id"), p.optString("name"));
             }
         } catch (Exception ignored) {}
         return o;
@@ -183,11 +256,17 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     public String getProfileTaste(String profileId) {
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.rawQuery("SELECT interests FROM user_profiles WHERE profile_id = ?", new String[]{profileId})) {
+            if (c.moveToFirst() && c.getString(0) != null && !c.getString(0).isEmpty()) return c.getString(0);
+        } catch (Exception ignored) {}
         return getSetting("profile_taste_" + profileId, "");
     }
 
     public void setProfileTaste(String profileId, String taste) {
-        setSetting("profile_taste_" + profileId, taste != null ? taste.trim() : "");
+        String clean = taste != null ? taste.trim() : "";
+        setSetting("profile_taste_" + profileId, clean);
+        saveProfileRecord(profileId, getProfileLabel(profileId), clean);
     }
 
     public List<String> getDynamicTasteAnchors(String profileId) {

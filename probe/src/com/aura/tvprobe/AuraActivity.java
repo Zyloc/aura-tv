@@ -14,6 +14,7 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
@@ -38,7 +39,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class AuraActivity extends Activity {
-    private static final String[] PROFILE_IDS = {"member1", "partner", "member3", "kids", "family"};
     private static final String[][] QUICK_FILTERS = {
         {"all", "All"},
         {"movies", "Movies"},
@@ -47,8 +47,8 @@ public class AuraActivity extends Activity {
     };
 
     private static final int SIDEBAR_COLLAPSED_W = 76;
-    private static final int SIDEBAR_EXPANDED_W = 248;
-    private static final int RIGHT_DRAWER_W = 580;
+    private static final int SIDEBAR_EXPANDED_W = 252;
+    private static final int RIGHT_DRAWER_W = 600;
 
     private static final String BG_OBSIDIAN = "#08090E";
     private static final String BG_SIDEBAR = "#0D0F17";
@@ -73,6 +73,7 @@ public class AuraActivity extends Activity {
 
     // Lock-free in-memory UI state
     private String memProfile = AuraDb.DEFAULT_PROFILE;
+    private final List<JSONObject> memProfiles = new ArrayList<>();
     private final List<String> memFilters = new ArrayList<>();
     private final Set<String> memWatchedKeys = new HashSet<>();
     private final Map<String, Integer> memUserRatings = new HashMap<>();
@@ -82,13 +83,16 @@ public class AuraActivity extends Activity {
     private boolean showingWatchedList = false;
     private boolean showingVoiceResults = false;
     private boolean sidebarExpanded = false;
+    private boolean creatingNewProfileMode = false;
 
     private FrameLayout rootFrame;
+    private LinearLayout mainRow;
     private LinearLayout sidePanel;
     private TextView brandLabel;
     private TextView profSectionHdr;
     private TextView libSectionHdr;
     private LinearLayout sideProfileContainer;
+    private TextView navAddProfileBtn;
     private TextView navTasteBtn;
     private TextView navAllPicksBtn;
     private TextView navWatchedBtn;
@@ -105,25 +109,30 @@ public class AuraActivity extends Activity {
     private TextView headerMeta;
     private LinearLayout carouselRow;
 
-    // Right-Hand Slide-Over Details Drawer
+    // Right-Hand Slide-Over Drawers
     private FrameLayout rightScrim;
     private LinearLayout rightDetailsDrawer;
     private TextView drawerTitle;
     private TextView drawerMeta;
     private TextView drawerAvailableBadge;
+    private TextView drawerWhyReason;
     private TextView drawerSynopsis;
     private TextView drawerOpenAppBtn;
     private TextView drawerWatchedBtn;
     private TextView drawerRatingLabel;
     private LinearLayout drawerRatingRow;
+    private TextView drawerCloseBtn;
 
-    // Right-Hand Slide-Over AI Taste Guide Drawer
+    // Right-Hand Slide-Over Profile & AI Interests Drawer
     private LinearLayout rightTasteDrawer;
     private TextView tasteDrawerTitle;
     private TextView tasteDrawerSub;
+    private EditText profileNameInput;
     private EditText tasteEditInput;
     private LinearLayout tasteTagsContainer;
     private TextView tasteSaveBtn;
+    private TextView tasteDeleteProfileBtn;
+    private TextView tasteCloseBtn;
 
     private View lastFocusedPoster;
 
@@ -143,9 +152,12 @@ public class AuraActivity extends Activity {
         rootFrame.setBackgroundColor(Color.parseColor(BG_OBSIDIAN));
         setContentView(rootFrame);
 
+        memProfiles.clear();
+        memProfiles.addAll(db.listProfiles());
+
         buildMainLayout();
         buildRightSlideDrawers();
-        switchProfileAndLoad(db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE), true);
+        switchProfileAndLoad(db.getSetting("active_profile", memProfiles.get(0).optString("id", AuraDb.DEFAULT_PROFILE)), true);
     }
 
     @Override
@@ -167,11 +179,14 @@ public class AuraActivity extends Activity {
         memProfile = targetProfile;
         showingWatchedList = false;
         showingVoiceResults = false;
+        memProfiles.clear();
+        memProfiles.addAll(db.listProfiles());
         populateSideProfiles();
-        setLoader(true, "Loading " + db.getProfileLabel(targetProfile) + "…");
+        setLoader(true, "Curating for " + db.getProfileLabel(targetProfile) + "…");
 
         bgPool.submit(() -> {
             db.setSetting("active_profile", targetProfile);
+            final List<JSONObject> profList = db.listProfiles();
             final List<String> flt = db.getActiveFilters(targetProfile);
             final Set<String> wKeys = db.getWatchedTitleKeys();
             final Map<String, Integer> rMap = db.getUserRatingsMap();
@@ -185,6 +200,8 @@ public class AuraActivity extends Activity {
 
             uiHandler.post(() -> {
                 memProfile = targetProfile;
+                memProfiles.clear();
+                memProfiles.addAll(profList);
                 memFilters.clear();
                 memFilters.addAll(flt);
                 memWatchedKeys.clear();
@@ -205,32 +222,34 @@ public class AuraActivity extends Activity {
     }
 
     private void buildMainLayout() {
-        LinearLayout mainRow = new LinearLayout(this);
+        mainRow = new LinearLayout(this);
         mainRow.setOrientation(LinearLayout.HORIZONTAL);
-        mainRow.setClipChildren(false);
+        mainRow.setClipChildren(true);
 
         sidePanel = buildCollapsibleLeftSidePanel();
+        sidePanel.setElevation(24f);
         mainRow.addView(sidePanel, new LinearLayout.LayoutParams(
             SIDEBAR_COLLAPSED_W, LinearLayout.LayoutParams.MATCH_PARENT));
 
         LinearLayout rightStage = new LinearLayout(this);
         rightStage.setOrientation(LinearLayout.VERTICAL);
-        rightStage.setPadding(42, 32, 42, 24);
-        rightStage.setClipChildren(false);
-        rightStage.setClipToPadding(false);
+        rightStage.setPadding(36, 30, 36, 20);
+        // Clip children at rightStage boundary so scrolled tiles NEVER overlap the left navigation bar!
+        rightStage.setClipChildren(true);
+        rightStage.setClipToPadding(true);
 
         rightStage.addView(buildUnifiedTopBar());
         rightStage.addView(buildMinimalTitleRow());
 
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         hsv.setHorizontalScrollBarEnabled(false);
-        hsv.setClipChildren(false);
+        hsv.setClipChildren(true);
         hsv.setClipToPadding(false);
         carouselRow = new LinearLayout(this);
         carouselRow.setOrientation(LinearLayout.HORIZONTAL);
         carouselRow.setClipChildren(false);
         carouselRow.setClipToPadding(false);
-        carouselRow.setPadding(8, 16, 28, 16);
+        carouselRow.setPadding(16, 20, 32, 20);
         hsv.addView(carouselRow);
         rightStage.addView(hsv, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -246,20 +265,20 @@ public class AuraActivity extends Activity {
         LinearLayout side = new LinearLayout(this);
         side.setOrientation(LinearLayout.VERTICAL);
         side.setGravity(Gravity.CENTER_HORIZONTAL);
-        side.setPadding(12, 28, 12, 24);
+        side.setPadding(12, 26, 12, 20);
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.parseColor(BG_SIDEBAR));
-        bg.setStroke(1, Color.parseColor("#1A1E2E"));
+        bg.setStroke(1, Color.parseColor("#1D2233"));
         side.setBackground(bg);
 
         brandLabel = makeText("A", 20f, IMDB_GOLD, FONT_DISPLAY, 1);
         brandLabel.setGravity(Gravity.CENTER);
-        brandLabel.setPadding(6, 0, 6, 22);
+        brandLabel.setPadding(6, 0, 6, 18);
         side.addView(brandLabel);
 
         profSectionHdr = makeText("PROFILES", 10f, "#6D7488", FONT_MEDIUM, 1);
         profSectionHdr.setLetterSpacing(0.08f);
-        profSectionHdr.setPadding(8, 2, 8, 8);
+        profSectionHdr.setPadding(8, 2, 8, 6);
         profSectionHdr.setVisibility(View.GONE);
         side.addView(profSectionHdr);
 
@@ -268,13 +287,16 @@ public class AuraActivity extends Activity {
         side.addView(sideProfileContainer, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        navAddProfileBtn = makeSideNavBtn("+", "+  Add Profile", false, () -> openTasteGuideDrawer(true));
+        side.addView(navAddProfileBtn);
+
         libSectionHdr = makeText("MENU", 10f, "#6D7488", FONT_MEDIUM, 1);
         libSectionHdr.setLetterSpacing(0.08f);
-        libSectionHdr.setPadding(8, 18, 8, 8);
+        libSectionHdr.setPadding(8, 14, 8, 6);
         libSectionHdr.setVisibility(View.GONE);
         side.addView(libSectionHdr);
 
-        navTasteBtn = makeSideNavBtn("✎", "✎  Guide AI", false, this::openTasteGuideDrawer);
+        navTasteBtn = makeSideNavBtn("✎", "✎  Guide AI", false, () -> openTasteGuideDrawer(false));
         side.addView(navTasteBtn);
 
         navAllPicksBtn = makeSideNavBtn("▦", "▦  All Picks", true, () -> {
@@ -308,7 +330,7 @@ public class AuraActivity extends Activity {
 
         LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) sidePanel.getLayoutParams();
         lp.width = expand ? SIDEBAR_EXPANDED_W : SIDEBAR_COLLAPSED_W;
-        sidePanel.setPadding(expand ? 18 : 12, 28, expand ? 18 : 12, 24);
+        sidePanel.setPadding(expand ? 18 : 12, 26, expand ? 18 : 12, 20);
         sidePanel.setGravity(expand ? Gravity.START : Gravity.CENTER_HORIZONTAL);
         sidePanel.setLayoutParams(lp);
 
@@ -322,15 +344,20 @@ public class AuraActivity extends Activity {
 
     private void updateSideButtonLabels() {
         if (sideProfileContainer != null) {
-            for (int i = 0; i < sideProfileContainer.getChildCount() && i < PROFILE_IDS.length; i++) {
-                String pid = PROFILE_IDS[i];
-                String fullName = db.getProfileLabel(pid);
-                String shortInitial = fullName.isEmpty() ? "P" : fullName.substring(0, 1).toUpperCase();
+            for (int i = 0; i < sideProfileContainer.getChildCount() && i < memProfiles.size(); i++) {
+                JSONObject pObj = memProfiles.get(i);
+                String pid = pObj.optString("id");
+                String fullName = pObj.optString("name", "Guest");
+                String shortInitial = fullName.isEmpty() ? "U" : fullName.substring(0, 1).toUpperCase();
                 boolean isAct = pid.equals(memProfile);
                 TextView btn = (TextView) sideProfileContainer.getChildAt(i);
                 btn.setText(sidebarExpanded ? ((isAct ? "●  " : "    ") + fullName) : shortInitial);
                 btn.setGravity(sidebarExpanded ? Gravity.START | Gravity.CENTER_VERTICAL : Gravity.CENTER);
             }
+        }
+        if (navAddProfileBtn != null) {
+            navAddProfileBtn.setText(sidebarExpanded ? "+  Add Profile" : "+");
+            navAddProfileBtn.setGravity(sidebarExpanded ? Gravity.START | Gravity.CENTER_VERTICAL : Gravity.CENTER);
         }
         if (navTasteBtn != null) {
             navTasteBtn.setText(sidebarExpanded ? "✎  Guide AI" : "✎");
@@ -353,11 +380,12 @@ public class AuraActivity extends Activity {
     private void populateSideProfiles() {
         if (sideProfileContainer == null) return;
         sideProfileContainer.removeAllViews();
-        for (int i = 0; i < PROFILE_IDS.length; i++) {
-            final String pid = PROFILE_IDS[i];
+        for (int i = 0; i < memProfiles.size(); i++) {
+            JSONObject pObj = memProfiles.get(i);
+            final String pid = pObj.optString("id");
+            final String fullName = pObj.optString("name", "Guest");
             final boolean isAct = pid.equals(memProfile);
-            String fullName = db.getProfileLabel(pid);
-            String shortInitial = fullName.isEmpty() ? "P" : fullName.substring(0, 1).toUpperCase();
+            String shortInitial = fullName.isEmpty() ? "U" : fullName.substring(0, 1).toUpperCase();
             TextView btn = makeSideNavBtn(
                 shortInitial,
                 (isAct ? "●  " : "    ") + fullName,
@@ -366,7 +394,7 @@ public class AuraActivity extends Activity {
                     if (!pid.equals(memProfile)) {
                         switchProfileAndLoad(pid, false);
                     } else {
-                        openTasteGuideDrawer();
+                        openTasteGuideDrawer(false);
                     }
                 }
             );
@@ -386,13 +414,16 @@ public class AuraActivity extends Activity {
                 return;
             }
         }
+        if (sideProfileContainer.getChildCount() > 0) {
+            sideProfileContainer.getChildAt(0).requestFocus();
+        }
     }
 
     private View buildUnifiedTopBar() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, 0, 0, 22);
+        row.setPadding(6, 0, 0, 20);
 
         searchInput = new EditText(this);
         searchInput.setHint("Search or ask Aura (e.g. 'sports drama' or 'sci-fi')…");
@@ -424,7 +455,7 @@ public class AuraActivity extends Activity {
             }
             return false;
         });
-        LinearLayout.LayoutParams inLp = new LinearLayout.LayoutParams(440, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams inLp = new LinearLayout.LayoutParams(420, LinearLayout.LayoutParams.WRAP_CONTENT);
         inLp.setMargins(0, 0, 10, 0);
         row.addView(searchInput, inLp);
 
@@ -443,10 +474,10 @@ public class AuraActivity extends Activity {
         filterChipsRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams fLp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        fLp.setMargins(10, 0, 0, 0);
+        fLp.setMargins(8, 0, 0, 0);
         row.addView(filterChipsRow, fLp);
 
-        row.addView(makePillBtn("✎ Guide AI", false, this::openTasteGuideDrawer));
+        row.addView(makePillBtn("✎ Guide AI", false, () -> openTasteGuideDrawer(false)));
 
         statusBox = new LinearLayout(this);
         statusBox.setOrientation(LinearLayout.HORIZONTAL);
@@ -469,7 +500,7 @@ public class AuraActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(6, 4, 6, 12);
+        row.setPadding(12, 4, 12, 10);
 
         headerTitle = makeText("Select a Title", 30f, "#FFFFFF", FONT_DISPLAY, 1);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
@@ -484,58 +515,83 @@ public class AuraActivity extends Activity {
 
     private void buildRightSlideDrawers() {
         rightScrim = new FrameLayout(this);
-        rightScrim.setBackgroundColor(Color.parseColor("#88040508"));
+        rightScrim.setBackgroundColor(Color.parseColor("#90040508"));
         rightScrim.setVisibility(View.GONE);
         rightScrim.setClickable(true);
 
         // 1. Right-Hand Slide-Over Show Details Drawer
         rightDetailsDrawer = new LinearLayout(this);
         rightDetailsDrawer.setOrientation(LinearLayout.VERTICAL);
-        rightDetailsDrawer.setPadding(36, 42, 36, 36);
+        rightDetailsDrawer.setPadding(36, 36, 36, 30);
         GradientDrawable dBg = new GradientDrawable();
         dBg.setColor(Color.parseColor(BG_DRAWER));
-        dBg.setStroke(2, Color.parseColor("#262C40"));
+        dBg.setStroke(2, Color.parseColor("#282F44"));
         rightDetailsDrawer.setBackground(dBg);
         rightDetailsDrawer.setVisibility(View.GONE);
 
-        drawerTitle = makeText("", 28f, "#FFFFFF", FONT_DISPLAY, 2);
+        drawerTitle = makeText("", 26f, "#FFFFFF", FONT_DISPLAY, 2);
         rightDetailsDrawer.addView(drawerTitle);
 
-        drawerMeta = makeText("", 14f, "#A6B0C6", FONT_MEDIUM, 1);
-        drawerMeta.setPadding(0, 10, 0, 12);
+        drawerMeta = makeText("", 13f, "#A6B0C6", FONT_MEDIUM, 1);
+        drawerMeta.setPadding(0, 8, 0, 10);
         rightDetailsDrawer.addView(drawerMeta);
 
-        drawerAvailableBadge = makeText("Available on Netflix", 13f, IMDB_GOLD, FONT_MEDIUM, 1);
-        drawerAvailableBadge.setPadding(14, 6, 14, 6);
+        drawerAvailableBadge = makeText("Available on Netflix", 12f, IMDB_GOLD, FONT_MEDIUM, 1);
+        drawerAvailableBadge.setPadding(12, 5, 12, 5);
         GradientDrawable avBg = new GradientDrawable();
         avBg.setColor(Color.parseColor("#231F12"));
-        avBg.setCornerRadius(8f);
+        avBg.setCornerRadius(7f);
         avBg.setStroke(1, Color.parseColor("#574919"));
         drawerAvailableBadge.setBackground(avBg);
         LinearLayout.LayoutParams avLp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        avLp.setMargins(0, 0, 0, 18);
+        avLp.setMargins(0, 0, 0, 14);
         rightDetailsDrawer.addView(drawerAvailableBadge, avLp);
 
-        // Truncated 3-line synopsis for clean readability
-        drawerSynopsis = makeText("", 15f, "#D6DAE6", FONT_REGULAR, 3);
-        drawerSynopsis.setLineSpacing(5f, 1.20f);
+        // Dedicated AI Reasoning Box ("Why you should watch this show")
+        LinearLayout reasonCard = new LinearLayout(this);
+        reasonCard.setOrientation(LinearLayout.VERTICAL);
+        reasonCard.setPadding(16, 12, 16, 12);
+        GradientDrawable rBg = new GradientDrawable();
+        rBg.setColor(Color.parseColor("#181610"));
+        rBg.setCornerRadius(10f);
+        rBg.setStroke(1, Color.parseColor("#4A3D16"));
+        reasonCard.setBackground(rBg);
+
+        TextView reasonHdr = makeText("✦  WHY RECOMMENDED FOR YOU", 10f, IMDB_GOLD, FONT_MEDIUM, 1);
+        reasonHdr.setLetterSpacing(0.07f);
+        reasonHdr.setPadding(0, 0, 0, 5);
+        reasonCard.addView(reasonHdr);
+
+        drawerWhyReason = makeText("", 13f, "#F4EFE0", FONT_MEDIUM, 2);
+        drawerWhyReason.setLineSpacing(3f, 1.15f);
+        reasonCard.addView(drawerWhyReason);
+
+        LinearLayout.LayoutParams rcLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rcLp.setMargins(0, 0, 0, 14);
+        rightDetailsDrawer.addView(reasonCard, rcLp);
+
+        // Truncated 2-line story synopsis
+        drawerSynopsis = makeText("", 13f, "#C6CCD9", FONT_REGULAR, 2);
+        drawerSynopsis.setLineSpacing(4f, 1.15f);
         rightDetailsDrawer.addView(drawerSynopsis);
 
         LinearLayout actionBtns = new LinearLayout(this);
         actionBtns.setOrientation(LinearLayout.HORIZONTAL);
         actionBtns.setGravity(Gravity.CENTER_VERTICAL);
-        actionBtns.setPadding(0, 24, 0, 24);
+        actionBtns.setPadding(0, 18, 0, 18);
 
         drawerOpenAppBtn = makePillBtn("▶  Open in App", true, null);
         drawerWatchedBtn = makePillBtn("✓  Watched", false, null);
+        trapLeftFocus(drawerOpenAppBtn);
         actionBtns.addView(drawerOpenAppBtn);
         actionBtns.addView(drawerWatchedBtn);
         rightDetailsDrawer.addView(actionBtns);
 
-        drawerRatingLabel = makeText("RATE WATCHED SHOW (1–10)", 11f, "#8E95A8", FONT_MEDIUM, 1);
+        drawerRatingLabel = makeText("RATE WATCHED SHOW (OUT OF 10)", 11f, "#8E95A8", FONT_MEDIUM, 1);
         drawerRatingLabel.setLetterSpacing(0.06f);
-        drawerRatingLabel.setPadding(0, 6, 0, 10);
+        drawerRatingLabel.setPadding(0, 2, 0, 8);
         rightDetailsDrawer.addView(drawerRatingLabel);
 
         drawerRatingRow = new LinearLayout(this);
@@ -543,27 +599,55 @@ public class AuraActivity extends Activity {
         drawerRatingRow.setGravity(Gravity.CENTER_VERTICAL);
         rightDetailsDrawer.addView(drawerRatingRow);
 
-        TextView closeHint = makeText("Press BACK on remote to close", 12f, "#646B7E", FONT_REGULAR, 1);
-        closeHint.setPadding(0, 28, 0, 0);
-        rightDetailsDrawer.addView(closeHint);
+        LinearLayout closeRow = new LinearLayout(this);
+        closeRow.setOrientation(LinearLayout.HORIZONTAL);
+        closeRow.setPadding(0, 18, 0, 0);
+        drawerCloseBtn = makePillBtn("←  Close Details", false, this::closeRightDrawers);
+        trapLeftAndDownFocus(drawerCloseBtn);
+        closeRow.addView(drawerCloseBtn);
+        rightDetailsDrawer.addView(closeRow);
 
         FrameLayout.LayoutParams detLp = new FrameLayout.LayoutParams(
             RIGHT_DRAWER_W, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END);
         rightScrim.addView(rightDetailsDrawer, detLp);
 
-        // 2. Right-Hand Slide-Over AI Taste Guide Drawer
+        // 2. Right-Hand Slide-Over Profile & AI Interests Drawer
         rightTasteDrawer = new LinearLayout(this);
         rightTasteDrawer.setOrientation(LinearLayout.VERTICAL);
-        rightTasteDrawer.setPadding(36, 42, 36, 36);
+        rightTasteDrawer.setPadding(36, 36, 36, 30);
         rightTasteDrawer.setBackground(dBg);
         rightTasteDrawer.setVisibility(View.GONE);
 
-        tasteDrawerTitle = makeText("Guide AI Taste", 26f, "#FFFFFF", FONT_DISPLAY, 1);
+        tasteDrawerTitle = makeText("Profile & AI Guide", 24f, "#FFFFFF", FONT_DISPLAY, 1);
         rightTasteDrawer.addView(tasteDrawerTitle);
 
-        tasteDrawerSub = makeText("Tell Aura what you love watching (e.g. Sports, F1, Sci-Fi):", 14f, "#9AA2B8", FONT_REGULAR, 2);
-        tasteDrawerSub.setPadding(0, 8, 0, 16);
+        tasteDrawerSub = makeText("Manage profile name and guide the AI with what you love watching:", 13f, "#9AA2B8", FONT_REGULAR, 2);
+        tasteDrawerSub.setPadding(0, 6, 0, 12);
         rightTasteDrawer.addView(tasteDrawerSub);
+
+        TextView nameLbl = makeText("PROFILE NAME", 10f, "#7C849B", FONT_MEDIUM, 1);
+        nameLbl.setLetterSpacing(0.06f);
+        nameLbl.setPadding(0, 0, 0, 6);
+        rightTasteDrawer.addView(nameLbl);
+
+        profileNameInput = new EditText(this);
+        profileNameInput.setHint("Profile Name (e.g. Satyam, Partner, Guest)…");
+        profileNameInput.setHintTextColor(Color.parseColor("#6E758A"));
+        profileNameInput.setTextColor(Color.WHITE);
+        profileNameInput.setTextSize(14f);
+        profileNameInput.setTypeface(FONT_REGULAR);
+        profileNameInput.setSingleLine(true);
+        profileNameInput.setPadding(18, 10, 18, 10);
+        styleInputBox(profileNameInput, false);
+        profileNameInput.setOnFocusChangeListener((v, hasFocus) -> styleInputBox(profileNameInput, hasFocus));
+        trapLeftFocus(profileNameInput);
+        rightTasteDrawer.addView(profileNameInput, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView interestLbl = makeText("INTERESTS & AI GUIDANCE", 10f, "#7C849B", FONT_MEDIUM, 1);
+        interestLbl.setLetterSpacing(0.06f);
+        interestLbl.setPadding(0, 14, 0, 6);
+        rightTasteDrawer.addView(interestLbl);
 
         tasteEditInput = new EditText(this);
         tasteEditInput.setHint("e.g. Sports dramas, Formula 1, mind-bending sci-fi…");
@@ -572,15 +656,16 @@ public class AuraActivity extends Activity {
         tasteEditInput.setTextSize(14f);
         tasteEditInput.setTypeface(FONT_REGULAR);
         tasteEditInput.setSingleLine(true);
-        tasteEditInput.setPadding(18, 12, 18, 12);
+        tasteEditInput.setPadding(18, 10, 18, 10);
         styleInputBox(tasteEditInput, false);
         tasteEditInput.setOnFocusChangeListener((v, hasFocus) -> styleInputBox(tasteEditInput, hasFocus));
+        trapLeftFocus(tasteEditInput);
         rightTasteDrawer.addView(tasteEditInput, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        TextView presetHdr = makeText("QUICK-ADD INTERESTS", 11f, "#7C849B", FONT_MEDIUM, 1);
+        TextView presetHdr = makeText("TOGGLE DYNAMIC INTEREST TAGS", 10f, "#7C849B", FONT_MEDIUM, 1);
         presetHdr.setLetterSpacing(0.06f);
-        presetHdr.setPadding(0, 20, 0, 10);
+        presetHdr.setPadding(0, 14, 0, 8);
         rightTasteDrawer.addView(presetHdr);
 
         tasteTagsContainer = new LinearLayout(this);
@@ -589,11 +674,17 @@ public class AuraActivity extends Activity {
 
         LinearLayout tasteActions = new LinearLayout(this);
         tasteActions.setOrientation(LinearLayout.HORIZONTAL);
-        tasteActions.setPadding(0, 24, 0, 0);
-        tasteSaveBtn = makePillBtn("✓  Save & Curate Picks", true, this::saveTasteAndCurate);
-        TextView tasteCancelBtn = makePillBtn("Close", false, this::closeRightDrawers);
+        tasteActions.setPadding(0, 18, 0, 0);
+        tasteSaveBtn = makePillBtn("✓  Save & Curate", true, this::saveProfileAndCurate);
+        tasteDeleteProfileBtn = makePillBtn("Delete", false, this::deleteCurrentProfile);
+        tasteCloseBtn = makePillBtn("Close", false, this::closeRightDrawers);
+        trapLeftAndDownFocus(tasteSaveBtn);
+        trapDownFocus(tasteDeleteProfileBtn);
+        trapDownFocus(tasteCloseBtn);
+
         tasteActions.addView(tasteSaveBtn);
-        tasteActions.addView(tasteCancelBtn);
+        tasteActions.addView(tasteDeleteProfileBtn);
+        tasteActions.addView(tasteCloseBtn);
         rightTasteDrawer.addView(tasteActions);
 
         FrameLayout.LayoutParams tstLp = new FrameLayout.LayoutParams(
@@ -604,9 +695,35 @@ public class AuraActivity extends Activity {
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
     }
 
+    private void trapLeftFocus(View v) {
+        v.setOnKeyListener((view, keyCode, event) ->
+            keyCode == KeyEvent.KEYCODE_DPAD_LEFT && event.getAction() == KeyEvent.ACTION_DOWN);
+    }
+
+    private void trapDownFocus(View v) {
+        v.setOnKeyListener((view, keyCode, event) ->
+            keyCode == KeyEvent.KEYCODE_DPAD_DOWN && event.getAction() == KeyEvent.ACTION_DOWN);
+    }
+
+    private void trapLeftAndDownFocus(View v) {
+        v.setOnKeyListener((view, keyCode, event) ->
+            (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)
+                && event.getAction() == KeyEvent.ACTION_DOWN);
+    }
+
+    private void blockBackgroundFocus(boolean block) {
+        if (mainRow != null) {
+            mainRow.setDescendantFocusability(block
+                ? ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                : ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        }
+    }
+
     private void openDetailsDrawer(final JSONObject item, final View posterView) {
         if (item == null) return;
         lastFocusedPoster = posterView;
+        blockBackgroundFocus(true);
+
         final String mainTitle = item.optString("series_title").isEmpty()
             ? item.optString("title")
             : item.optString("series_title");
@@ -619,12 +736,15 @@ public class AuraActivity extends Activity {
 
         String syn = item.optString("synopsis");
         String reason = item.optString("reason");
-        String text = !syn.isEmpty() ? syn : reason;
+        if (reason.isEmpty() || reason.equals(syn)) {
+            reason = "Matched for " + db.getProfileLabel(memProfile) + " based on your watch history and interest in " + genres + " (IMDb " + rawImdb + "/10).";
+        }
 
         drawerTitle.setText(mainTitle);
         drawerMeta.setText("IMDb " + rawImdb + "/10   ·   " + year + "   ·   " + rt + " min   ·   " + genres);
         drawerAvailableBadge.setText("Available on " + appName);
-        drawerSynopsis.setText(text);
+        drawerWhyReason.setText(reason);
+        drawerSynopsis.setText(!syn.isEmpty() ? syn : reason);
 
         drawerOpenAppBtn.setText("▶  Open in " + appName);
         drawerOpenAppBtn.setOnClickListener(v -> {
@@ -649,7 +769,6 @@ public class AuraActivity extends Activity {
         rightDetailsDrawer.setVisibility(View.VISIBLE);
         rightScrim.setVisibility(View.VISIBLE);
 
-        // Smooth right-hand slide-in animation
         rightDetailsDrawer.setTranslationX(RIGHT_DRAWER_W);
         rightDetailsDrawer.animate()
             .translationX(0f)
@@ -663,7 +782,7 @@ public class AuraActivity extends Activity {
     private void populateRatingButtons(final JSONObject item, final String mainTitle, final String titleKey, final int activeScore) {
         drawerRatingRow.removeAllViews();
         drawerRatingLabel.setText(activeScore > 0
-            ? ("YOUR RATING: " + activeScore + " / 10  (SAVED)")
+            ? ("YOUR RATING: " + activeScore + " / 10  (SAVED TO AI PROFILE)")
             : "RATE WATCHED SHOW (OUT OF 10)");
 
         for (int score = 1; score <= 10; score++) {
@@ -676,6 +795,7 @@ public class AuraActivity extends Activity {
             numBtn.setClickable(true);
             stylePillBtn(numBtn, false, isSel);
             numBtn.setOnFocusChangeListener((v, hasFocus) -> stylePillBtn(numBtn, hasFocus, sc == activeScore));
+            if (sc == 1) trapLeftFocus(numBtn);
             numBtn.setOnClickListener(v -> {
                 memUserRatings.put(titleKey, sc);
                 if (!memWatchedKeys.contains(titleKey)) {
@@ -700,13 +820,29 @@ public class AuraActivity extends Activity {
         }
     }
 
-    private void openTasteGuideDrawer() {
+    private void openTasteGuideDrawer(boolean addNewMode) {
+        creatingNewProfileMode = addNewMode;
         setSidebarExpanded(false);
-        String profName = db.getProfileLabel(memProfile);
-        String currentTaste = db.getProfileTaste(memProfile);
-        tasteDrawerTitle.setText("Guide AI for " + profName);
-        tasteDrawerSub.setText("Customize what " + profName + " likes watching so recommendations adapt:");
-        tasteEditInput.setText(currentTaste);
+        blockBackgroundFocus(true);
+
+        if (addNewMode) {
+            String suggestedName = "User_" + (100 + (int) (Math.random() * 899));
+            tasteDrawerTitle.setText("Add New Profile");
+            tasteDrawerSub.setText("Set a name and interests so AI curates a personal feed:");
+            profileNameInput.setText(suggestedName);
+            tasteEditInput.setText("");
+            tasteSaveBtn.setText("✓  Create & Curate");
+            tasteDeleteProfileBtn.setVisibility(View.GONE);
+        } else {
+            String profName = db.getProfileLabel(memProfile);
+            String currentTaste = db.getProfileTaste(memProfile);
+            tasteDrawerTitle.setText("Profile & AI Settings");
+            tasteDrawerSub.setText("Edit name, add interests, or delete profile:");
+            profileNameInput.setText(profName);
+            tasteEditInput.setText(currentTaste);
+            tasteSaveBtn.setText("✓  Save & Curate");
+            tasteDeleteProfileBtn.setVisibility(View.VISIBLE);
+        }
 
         populateTastePresetRows();
 
@@ -734,12 +870,12 @@ public class AuraActivity extends Activity {
                 if (!f.isEmpty() && !dynamicTags.contains(f)) dynamicTags.add(f);
             }
         }
-        for (int i = 0; i < memRecos.length() && dynamicTags.size() < 8; i++) {
+        for (int i = 0; i < memRecos.length() && dynamicTags.size() < 6; i++) {
             JSONObject r = memRecos.optJSONObject(i);
             if (r == null) continue;
             for (String g : cleanGenres(r.optString("genres")).split(",")) {
                 String gt = g.trim();
-                if (!gt.isEmpty() && !dynamicTags.contains(gt) && dynamicTags.size() < 8) {
+                if (!gt.isEmpty() && !dynamicTags.contains(gt) && dynamicTags.size() < 6) {
                     dynamicTags.add(gt);
                 }
             }
@@ -766,31 +902,64 @@ public class AuraActivity extends Activity {
                 tasteEditInput.setText(now);
                 populateTastePresetRows();
             });
+            if (i % 2 == 0) trapLeftFocus(chip);
             if (row != null) row.addView(chip);
         }
     }
 
-    private void saveTasteAndCurate() {
+    private void saveProfileAndCurate() {
+        final String newName = profileNameInput.getText().toString().trim();
         final String newTaste = tasteEditInput.getText().toString().trim();
-        final String prof = memProfile;
+        final boolean isNew = creatingNewProfileMode;
         closeRightDrawers();
-        setLoader(true, "Curating for " + db.getProfileLabel(prof) + "…");
 
         bgPool.submit(() -> {
-            db.setProfileTaste(prof, newTaste);
-            // Clear old cached recos for this profile and regenerate with the new taste prompt
-            JSONArray fresh = ai.getOrRefreshForProfile(prof, new JSONObject(), db.listHistory(prof), true);
-            sync.syncWithHost();
+            final String targetPid;
+            if (isNew) {
+                targetPid = db.addProfile(newName, newTaste);
+            } else {
+                targetPid = memProfile;
+                db.saveProfileRecord(targetPid, newName, newTaste);
+            }
+            final String label = db.getProfileLabel(targetPid);
             uiHandler.post(() -> {
+                memProfile = targetPid;
+                memProfiles.clear();
+                memProfiles.addAll(db.listProfiles());
+                populateSideProfiles();
+                setLoader(true, "AI curating for " + label + "…");
+            });
+
+            JSONArray fresh = ai.getOrRefreshForProfile(targetPid, new JSONObject(), db.listHistory(targetPid), true);
+            sync.syncWithHost();
+            final List<JSONObject> profList = db.listProfiles();
+            uiHandler.post(() -> {
+                memProfile = targetPid;
+                memProfiles.clear();
+                memProfiles.addAll(profList);
                 memRecos = fresh;
                 showingVoiceResults = false;
-                setLoader(false, "✓ Taste Updated");
+                setLoader(false, "✓ Curated for " + label);
                 refreshAllSections(true);
             });
         });
     }
 
+    private void deleteCurrentProfile() {
+        final String toDelete = memProfile;
+        closeRightDrawers();
+        bgPool.submit(() -> {
+            final String nextPid = db.deleteProfile(toDelete);
+            uiHandler.post(() -> switchProfileAndLoad(nextPid, true));
+        });
+    }
+
     private void closeRightDrawers() {
+        blockBackgroundFocus(false);
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null && rootFrame != null) {
+            imm.hideSoftInputFromWindow(rootFrame.getWindowToken(), 0);
+        }
         if (rightScrim != null) {
             rightScrim.setVisibility(View.GONE);
         }
@@ -800,7 +969,7 @@ public class AuraActivity extends Activity {
         if (rightTasteDrawer != null) {
             rightTasteDrawer.setVisibility(View.GONE);
         }
-        if (lastFocusedPoster != null) {
+        if (lastFocusedPoster != null && lastFocusedPoster.getParent() != null) {
             lastFocusedPoster.requestFocus();
         } else if (carouselRow != null && carouselRow.getChildCount() > 0) {
             carouselRow.getChildAt(0).requestFocus();
@@ -926,17 +1095,16 @@ public class AuraActivity extends Activity {
             if (hasFocus) setSidebarExpanded(false);
             stylePosterFrame(posterFrame, hasFocus);
             posterFrame.animate()
-                .scaleX(hasFocus ? 1.05f : 1.0f)
-                .scaleY(hasFocus ? 1.05f : 1.0f)
+                .scaleX(hasFocus ? 1.04f : 1.0f)
+                .scaleY(hasFocus ? 1.04f : 1.0f)
                 .setDuration(90)
                 .start();
             if (hasFocus) updateHeaderForCard(item);
         });
 
-        // Clicking OK slides open the Right-Hand Details Drawer
         posterFrame.setOnClickListener(v -> openDetailsDrawer(item, posterFrame));
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(276, 414);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(272, 408);
         lp.setMargins(0, 0, 24, 0);
         posterFrame.setLayoutParams(lp);
         return posterFrame;
@@ -1068,7 +1236,7 @@ public class AuraActivity extends Activity {
     }
 
     private void triggerManualRefresh() {
-        setLoader(true, "Refreshing picks…");
+        setLoader(true, "AI curating picks…");
         final String prof = memProfile;
         bgPool.submit(() -> {
             JSONArray fresh = ai.getOrRefreshForProfile(prof, new JSONObject(), db.listHistory(prof), true);
@@ -1194,7 +1362,7 @@ public class AuraActivity extends Activity {
 
     private void styleInputBox(EditText et, boolean focused) {
         GradientDrawable d = new GradientDrawable();
-        d.setCornerRadius(99f);
+        d.setCornerRadius(12f);
         d.setColor(Color.parseColor(focused ? "#1E2232" : "#131621"));
         d.setStroke(focused ? 3 : 1, Color.parseColor(focused ? IMDB_GOLD : "#2A3045"));
         et.setBackground(d);

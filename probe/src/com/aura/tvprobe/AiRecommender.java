@@ -76,16 +76,19 @@ public class AiRecommender {
 
         return "You are Aura, an expert personalized TV & movie recommendation engine.\n" +
             "Active Profile Name: '" + profileName + "' (profile_id: " + profileId + ").\n" +
-            "User's Explicit Taste Guidance / Instructions for this profile: " +
+            "User's Explicit Taste Guidance / Interests for this profile: " +
             (customTaste.isEmpty() ? "(Infer appropriate taste from Profile Name, Ratings, and Watch History)" : "\"" + customTaste + "\"") + "\n" +
             "User's 1-10 Show Ratings Feedback: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
             "Active UI Filters: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
             "Currently/recently active on TV: '" + cur + "'.\n" +
             "Already watched (STRICT EXCLUSION — NEVER recommend any of these): " + seen.toString() + ".\n" +
-            "Collaborative Filtering Graph Candidates from user's watch history: " + cfPool.toString() + ".\n\n" +
-            "Task: Do the heavy lifting to curate 14 critically acclaimed shows or movies (IMDb >= 7.4) available on Indian streaming platforms that deeply match this profile's explicit taste guidance, 1-10 ratings, and viewing history.\n" +
+            "Deterministic Candidate Pool (verified titles streaming in India from JustWatch/IMDb APIs): " + cfPool.toString() + ".\n\n" +
+            "Task (LLM Heavy Lifting):\n" +
+            "1. Filter out any watched titles, anything similar to low-rated titles (<=5/10), or anything violating active filters.\n" +
+            "2. Select & rank the 14 best shows or movies (prioritizing high-affinity matches from the Deterministic Candidate Pool plus top critically acclaimed matches for their interests).\n" +
+            "3. For EVERY title, write a specific, compelling 'reason' (1-2 sentences, max 24 words) explaining WHY this specific user should watch it and WHY it is recommended to them based on their watched shows, 1-10 ratings, or interests.\n" +
             "Return ONLY a JSON array of 14 objects with keys: 'title', 'app' (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5), " +
-            "'genres' (comma-separated), 'runtime_min' (integer minutes), and 'reason' (1 concise sentence explaining why it matches their taste and ratings, max 18 words).";
+            "'genres' (comma-separated), 'runtime_min' (integer minutes), and 'reason' (personalized explanation of why they should watch it).";
     }
 
     public List<String> fetchCollaborativeCandidateNames(String profileId) {
@@ -93,12 +96,29 @@ public class AiRecommender {
         List<String> names = new ArrayList<>();
         for (String seed : dynamicAnchors) {
             JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seed);
-            for (int i = 0; i < sim.length() && i < 5; i++) {
+            for (int i = 0; i < sim.length() && i < 6; i++) {
                 JSONObject o = sim.optJSONObject(i);
                 if (o != null && !o.optString("title").isEmpty() && !db.isTitleWatched(o.optString("title"))) {
                     String t = o.optString("title");
                     db.saveCachedGti("jw_imdb_v3:" + t.trim().toLowerCase(), o.toString());
-                    names.add(t + " (" + o.optString("rating") + ", " + o.optString("app", "Streaming") + ")");
+                    names.add(t + " [" + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app", "Streaming") + "]");
+                }
+            }
+        }
+        String customInterests = db.getProfileTaste(profileId);
+        if (!customInterests.isEmpty()) {
+            for (String part : customInterests.split(",")) {
+                String kw = part.trim();
+                if (kw.isEmpty()) continue;
+                JSONArray searchHits = JustWatchGraph.fetchDeterministicSearchCandidates(kw);
+                for (int i = 0; i < searchHits.length() && i < 5; i++) {
+                    JSONObject o = searchHits.optJSONObject(i);
+                    if (o != null && !o.optString("title").isEmpty() && !db.isTitleWatched(o.optString("title"))) {
+                        String t = o.optString("title");
+                        db.saveCachedGti("jw_imdb_v3:" + t.trim().toLowerCase(), o.toString());
+                        String entry = t + " [" + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app", "Streaming") + "]";
+                        if (!names.contains(entry)) names.add(entry);
+                    }
                 }
             }
         }
