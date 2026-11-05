@@ -64,10 +64,10 @@ def poll_tv_state(force_refresh: bool = False) -> Dict:
 
 def fetch_tv_state(profile: str, force_refresh: bool = False) -> Dict:
     try:
-        params = {"profile": profile}
+        params = {}
         if force_refresh:
             params["refresh"] = "1"
-        r = httpx.get(f"{TV_PROBE_URL}/api/state", params=params, timeout=8.0)
+        r = httpx.get(f"{TV_PROBE_URL}/api/state", params=params, timeout=5.0)
         if r.status_code == 200:
             return r.json()
     except Exception:

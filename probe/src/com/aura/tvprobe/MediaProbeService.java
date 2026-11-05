@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 public class MediaProbeService extends NotificationListenerService {
     private ServerSocket serverSocket;
     private volatile boolean running = false;
+    private final java.util.concurrent.ExecutorService httpPool = java.util.concurrent.Executors.newFixedThreadPool(4);
     private AuraDb db;
     private AiRecommender ai;
     private SessionInspector inspector;
@@ -50,11 +51,12 @@ public class MediaProbeService extends NotificationListenerService {
 
     private void startBackgroundMonitor() {
         new Thread(() -> {
+            try { Thread.sleep(45000L); } catch (Exception ignored) {}
             while (running) {
                 try {
                     inspector.syncAndBuildState(false);
                     sync.syncWithHost();
-                    Thread.sleep(60000L);
+                    Thread.sleep(300000L);
                 } catch (Exception ignored) {}
             }
         }, "AuraBgMonitor").start();
@@ -71,7 +73,7 @@ public class MediaProbeService extends NotificationListenerService {
             serverSocket = new ServerSocket(8765);
             while (running) {
                 Socket client = serverSocket.accept();
-                new Thread(() -> handleClient(client)).start();
+                httpPool.submit(() -> handleClient(client));
             }
         } catch (Exception ignored) {}
     }
@@ -222,10 +224,8 @@ public class MediaProbeService extends NotificationListenerService {
             return;
         }
         if ("/api/state".equals(p)) {
-            String prof = optParam(uri, "profile", "");
-            if (!prof.isEmpty()) db.setSetting("active_profile", prof);
             boolean refresh = "1".equals(optParam(uri, "refresh", "0"));
-            JSONObject st = inspector.syncAndBuildState(refresh);
+            JSONObject st = refresh ? inspector.syncAndBuildState(true) : inspector.buildFastCachedState();
             writeHttpResponse(out, "application/json", st.toString());
             return;
         }

@@ -16,9 +16,7 @@ import java.util.regex.Pattern;
 
 public class AiRecommender {
     private static final String[] MODELS = {
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
-        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
         "gemini-flash-lite-latest"
     };
     private final AuraDb db;
@@ -31,10 +29,74 @@ public class AiRecommender {
         return db.getSetting("gemini_api_key", "").trim();
     }
 
+    private String[] profileAnchors(String profileId) {
+        if ("partner".equals(profileId)) return new String[]{"Marry My Husband", "Crash Landing on You", "The Glory"};
+        if ("member3".equals(profileId)) return new String[]{"The Family Man", "Panchayat", "Farzi"};
+        if ("kids".equals(profileId)) return new String[]{"Spider-Man: Into the Spider-Verse", "Paddington 2", "Kung Fu Panda"};
+        if ("family".equals(profileId)) return new String[]{"Knives Out", "3 Idiots", "Modern Family"};
+        return new String[]{"Severance", "Dark Matter", "Prisoners"};
+    }
+
+    public JSONArray getFastCollaborativeForProfile(String profileId) {
+        JSONArray cached = db.getProfileRecommendations(profileId);
+        if (cached.length() > 0) return cached;
+
+        String[] anchors = profileAnchors(profileId);
+        String label = db.getProfileLabel(profileId);
+        final JSONArray[] buckets = new JSONArray[anchors.length];
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(anchors.length);
+        for (int i = 0; i < anchors.length; i++) {
+            final int idx = i;
+            final String seed = anchors[i];
+            pool.submit(() -> {
+                JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seed);
+                for (int j = 0; j < sim.length(); j++) {
+                    JSONObject o = sim.optJSONObject(j);
+                    if (o == null) continue;
+                    String t = o.optString("title");
+                    if (!t.isEmpty()) {
+                        db.saveCachedGti("jw_imdb_v3:" + t.trim().toLowerCase(), o.toString());
+                        try {
+                            o.put("reason", "Recommended for " + label + " because you liked " + seed + ".");
+                        } catch (Exception ignored) {}
+                    }
+                }
+                buckets[idx] = sim;
+            });
+        }
+        pool.shutdown();
+        try { pool.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+
+        JSONArray merged = new JSONArray();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int round = 0; round < 8; round++) {
+            for (JSONArray b : buckets) {
+                if (b == null || round >= b.length()) continue;
+                JSONObject o = b.optJSONObject(round);
+                if (o == null) continue;
+                String k = AuraDb.normalizeTitleKey(o.optString("title"));
+                if (!k.isEmpty() && !seen.contains(k) && !db.isTitleWatched(o.optString("title")) && !o.optString("poster_url").isEmpty()) {
+                    seen.add(k);
+                    merged.put(o);
+                    if (merged.length() >= 16) break;
+                }
+            }
+            if (merged.length() >= 16) break;
+        }
+        if (merged.length() > 0) {
+            db.saveProfileRecommendations(profileId, merged);
+            return merged;
+        }
+        return buildOpenSourceRecommendations(profileId);
+    }
+
     public JSONArray getOrRefreshForProfile(String profileId, JSONObject nowPlaying, JSONArray history, boolean forceManual) {
         JSONArray cached = db.getProfileRecommendations(profileId);
         if (!forceManual && cached.length() > 0 && db.isRecoCacheFresh(profileId)) {
             return cached;
+        }
+        if (!forceManual && cached.length() == 0) {
+            return getFastCollaborativeForProfile(profileId);
         }
         String prompt = buildProfilePrompt(profileId, nowPlaying, history);
         for (String model : MODELS) {
@@ -46,9 +108,7 @@ public class AiRecommender {
             }
         }
         if (cached.length() > 0) return cached;
-        JSONArray openFallback = buildOpenSourceRecommendations(profileId);
-        db.saveProfileRecommendations(profileId, openFallback);
-        return openFallback;
+        return getFastCollaborativeForProfile(profileId);
     }
 
     private String buildProfilePrompt(String profileId, JSONObject np, JSONArray history) {
@@ -74,18 +134,16 @@ public class AiRecommender {
     }
 
     public List<String> fetchCollaborativeCandidateNames(String profileId) {
-        String[] anchors = "partner".equals(profileId)
-            ? new String[]{"Marry My Husband", "The Glory", "Crash Landing on You"}
-            : "kids".equals(profileId)
-            ? new String[]{"Spider-Man: Into the Spider-Verse", "Bluey", "Paddington 2"}
-            : new String[]{"Severance", "Dark Matter", "The Bear", "Prisoners"};
+        String[] anchors = profileAnchors(profileId);
         List<String> names = new ArrayList<>();
         for (String seed : anchors) {
             JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seed);
             for (int i = 0; i < sim.length() && i < 6; i++) {
                 JSONObject o = sim.optJSONObject(i);
                 if (o != null && !o.optString("title").isEmpty() && !db.isTitleWatched(o.optString("title"))) {
-                    names.add(o.optString("title") + " (" + o.optString("rating") + ", " + o.optString("app", "Streaming") + ")");
+                    String t = o.optString("title");
+                    db.saveCachedGti("jw_imdb_v3:" + t.trim().toLowerCase(), o.toString());
+                    names.add(t + " (" + o.optString("rating") + ", " + o.optString("app", "Streaming") + ")");
                 }
             }
         }
