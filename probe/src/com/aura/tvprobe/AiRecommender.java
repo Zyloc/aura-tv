@@ -67,20 +67,76 @@ public class AiRecommender {
         if (progress != null) progress.onStep("Agent 2/3 · Traversing " + minModernYear + "–" + currentYear + " graph from watched & Guide AI…");
         List<String> verifiedCandidates = executeMultiHopTraversal(profileId, seedPlan, minModernYear);
 
-        // Agent Step 3: LLM Agentic Curation, Ranking & Reasoning
-        if (progress != null) progress.onStep("Agent 3/3 · LLM ranking 20 modern (" + minModernYear + "–" + currentYear + ") picks…");
-        String prompt = buildAgentRankingPrompt(profileId, nowPlaying, watchedList, verifiedCandidates, minModernYear, currentYear);
-        for (String model : MODELS) {
-            JSONArray raw = callGemini(model, prompt);
-            if (raw != null && raw.length() > 0) {
-                JSONArray enriched = enrichAll(raw, minModernYear, currentYear);
-                if (enriched.length() > 0) {
-                    db.saveProfileRecommendations(profileId, enriched);
-                    return enriched;
+        // Agent Step 3: LLM Agentic Curation, Ranking & Reasoning (with deterministic offline fallback)
+        if (!getApiKey().isEmpty()) {
+            if (progress != null) progress.onStep("Agent 3/3 · LLM ranking 20 modern (" + minModernYear + "–" + currentYear + ") picks…");
+            String prompt = buildAgentRankingPrompt(profileId, nowPlaying, watchedList, verifiedCandidates, minModernYear, currentYear);
+            for (String model : MODELS) {
+                JSONArray raw = callGemini(model, prompt);
+                if (raw != null && raw.length() > 0) {
+                    JSONArray enriched = enrichAll(raw, minModernYear, currentYear);
+                    if (enriched.length() > 0) {
+                        db.saveProfileRecommendations(profileId, enriched);
+                        return enriched;
+                    }
                 }
             }
         }
+        if (progress != null) progress.onStep("Deterministic Graph Ranking (" + minModernYear + "–" + currentYear + ")…");
+        JSONArray det = buildDeterministicRecommendations(profileId, minModernYear, currentYear);
+        if (det.length() > 0) {
+            db.saveProfileRecommendations(profileId, det);
+            return det;
+        }
         return cached;
+    }
+
+    public JSONArray buildDeterministicRecommendations(String profileId, int minModernYear, int currentYear) {
+        List<JSONObject> pool = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        List<String> anchors = db.getDynamicTasteAnchors(profileId);
+        for (String anchor : anchors) {
+            JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(anchor, minModernYear);
+            for (int i = 0; i < sim.length(); i++) {
+                addDetCandidate(sim.optJSONObject(i), "Similar to " + anchor, seen, pool);
+            }
+        }
+        String[] defaultSeeds = {"thriller", "sci-fi", "crime", "drama"};
+        for (String q : defaultSeeds) {
+            if (pool.size() >= 24) break;
+            JSONArray hits = JustWatchGraph.fetchDeterministicSearchCandidates(q, minModernYear);
+            for (int i = 0; i < hits.length(); i++) {
+                addDetCandidate(hits.optJSONObject(i), null, seen, pool);
+            }
+        }
+        pool.sort((a, b) -> Double.compare(scoreDet(b, currentYear), scoreDet(a, currentYear)));
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < pool.size() && i < 20; i++) out.put(pool.get(i));
+        return out;
+    }
+
+    private void addDetCandidate(JSONObject o, String seedReason, Set<String> seen, List<JSONObject> pool) {
+        if (o == null) return;
+        String t = o.optString("title").trim();
+        String norm = AuraDb.normalizeTitleKey(t);
+        if (t.isEmpty() || seen.contains(norm) || db.isTitleWatched(t)) return;
+        seen.add(norm);
+        try {
+            double imdb = o.optDouble("imdb_raw", 7.8);
+            o.put("imdb_score", imdb);
+            String app = o.optString("app", "Streaming");
+            String r = "Trending on " + app + " · ★ " + String.format("%.1f", imdb)
+                + (seedReason != null ? " · " + seedReason : " · " + o.optString("genres", "Drama"));
+            if (o.optString("reason").isEmpty()) o.put("reason", r);
+            pool.add(o);
+        } catch (Exception ignored) {}
+    }
+
+    private double scoreDet(JSONObject o, int currentYear) {
+        double imdb = o.optDouble("imdb_raw", 7.5);
+        int year = o.optInt("year", currentYear - 2);
+        double recency = 1.0 + Math.max(0, 4 - (currentYear - year)) * 0.06;
+        return imdb * recency;
     }
 
     private JSONObject buildFastSeedPlan(String profileId, String userQuery) {
@@ -380,6 +436,8 @@ public class AiRecommender {
                     int rt = meta.optInt("runtime_min", p.optInt("runtime_min", 48));
                     card.put("runtime_min", rt);
                     card.put("rating", meta.optString("rating", p.optString("rating", "8.1")));
+                    double imdbScore = meta.optDouble("imdb_raw", p.optDouble("imdb_score", 8.1));
+                    card.put("imdb_score", imdbScore);
                     String deepUri = !meta.optString("launch_uri").isEmpty()
                         ? meta.optString("launch_uri")
                         : db.findNativeLaunchUri(title);

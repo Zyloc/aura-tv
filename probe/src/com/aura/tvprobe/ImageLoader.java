@@ -16,24 +16,25 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class ImageLoader {
-    // Native JustWatch s332 poster dimensions (332x473, 1:1.425 aspect ratio) for crisp HD posters
-    // without cropping off top/bottom titles or blurring via aggressive downsampling.
-    private static final int POSTER_W = 332;
-    private static final int POSTER_H = 473;
+    private static final int RAIL_POSTER_W = 180;
+    private static final int RAIL_POSTER_H = 260;
+    private static final int HERO_POSTER_W = 380;
+    private static final int HERO_POSTER_H = 540;
+    private static final int MAX_DISK_FILES = 200;
 
-    // 6 MB (6144 KB) byte-measured LruCache for crisp full-resolution poster bitmaps
-    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(6144) {
+    // 4 MB byte-measured LruCache; RGB_565 rail posters are ~90 KB each (~45 posters in RAM)
+    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(4096) {
         @Override
         protected int sizeOf(String key, Bitmap value) {
             return Math.max(1, value.getAllocationByteCount() / 1024);
         }
     };
 
-    // 2 low-priority background threads so image decode NEVER starves UI / RenderThread
     private static final ExecutorService POOL = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(() -> {
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
@@ -60,16 +61,25 @@ public class ImageLoader {
     }
 
     public static void load(final Context ctx, final String urlStr, final ImageView iv) {
+        loadInternal(ctx, urlStr, iv, RAIL_POSTER_W, RAIL_POSTER_H, "rail:");
+    }
+
+    public static void loadHero(final Context ctx, final String urlStr, final ImageView iv) {
+        String hiResUrl = urlStr != null ? urlStr.replace("/s332/", "/s592/") : "";
+        loadInternal(ctx, hiResUrl, iv, HERO_POSTER_W, HERO_POSTER_H, "hero:");
+    }
+
+    private static void loadInternal(final Context ctx, final String urlStr, final ImageView iv,
+                                      final int reqW, final int reqH, final String prefix) {
         if (urlStr == null || urlStr.isEmpty()) {
             iv.setTag(null);
             iv.setImageBitmap(null);
             return;
         }
-        if (urlStr.equals(iv.getTag()) && iv.getDrawable() != null) {
-            return;
-        }
-        iv.setTag(urlStr);
-        Bitmap cached = MEM_CACHE.get(urlStr);
+        final String cacheKey = prefix + urlStr;
+        if (cacheKey.equals(iv.getTag()) && iv.getDrawable() != null) return;
+        iv.setTag(cacheKey);
+        Bitmap cached = MEM_CACHE.get(cacheKey);
         if (cached != null && !cached.isRecycled()) {
             iv.animate().cancel();
             iv.setAlpha(1f);
@@ -78,13 +88,13 @@ public class ImageLoader {
         }
         iv.setImageBitmap(null);
         POOL.submit(() -> {
-            if (!urlStr.equals(iv.getTag())) return;
-            Bitmap bmp = loadFromDiskOrNet(ctx, urlStr, POSTER_W, POSTER_H);
+            if (!cacheKey.equals(iv.getTag())) return;
+            Bitmap bmp = loadFromDiskOrNet(ctx, urlStr, reqW, reqH);
             if (bmp != null) {
-                try { bmp.prepareToDraw(); } catch ( Throwable ignored) {}
-                MEM_CACHE.put(urlStr, bmp);
+                try { bmp.prepareToDraw(); } catch (Throwable ignored) {}
+                MEM_CACHE.put(cacheKey, bmp);
                 UI.post(() -> {
-                    if (urlStr.equals(iv.getTag())) {
+                    if (cacheKey.equals(iv.getTag())) {
                         iv.setAlpha(0f);
                         iv.setImageBitmap(bmp);
                         iv.animate().alpha(1f).setDuration(150).start();
@@ -100,6 +110,7 @@ public class ImageLoader {
             if (!dir.exists()) dir.mkdirs();
             File f = new File(dir, "poster_hd_" + Math.abs(urlStr.hashCode()) + ".jpg");
             if (f.exists() && f.length() > 400) {
+                f.setLastModified(System.currentTimeMillis());
                 Bitmap b = decodeCompact(f, reqW, reqH);
                 if (b != null) return b;
             }
@@ -112,10 +123,23 @@ public class ImageLoader {
                 int n;
                 while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
             }
+            evictOldCacheFiles(dir);
             return decodeCompact(f, reqW, reqH);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static void evictOldCacheFiles(File dir) {
+        try {
+            File[] files = dir.listFiles();
+            if (files == null || files.length <= MAX_DISK_FILES) return;
+            Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+            int toDelete = files.length - MAX_DISK_FILES;
+            for (int i = 0; i < toDelete; i++) {
+                files[i].delete();
+            }
+        } catch (Exception ignored) {}
     }
 
     private static Bitmap decodeCompact(File f, int reqW, int reqH) {
@@ -131,19 +155,15 @@ public class ImageLoader {
             }
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inSampleSize = sample;
-            opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            opts.inPreferredConfig = Bitmap.Config.RGB_565;
             Bitmap raw = BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
             if (raw == null) return null;
 
-            // Preserve exact original poster aspect ratio when scaling down oversized images
-            if (raw.getWidth() > reqW + 48) {
+            if (raw.getWidth() > reqW + 32) {
                 float scale = (float) reqW / (float) raw.getWidth();
-                int targetW = reqW;
                 int targetH = Math.max(1, Math.round(raw.getHeight() * scale));
-                Bitmap scaled = Bitmap.createScaledBitmap(raw, targetW, targetH, true);
-                if (scaled != raw) {
-                    raw.recycle();
-                }
+                Bitmap scaled = Bitmap.createScaledBitmap(raw, reqW, targetH, true);
+                if (scaled != raw) raw.recycle();
                 return scaled;
             }
             return raw;

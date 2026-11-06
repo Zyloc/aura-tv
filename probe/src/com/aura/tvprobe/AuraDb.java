@@ -546,17 +546,30 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     public void enforceStorageCap() {
+        enforceStorageCapForProfile(null);
+    }
+
+    public void enforceStorageCapForProfile(String profileId) {
         SQLiteDatabase db = getWritableDatabase();
-        db.execSQL("DELETE FROM watch_history WHERE media_key NOT IN (" +
-            "SELECT media_key FROM watch_history ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY + ")");
+        String where = profileId != null
+            ? "profile_id = '" + profileId + "' AND media_key NOT IN (" +
+              "SELECT media_key FROM watch_history WHERE profile_id = '" + profileId +
+              "' ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY + ")"
+            : "media_key NOT IN (" +
+              "SELECT media_key FROM watch_history ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY + ")";
+        db.execSQL("DELETE FROM watch_history WHERE " + where);
     }
 
     public JSONArray listHistory(String profileId) {
         JSONArray arr = new JSONArray();
         Set<String> watchedKeys = getWatchedTitleKeys();
         SQLiteDatabase db = getReadableDatabase();
-        String sql = "SELECT * FROM watch_history ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY;
-        try (Cursor c = db.rawQuery(sql, null)) {
+        boolean hasProf = profileId != null && !profileId.isEmpty();
+        String sql = hasProf
+            ? "SELECT * FROM watch_history WHERE profile_id = ? ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY
+            : "SELECT * FROM watch_history ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY;
+        String[] args = hasProf ? new String[]{profileId} : null;
+        try (Cursor c = db.rawQuery(sql, args)) {
             while (c.moveToNext()) {
                 JSONObject o = cursorToWatchJson(c);
                 String tKey = normalizeTitleKey(o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title"));

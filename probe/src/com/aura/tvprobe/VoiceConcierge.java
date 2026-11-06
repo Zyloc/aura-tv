@@ -134,11 +134,12 @@ public class VoiceConcierge {
                     out.put("follow_ups", defaultFollowUps(currentYear));
                 }
             } else {
-                String reply = "Matched '" + userText + "' using local graph.";
+                String reply = "Matched '" + userText + "' via JustWatch India graph.";
                 turns.put(new JSONObject().put("role", "assistant").put("text", reply));
                 out.put("reply", reply);
                 out.put("turns", trimTurns(turns, 8));
-                out.put("results", db.getProfileRecommendations(profileId));
+                JSONArray jwHits = JustWatchGraph.fetchDeterministicSearchCandidates(userText, minModernYear);
+                out.put("results", jwHits.length() > 0 ? db.filterOutWatched(jwHits) : db.getProfileRecommendations(profileId));
                 out.put("follow_ups", defaultFollowUps(currentYear));
             }
             db.saveVoiceSession(profileId, out);

@@ -206,6 +206,7 @@ public class JustWatchGraph {
             JSONObject scoring = content.optJSONObject("scoring");
             double imdb = scoring != null ? scoring.optDouble("imdbScore", 0.0) : 0.0;
             res.put("imdb_raw", imdb);
+            res.put("imdb_score", imdb > 0 ? imdb : 7.8);
             if (imdb > 0) {
                 res.put("rating", String.format("★ %.1f", imdb));
             } else {
