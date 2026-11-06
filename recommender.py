@@ -74,23 +74,28 @@ def build_gemini_prompt(profile: str, current: Dict, history: List[Dict]) -> str
     now_name = current.get("series_title") or current.get("title") or ""
     profile_name = PROFILE_LABELS.get(profile, profile)
     custom_taste = get_setting(f"profile_taste_{profile}", "")
+    default_taste = get_setting(
+        "default_guide_ai",
+        "Critically acclaimed released titles (IMDb 7.5+), gripping storytelling, streaming in India",
+    )
     active_filters = get_active_filters(profile)
 
     return (
         f"You are Aura, an AI TV & movie recommendation engine.\n"
         f"Active Household Profile: '{profile_name}' (id: {profile}).\n"
-        f"User's Explicit Taste Guidance: {custom_taste or '(Infer from profile name, ratings, and watch history)'}\n"
+        f"1. Personal Guide AI (for {profile_name}): {custom_taste or '(Use Default Guide AI and watch history)'}\n"
+        f"2. Default Guide AI (Global Baseline): {default_taste}\n"
         f"Highly Rated by User (1-10 scale, recommend more like these): {loved}\n"
         f"Low Rated by User (1-10 scale, avoid similar style): {disliked}\n"
         f"Active Filters: {active_filters}\n"
         f"Currently watching on TV: '{now_name}'.\n"
         f"Already Watched (STRICT EXCLUSION — DO NOT recommend): {seen}.\n"
-        "Recommend 14 specific critically acclaimed shows or movies (IMDb >= 7.4) available in India that they have NOT watched yet.\n"
-        "Return ONLY a JSON array of 14 objects with keys: "
+        "STRICT RULE: ONLY recommend already-released shows or movies (release year <= 2025, IMDb >= 7.4) currently streaming on subscription OTT in India. NEVER recommend unreleased 2026/2027 titles.\n"
+        "Return ONLY a JSON array of 15 objects with keys: "
         "'title', 'app' (Prime Video, Netflix, Disney+ Hotstar, Apple TV+, SonyLIV, or ZEE5), "
         "'genre' (comma-separated genres), "
         "'runtime_min' (integer minutes), "
-        "and 'reason' (1 concise sentence under 18 words)."
+        "and 'reason' (1-2 specific sentences explaining why it fits their taste)."
     )
 
 

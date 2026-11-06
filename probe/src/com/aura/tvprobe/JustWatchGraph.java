@@ -11,10 +11,11 @@ import java.nio.charset.StandardCharsets;
 
 public class JustWatchGraph {
     private static final String GRAPHQL_URL = "https://apis.justwatch.com/graphql";
+    public static final int MAX_RELEASED_YEAR = 2025;
 
     private static final String SEARCH_QUERY =
         "query GetTitle($searchQuery: String!, $country: Country!, $language: Language!) {" +
-        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery }, first: 1) {" +
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 4) {" +
         "    edges { node {" +
         "      objectType" +
         "      content(country: $country, language: $language) {" +
@@ -50,7 +51,7 @@ public class JustWatchGraph {
 
     private static final String CANDIDATE_POOL_QUERY =
         "query GetCandidatePool($searchQuery: String!, $country: Country!, $language: Language!) {" +
-        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery }, first: 10) {" +
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 15) {" +
         "    edges { node {" +
         "      objectType" +
         "      content(country: $country, language: $language) {" +
@@ -76,8 +77,20 @@ public class JustWatchGraph {
                 .optJSONObject("popularTitles")
                 .optJSONArray("edges");
             if (edges == null || edges.length() == 0) return new JSONObject();
-            JSONObject node = edges.getJSONObject(0).optJSONObject("node");
-            return parseNode(node);
+            String normTarget = AuraDb.normalizeTitleKey(title);
+            JSONObject best = null;
+            for (int i = 0; i < edges.length(); i++) {
+                JSONObject node = edges.getJSONObject(i).optJSONObject("node");
+                JSONObject parsed = parseNode(node);
+                if (parsed.optString("title").isEmpty()) continue;
+                if (parsed.optInt("year", 9999) > MAX_RELEASED_YEAR) continue;
+                if (best == null) best = parsed;
+                if (AuraDb.normalizeTitleKey(parsed.optString("title")).equals(normTarget)
+                    && parsed.optBoolean("has_flatrate_offer", false)) {
+                    return parsed;
+                }
+            }
+            return best != null ? best : new JSONObject();
         } catch (Exception e) {
             return new JSONObject();
         }
@@ -99,7 +112,7 @@ public class JustWatchGraph {
                 JSONObject edge = edges.optJSONObject(i);
                 if (edge == null) continue;
                 JSONObject parsed = parseNode(edge.optJSONObject("node"));
-                if (!parsed.optString("title").isEmpty() && parsed.optDouble("imdb_raw", 7.4) >= 7.0) {
+                if (isValidReleasedStreamingCandidate(parsed, 7.0)) {
                     out.put(parsed);
                 }
             }
@@ -123,12 +136,23 @@ public class JustWatchGraph {
             if (sim == null) return out;
             for (int i = 0; i < sim.length(); i++) {
                 JSONObject parsed = parseNode(sim.optJSONObject(i));
-                if (!parsed.optString("title").isEmpty() && parsed.optDouble("imdb_raw", 7.5) >= 7.2) {
+                if (isValidReleasedStreamingCandidate(parsed, 7.2)) {
                     out.put(parsed);
                 }
             }
         } catch (Exception ignored) {}
         return out;
+    }
+
+    public static boolean isValidReleasedStreamingCandidate(JSONObject parsed, double minImdb) {
+        if (parsed == null || parsed.optString("title").isEmpty()) return false;
+        int year = parsed.optInt("year", 9999);
+        if (year > MAX_RELEASED_YEAR || year < 1970) return false;
+        double imdb = parsed.optDouble("imdb_raw", 0.0);
+        if (imdb < minImdb) return false;
+        if (!parsed.optBoolean("has_flatrate_offer", false)) return false;
+        if (parsed.optString("poster_url").isEmpty()) return false;
+        return true;
     }
 
     private static JSONObject parseNode(JSONObject node) {
@@ -147,11 +171,11 @@ public class JustWatchGraph {
 
             JSONObject scoring = content.optJSONObject("scoring");
             double imdb = scoring != null ? scoring.optDouble("imdbScore", 0.0) : 0.0;
+            res.put("imdb_raw", imdb);
             if (imdb > 0) {
-                res.put("imdb_raw", imdb);
                 res.put("rating", String.format("★ %.1f", imdb));
             } else {
-                res.put("rating", "★ 8.1");
+                res.put("rating", "★ 7.8");
             }
 
             String posterPath = content.optString("posterUrl");
@@ -168,24 +192,47 @@ public class JustWatchGraph {
     }
 
     private static void extractBestOffer(JSONArray offers, JSONObject res) throws Exception {
-        if (offers == null || offers.length() == 0) return;
-        JSONObject chosen = offers.optJSONObject(0);
+        if (offers == null || offers.length() == 0) {
+            res.put("has_flatrate_offer", false);
+            return;
+        }
+        JSONObject chosen = null;
         for (int i = 0; i < offers.length(); i++) {
             JSONObject off = offers.optJSONObject(i);
-            if (off != null && "FLATRATE".equalsIgnoreCase(off.optString("monetizationType"))) {
+            if (off == null) continue;
+            String mType = off.optString("monetizationType", "");
+            if ("FLATRATE".equalsIgnoreCase(mType) || "FREE".equalsIgnoreCase(mType) || "ADS".equalsIgnoreCase(mType)) {
                 chosen = off;
                 break;
             }
         }
-        if (chosen == null) return;
+        if (chosen == null) {
+            res.put("has_flatrate_offer", false);
+            return;
+        }
         JSONObject pkg = chosen.optJSONObject("package");
-        String clearName = pkg != null ? pkg.optString("clearName", "Streaming") : "Streaming";
-        if (clearName.contains("JioHotstar") || clearName.contains("Hotstar")) clearName = "Disney+ Hotstar";
-        if (clearName.contains("Amazon Prime")) clearName = "Prime Video";
-        if (clearName.equals("Apple TV")) clearName = "Apple TV+";
+        String clearName = pkg != null ? pkg.optString("clearName", "") : "";
+        if (clearName.isEmpty() || clearName.toLowerCase().contains("store")) {
+            res.put("has_flatrate_offer", false);
+            return;
+        }
+        if (clearName.contains("JioHotstar") || clearName.contains("Hotstar") || clearName.contains("JioCinema")) {
+            clearName = "Disney+ Hotstar";
+        } else if (clearName.contains("Amazon Prime") || clearName.contains("Prime Video")) {
+            clearName = "Prime Video";
+        } else if (clearName.equals("Apple TV") || clearName.contains("Apple TV+")) {
+            clearName = "Apple TV+";
+        } else if (clearName.toLowerCase().contains("sony")) {
+            clearName = "SonyLIV";
+        } else if (clearName.toLowerCase().contains("zee")) {
+            clearName = "ZEE5";
+        } else if (clearName.toLowerCase().contains("netflix")) {
+            clearName = "Netflix";
+        }
 
         String deeplink = chosen.optString("deeplinkURL");
         String webUrl = chosen.optString("standardWebURL");
+        res.put("has_flatrate_offer", true);
         res.put("app", clearName);
         res.put("badge", clearName);
         res.put("launch_uri", !deeplink.isEmpty() ? deeplink : webUrl);
@@ -221,6 +268,8 @@ public class JustWatchGraph {
             case "fnt": return "Fantasy";
             case "ani": return "Animation";
             case "doc": return "Documentary";
+            case "spt": return "Sport";
+            case "hst": return "History";
             default: return "";
         }
     }

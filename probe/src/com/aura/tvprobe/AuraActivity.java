@@ -1,6 +1,5 @@
 package com.aura.tvprobe;
 
-import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
@@ -23,10 +22,10 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -49,11 +48,11 @@ public class AuraActivity extends Activity {
     };
 
     private static final int SIDEBAR_COLLAPSED_W = 72;
-    private static final int SIDEBAR_EXPANDED_W = 240;
-    private static final int RIGHT_DRAWER_W = 584;
-    private static final int MAX_CAROUSEL_CARDS = 14;
+    private static final int SIDEBAR_EXPANDED_W = 244;
+    private static final int RIGHT_DRAWER_W = 600;
+    private static final int COLS_PER_ROW = 5;
+    private static final int MAX_GRID_CARDS = 20; // 4 rows x 5 columns
 
-    // Pre-parsed color constants to avoid Color.parseColor() allocations on focus events
     private static final int COLOR_BG_OBSIDIAN = Color.parseColor("#08090E");
     private static final int COLOR_BG_SIDEBAR = Color.parseColor("#0D0F17");
     private static final int COLOR_SIDEBAR_BORDER = Color.parseColor("#1D2233");
@@ -63,8 +62,6 @@ public class AuraActivity extends Activity {
     private static final int COLOR_BORDER_SUBTLE = Color.parseColor("#252A3C");
     private static final int COLOR_ACTIVE_FILTER_BG = Color.parseColor("#2A2210");
     private static final int COLOR_IMDB_GOLD = Color.parseColor("#F5C518");
-    private static final int COLOR_TEXT_PRIMARY = Color.parseColor("#F5F7FA");
-    private static final int COLOR_TEXT_SECONDARY = Color.parseColor("#9DA6BA");
     private static final int COLOR_POSTER_BORDER_IDLE = Color.parseColor("#1F2433");
 
     private static final Typeface FONT_DISPLAY = Typeface.create("sans-serif", Typeface.BOLD);
@@ -99,7 +96,6 @@ public class AuraActivity extends Activity {
     private FrameLayout rootFrame;
     private LinearLayout rightStage;
     private LinearLayout sidePanel;
-    private ValueAnimator sidebarAnimator;
     private TextView brandLabel;
     private TextView profSectionHdr;
     private TextView libSectionHdr;
@@ -109,6 +105,7 @@ public class AuraActivity extends Activity {
     private TextView navAllPicksBtn;
     private TextView navWatchedBtn;
     private TextView navRefreshBtn;
+    private final List<TextView> sidebarFocusableBtns = new ArrayList<>();
 
     private EditText searchInput;
     private TextView clearSearchBtn;
@@ -120,43 +117,49 @@ public class AuraActivity extends Activity {
     private LinearLayout heroHeaderBox;
     private TextView headerTitle;
     private TextView headerMeta;
-    private TextView headerReasonPreview;
-    private LinearLayout carouselRow;
+    private ScrollView gridScrollView;
+    private LinearLayout gridRowsContainer;
+    private final List<FrameLayout> gridTiles = new ArrayList<>();
 
     // Right-Hand Slide-Over Drawers
     private FrameLayout rightScrim;
+    private ScrollView rightDetailsScroll;
     private LinearLayout rightDetailsDrawer;
     private TextView drawerAvailableBadge;
     private TextView drawerMeta;
     private TextView drawerTitle;
     private TextView drawerGenres;
+    private TextView drawerOpenAppBtn;
+    private TextView drawerWatchedBtn;
+    private TextView drawerCloseBtn;
+    private TextView drawerRatingLabel;
+    private LinearLayout drawerRatingRow;
+    private final TextView[] ratingBtns = new TextView[10];
     private TextView drawerWhyHdr;
     private TextView drawerWhyReason;
     private TextView drawerSynopsisHdr;
     private TextView drawerSynopsis;
-    private TextView drawerOpenAppBtn;
-    private TextView drawerWatchedBtn;
-    private TextView drawerRatingLabel;
-    private LinearLayout drawerRatingRow;
-    private final TextView[] ratingBtns = new TextView[10];
-    private TextView drawerCloseBtn;
 
-    // Current drawer active item state for pre-allocated rating buttons
     private JSONObject activeDrawerItem;
     private String activeDrawerTitle = "";
     private String activeDrawerTitleKey = "";
     private int activeDrawerScore = 0;
 
-    // Right-Hand Slide-Over Profile & AI Interests Drawer
+    // Right-Hand Slide-Over Profile & Guide AI (Personal + Default) Drawer
+    private ScrollView rightTasteScroll;
     private LinearLayout rightTasteDrawer;
     private TextView tasteDrawerTitle;
     private TextView tasteDrawerSub;
-    private EditText profileNameInput;
-    private EditText tasteEditInput;
-    private LinearLayout tasteTagsContainer;
     private TextView tasteSaveBtn;
+    private TextView tasteNewProfileBtn;
     private TextView tasteDeleteProfileBtn;
     private TextView tasteCloseBtn;
+    private EditText profileNameInput;
+    private TextView personalGuideHdr;
+    private EditText tasteEditInput;
+    private LinearLayout tasteTagsContainer;
+    private TextView defaultGuideHdr;
+    private EditText defaultTasteEditInput;
 
     private View lastFocusedPoster;
 
@@ -218,6 +221,7 @@ public class AuraActivity extends Activity {
 
         bgPool.submit(() -> {
             db.setSetting("active_profile", targetProfile);
+            db.purgeUnreleasedFromRecos();
             final List<JSONObject> profList = db.listProfiles();
             final List<String> flt = db.getActiveFilters(targetProfile);
             final Set<String> wKeys = db.getWatchedTitleKeys();
@@ -225,8 +229,8 @@ public class AuraActivity extends Activity {
             final JSONArray wList = db.listManuallyWatched();
             JSONArray recos = db.getProfileRecommendations(targetProfile);
 
-            if (recos.length() == 0) {
-                recos = ai.getOrRefreshForProfile(targetProfile, new JSONObject(), db.listHistory(targetProfile), false);
+            if (recos.length() < 8) {
+                recos = ai.getOrRefreshForProfile(targetProfile, new JSONObject(), db.listHistory(targetProfile), true);
             }
             final JSONArray initialRecos = recos;
 
@@ -254,37 +258,38 @@ public class AuraActivity extends Activity {
     }
 
     private void buildMainLayout() {
-        // Fixed rightStage inside rootFrame with leftMargin = SIDEBAR_COLLAPSED_W.
-        // Expanding/collapsing the left sidebar overlays cleanly and NEVER triggers a relayout on rightStage!
         rightStage = new LinearLayout(this);
         rightStage.setOrientation(LinearLayout.VERTICAL);
-        rightStage.setPadding(36, 28, 36, 18);
+        rightStage.setPadding(34, 24, 34, 12);
         rightStage.setClipChildren(true);
         rightStage.setClipToPadding(true);
 
         rightStage.addView(buildUnifiedTopBar());
         rightStage.addView(buildMinimalTitleRow());
 
-        HorizontalScrollView hsv = new HorizontalScrollView(this);
-        hsv.setHorizontalScrollBarEnabled(false);
-        hsv.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        hsv.setClipChildren(true);
-        hsv.setClipToPadding(false);
-        carouselRow = new LinearLayout(this);
-        carouselRow.setOrientation(LinearLayout.HORIZONTAL);
-        carouselRow.setClipChildren(false);
-        carouselRow.setClipToPadding(false);
-        carouselRow.setPadding(14, 18, 32, 18);
-        hsv.addView(carouselRow);
-        rightStage.addView(hsv, new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        // Multi-row vertical ScrollView where each row holds 5 columns (5 tiles per row)
+        gridScrollView = new ScrollView(this);
+        gridScrollView.setVerticalScrollBarEnabled(false);
+        gridScrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        gridScrollView.setClipChildren(true);
+        gridScrollView.setClipToPadding(false);
+
+        gridRowsContainer = new LinearLayout(this);
+        gridRowsContainer.setOrientation(LinearLayout.VERTICAL);
+        gridRowsContainer.setClipChildren(false);
+        gridRowsContainer.setClipToPadding(false);
+        gridRowsContainer.setPadding(10, 12, 16, 40);
+        gridScrollView.addView(gridRowsContainer, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+
+        rightStage.addView(gridScrollView, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
         FrameLayout.LayoutParams stageLp = new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
         stageLp.leftMargin = SIDEBAR_COLLAPSED_W;
         rootFrame.addView(rightStage, stageLp);
 
-        // Collapsible left navigation rail sits as an overlay on the left edge
         sidePanel = buildCollapsibleLeftSidePanel();
         sidePanel.setElevation(28f);
         FrameLayout.LayoutParams sideLp = new FrameLayout.LayoutParams(
@@ -296,7 +301,7 @@ public class AuraActivity extends Activity {
         LinearLayout side = new LinearLayout(this);
         side.setOrientation(LinearLayout.VERTICAL);
         side.setGravity(Gravity.CENTER_HORIZONTAL);
-        side.setPadding(10, 26, 10, 20);
+        side.setPadding(10, 22, 10, 18);
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(COLOR_BG_SIDEBAR);
         bg.setStroke(1, COLOR_SIDEBAR_BORDER);
@@ -304,7 +309,7 @@ public class AuraActivity extends Activity {
 
         brandLabel = makeText("A", 20f, "#F5C518", FONT_DISPLAY, 1);
         brandLabel.setGravity(Gravity.CENTER);
-        brandLabel.setPadding(6, 0, 6, 16);
+        brandLabel.setPadding(6, 0, 6, 14);
         side.addView(brandLabel);
 
         profSectionHdr = makeText("Profiles", 11f, "#788096", FONT_MEDIUM, 1);
@@ -321,7 +326,7 @@ public class AuraActivity extends Activity {
         side.addView(navAddProfileBtn);
 
         libSectionHdr = makeText("Menu", 11f, "#788096", FONT_MEDIUM, 1);
-        libSectionHdr.setPadding(8, 12, 8, 6);
+        libSectionHdr.setPadding(8, 10, 8, 6);
         libSectionHdr.setVisibility(View.GONE);
         side.addView(libSectionHdr);
 
@@ -343,7 +348,7 @@ public class AuraActivity extends Activity {
         });
         side.addView(navWatchedBtn);
 
-        navRefreshBtn = makeSideNavBtn("↻", "↻  Refresh", false, () -> {
+        navRefreshBtn = makeSideNavBtn("↻", "↻  Refresh AI", false, () -> {
             setSidebarExpanded(false);
             triggerManualRefresh();
         });
@@ -352,34 +357,45 @@ public class AuraActivity extends Activity {
         return side;
     }
 
+    private void rebuildSidebarFocusOrder() {
+        sidebarFocusableBtns.clear();
+        if (sideProfileContainer != null) {
+            for (int i = 0; i < sideProfileContainer.getChildCount(); i++) {
+                View v = sideProfileContainer.getChildAt(i);
+                if (v instanceof TextView) sidebarFocusableBtns.add((TextView) v);
+            }
+        }
+        if (navAddProfileBtn != null) sidebarFocusableBtns.add(navAddProfileBtn);
+        if (navTasteBtn != null) sidebarFocusableBtns.add(navTasteBtn);
+        if (navAllPicksBtn != null) sidebarFocusableBtns.add(navAllPicksBtn);
+        if (navWatchedBtn != null) sidebarFocusableBtns.add(navWatchedBtn);
+        if (navRefreshBtn != null) sidebarFocusableBtns.add(navRefreshBtn);
+    }
+
     private void setSidebarExpanded(final boolean expand) {
         if (sidebarExpanded == expand || sidePanel == null) return;
         sidebarExpanded = expand;
 
-        if (sidebarAnimator != null && sidebarAnimator.isRunning()) {
-            sidebarAnimator.cancel();
-        }
-
-        final FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) sidePanel.getLayoutParams();
-        final int startW = lp.width;
-        final int targetW = expand ? SIDEBAR_EXPANDED_W : SIDEBAR_COLLAPSED_W;
-
-        sidePanel.setPadding(expand ? 16 : 10, 26, expand ? 16 : 10, 20);
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) sidePanel.getLayoutParams();
+        lp.width = expand ? SIDEBAR_EXPANDED_W : SIDEBAR_COLLAPSED_W;
+        sidePanel.setPadding(expand ? 16 : 10, 22, expand ? 16 : 10, 18);
         sidePanel.setGravity(expand ? Gravity.START : Gravity.CENTER_HORIZONTAL);
+        sidePanel.setLayoutParams(lp);
+
         brandLabel.setText(expand ? "Aura" : "A");
         brandLabel.setGravity(expand ? Gravity.START : Gravity.CENTER);
         profSectionHdr.setVisibility(expand ? View.VISIBLE : View.GONE);
         libSectionHdr.setVisibility(expand ? View.VISIBLE : View.GONE);
         updateSideButtonLabels();
 
-        sidebarAnimator = ValueAnimator.ofInt(startW, targetW);
-        sidebarAnimator.setDuration(170);
-        sidebarAnimator.setInterpolator(SMOOTH_INTERP);
-        sidebarAnimator.addUpdateListener(anim -> {
-            lp.width = (Integer) anim.getAnimatedValue();
-            sidePanel.setLayoutParams(lp);
-        });
-        sidebarAnimator.start();
+        // Smooth GPU slide transition without per-frame layout invalidation
+        sidePanel.animate().cancel();
+        if (expand) {
+            sidePanel.setTranslationX(-18f);
+            sidePanel.animate().translationX(0f).setDuration(150).setInterpolator(SMOOTH_INTERP).start();
+        } else {
+            sidePanel.setTranslationX(0f);
+        }
     }
 
     private void updateSideButtonLabels() {
@@ -393,6 +409,7 @@ public class AuraActivity extends Activity {
                 TextView btn = (TextView) sideProfileContainer.getChildAt(i);
                 btn.setText(sidebarExpanded ? ((isAct ? "●  " : "    ") + fullName) : shortInitial);
                 btn.setGravity(sidebarExpanded ? Gravity.START | Gravity.CENTER_VERTICAL : Gravity.CENTER);
+                styleSideNavBtn(btn, btn.hasFocus(), isAct);
             }
         }
         if (navAddProfileBtn != null) {
@@ -412,7 +429,7 @@ public class AuraActivity extends Activity {
             navWatchedBtn.setGravity(sidebarExpanded ? Gravity.START | Gravity.CENTER_VERTICAL : Gravity.CENTER);
         }
         if (navRefreshBtn != null) {
-            navRefreshBtn.setText(sidebarExpanded ? "↻  Refresh" : "↻");
+            navRefreshBtn.setText(sidebarExpanded ? "↻  Refresh AI" : "↻");
             navRefreshBtn.setGravity(sidebarExpanded ? Gravity.START | Gravity.CENTER_VERTICAL : Gravity.CENTER);
         }
     }
@@ -441,6 +458,7 @@ public class AuraActivity extends Activity {
             btn.setTag("prof_" + pid);
             sideProfileContainer.addView(btn);
         }
+        rebuildSidebarFocusOrder();
         updateSideButtonLabels();
     }
 
@@ -454,8 +472,17 @@ public class AuraActivity extends Activity {
                 return;
             }
         }
-        if (sideProfileContainer.getChildCount() > 0) {
-            sideProfileContainer.getChildAt(0).requestFocus();
+        if (!sidebarFocusableBtns.isEmpty()) {
+            sidebarFocusableBtns.get(0).requestFocus();
+        }
+    }
+
+    private void focusFirstGridTileOrSearch() {
+        setSidebarExpanded(false);
+        if (!gridTiles.isEmpty()) {
+            gridTiles.get(0).requestFocus();
+        } else if (searchInput != null) {
+            searchInput.requestFocus();
         }
     }
 
@@ -463,7 +490,7 @@ public class AuraActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(6, 0, 0, 14);
+        row.setPadding(6, 0, 0, 10);
 
         searchInput = new EditText(this);
         searchInput.setHint("Ask Aura or search titles…");
@@ -473,17 +500,22 @@ public class AuraActivity extends Activity {
         searchInput.setTypeface(FONT_REGULAR);
         searchInput.setSingleLine(true);
         searchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        searchInput.setPadding(20, 10, 20, 10);
+        searchInput.setPadding(20, 9, 20, 9);
         styleInputBox(searchInput, false);
         searchInput.setOnFocusChangeListener((v, hasFocus) -> {
             if (hasFocus) setSidebarExpanded(false);
             styleInputBox(searchInput, hasFocus);
         });
         searchInput.setOnKeyListener((v, keyCode, event) -> {
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && event.getAction() == KeyEvent.ACTION_DOWN
-                && searchInput.getSelectionStart() <= 0) {
-                focusSideProfileById(memProfile);
-                return true;
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && searchInput.getSelectionStart() <= 0) {
+                    focusSideProfileById(memProfile);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && !gridTiles.isEmpty()) {
+                    gridTiles.get(0).requestFocus();
+                    return true;
+                }
             }
             return false;
         });
@@ -495,7 +527,7 @@ public class AuraActivity extends Activity {
             }
             return false;
         });
-        LinearLayout.LayoutParams inLp = new LinearLayout.LayoutParams(365, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams inLp = new LinearLayout.LayoutParams(360, LinearLayout.LayoutParams.WRAP_CONTENT);
         inLp.setMargins(0, 0, 10, 0);
         row.addView(searchInput, inLp);
 
@@ -538,26 +570,18 @@ public class AuraActivity extends Activity {
 
     private View buildMinimalTitleRow() {
         heroHeaderBox = new LinearLayout(this);
-        heroHeaderBox.setOrientation(LinearLayout.VERTICAL);
-        heroHeaderBox.setPadding(10, 2, 12, 8);
+        heroHeaderBox.setOrientation(LinearLayout.HORIZONTAL);
+        heroHeaderBox.setGravity(Gravity.CENTER_VERTICAL);
+        heroHeaderBox.setPadding(10, 2, 12, 6);
 
-        LinearLayout topLine = new LinearLayout(this);
-        topLine.setOrientation(LinearLayout.HORIZONTAL);
-        topLine.setGravity(Gravity.CENTER_VERTICAL);
-
-        headerTitle = makeText("Select a Title", 28f, "#FFFFFF", FONT_DISPLAY, 1);
+        headerTitle = makeText("Select a Title", 26f, "#FFFFFF", FONT_DISPLAY, 1);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         tLp.setMargins(0, 0, 18, 0);
-        topLine.addView(headerTitle, tLp);
+        heroHeaderBox.addView(headerTitle, tLp);
 
         headerMeta = makeText("", 14f, "#8E95A8", FONT_MEDIUM, 1);
-        topLine.addView(headerMeta);
-        heroHeaderBox.addView(topLine);
-
-        headerReasonPreview = makeText("", 13f, "#C8B88A", FONT_REGULAR, 1);
-        headerReasonPreview.setPadding(0, 4, 0, 0);
-        heroHeaderBox.addView(headerReasonPreview);
+        heroHeaderBox.addView(headerMeta);
 
         return heroHeaderBox;
     }
@@ -572,21 +596,25 @@ public class AuraActivity extends Activity {
         dBg.setColor(COLOR_BG_DRAWER);
         dBg.setStroke(1, COLOR_DRAWER_BORDER);
 
-        // 1. Clean, Untruncated Right-Hand Slide-Over Show Details Drawer
+        // 1. Right-Hand Slide-Over Show Details Drawer (Scrollable, with Action & Rating rows at the TOP so NEVER hidden)
+        rightDetailsScroll = new ScrollView(this);
+        rightDetailsScroll.setVerticalScrollBarEnabled(false);
+        rightDetailsScroll.setFillViewport(true);
+        rightDetailsScroll.setBackground(dBg);
+        rightDetailsScroll.setVisibility(View.GONE);
+        rightDetailsScroll.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+
         rightDetailsDrawer = new LinearLayout(this);
         rightDetailsDrawer.setOrientation(LinearLayout.VERTICAL);
-        rightDetailsDrawer.setPadding(40, 34, 40, 28);
-        rightDetailsDrawer.setBackground(dBg);
-        rightDetailsDrawer.setVisibility(View.GONE);
-        rightDetailsDrawer.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        rightDetailsDrawer.setPadding(36, 30, 36, 30);
 
         // Top metadata row: [Apple TV+]  2019 · 59 min · IMDb 8.1
         LinearLayout topMetaRow = new LinearLayout(this);
         topMetaRow.setOrientation(LinearLayout.HORIZONTAL);
         topMetaRow.setGravity(Gravity.CENTER_VERTICAL);
-        topMetaRow.setPadding(0, 0, 0, 10);
+        topMetaRow.setPadding(0, 0, 0, 8);
 
-        drawerAvailableBadge = makeText("Apple TV+", 12f, "#F5C518", FONT_MEDIUM, 1);
+        drawerAvailableBadge = makeText("Netflix", 12f, "#F5C518", FONT_MEDIUM, 1);
         drawerAvailableBadge.setPadding(12, 4, 12, 4);
         GradientDrawable avBg = new GradientDrawable();
         avBg.setColor(Color.parseColor("#231F12"));
@@ -602,65 +630,48 @@ public class AuraActivity extends Activity {
         topMetaRow.addView(drawerMeta);
         rightDetailsDrawer.addView(topMetaRow);
 
-        drawerTitle = makeText("", 26f, "#FFFFFF", FONT_DISPLAY, 2);
+        drawerTitle = makeText("", 25f, "#FFFFFF", FONT_DISPLAY, 2);
         rightDetailsDrawer.addView(drawerTitle);
 
         drawerGenres = makeText("", 13f, "#8E96AA", FONT_REGULAR, 1);
-        drawerGenres.setPadding(0, 4, 0, 16);
+        drawerGenres.setPadding(0, 4, 0, 14);
         rightDetailsDrawer.addView(drawerGenres);
 
-        // Natural-case, clean, untruncated AI recommendation reason
-        drawerWhyHdr = makeText("Why you'll like it", 13f, "#F5C518", FONT_MEDIUM, 1);
-        drawerWhyHdr.setPadding(0, 0, 0, 6);
-        rightDetailsDrawer.addView(drawerWhyHdr);
-
-        drawerWhyReason = makeText("", 14f, "#F0F3F9", FONT_REGULAR, 6);
-        drawerWhyReason.setEllipsize(null);
-        drawerWhyReason.setLineSpacing(4f, 1.22f);
-        drawerWhyReason.setPadding(0, 0, 0, 14);
-        rightDetailsDrawer.addView(drawerWhyReason);
-
-        // Optional clean story summary (only visible when distinct from AI reason, never truncated mid-sentence)
-        drawerSynopsisHdr = makeText("Story", 12.5f, "#8A93A6", FONT_MEDIUM, 1);
-        drawerSynopsisHdr.setPadding(0, 0, 0, 4);
-        rightDetailsDrawer.addView(drawerSynopsisHdr);
-
-        drawerSynopsis = makeText("", 13.5f, "#B8C0D2", FONT_REGULAR, 6);
-        drawerSynopsis.setEllipsize(null);
-        drawerSynopsis.setLineSpacing(3f, 1.2f);
-        drawerSynopsis.setPadding(0, 0, 0, 16);
-        rightDetailsDrawer.addView(drawerSynopsis);
-
+        // PRIMARY ACTION ROW — Placed right under Title/Genres so Watch & Watched are NEVER hidden!
         LinearLayout actionBtns = new LinearLayout(this);
         actionBtns.setOrientation(LinearLayout.HORIZONTAL);
         actionBtns.setGravity(Gravity.CENTER_VERTICAL);
-        actionBtns.setPadding(0, 4, 0, 18);
+        actionBtns.setPadding(0, 0, 0, 14);
 
-        drawerOpenAppBtn = makePillBtn("▶  Watch Now", true, null);
-        drawerWatchedBtn = makePillBtn("✓  Watched", false, null);
+        drawerOpenAppBtn = makePillBtn("▶  Open App", true, null);
+        drawerWatchedBtn = makePillBtn("✓  Mark Watched", false, null);
+        drawerCloseBtn = makePillBtn("←  Back", false, this::closeRightDrawers);
         trapLeftFocus(drawerOpenAppBtn);
         actionBtns.addView(drawerOpenAppBtn);
         actionBtns.addView(drawerWatchedBtn);
+        actionBtns.addView(drawerCloseBtn);
         rightDetailsDrawer.addView(actionBtns);
 
-        drawerRatingLabel = makeText("Rate this show (1–10)", 12.5f, "#8E95A8", FONT_MEDIUM, 1);
+        // 1-10 RATING ROW — Placed directly under Action Row so Rating is NEVER hidden!
+        drawerRatingLabel = makeText("Rate this show (1–10)", 12.5f, "#9AA2B8", FONT_MEDIUM, 1);
         drawerRatingLabel.setPadding(0, 0, 0, 8);
         rightDetailsDrawer.addView(drawerRatingLabel);
 
         drawerRatingRow = new LinearLayout(this);
         drawerRatingRow.setOrientation(LinearLayout.HORIZONTAL);
         drawerRatingRow.setGravity(Gravity.CENTER_VERTICAL);
-        // Pre-allocate all 10 rating buttons ONCE so opening the drawer does zero View allocations!
+        drawerRatingRow.setPadding(0, 0, 0, 18);
         for (int i = 0; i < 10; i++) {
             final int sc = i + 1;
             final TextView numBtn = makeText(String.valueOf(sc), 12f, "#D0D4E0", FONT_MEDIUM, 1);
             numBtn.setGravity(Gravity.CENTER);
-            numBtn.setPadding(11, 7, 11, 7);
+            numBtn.setPadding(12, 7, 12, 7);
             numBtn.setFocusable(true);
             numBtn.setClickable(true);
             stylePillBtn(numBtn, false, false);
             numBtn.setOnFocusChangeListener((v, hasFocus) -> stylePillBtn(numBtn, hasFocus, sc == activeDrawerScore));
-            if (sc == 1) trapLeftFocus(numBtn);
+            if (sc == 1) trapLeftAndDownFocus(numBtn);
+            else trapDownFocus(numBtn);
             numBtn.setOnClickListener(v -> onRatingNumberClicked(sc));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -670,99 +681,142 @@ public class AuraActivity extends Activity {
         }
         rightDetailsDrawer.addView(drawerRatingRow);
 
-        LinearLayout closeRow = new LinearLayout(this);
-        closeRow.setOrientation(LinearLayout.HORIZONTAL);
-        closeRow.setPadding(0, 18, 0, 0);
-        drawerCloseBtn = makePillBtn("←  Back", false, this::closeRightDrawers);
-        trapLeftAndDownFocus(drawerCloseBtn);
-        closeRow.addView(drawerCloseBtn);
-        rightDetailsDrawer.addView(closeRow);
+        // Natural-case, clean, untruncated AI recommendation reason
+        drawerWhyHdr = makeText("Why you'll like it", 13f, "#F5C518", FONT_MEDIUM, 1);
+        drawerWhyHdr.setPadding(0, 0, 0, 6);
+        rightDetailsDrawer.addView(drawerWhyHdr);
+
+        drawerWhyReason = makeText("", 14f, "#F0F3F9", FONT_REGULAR, 8);
+        drawerWhyReason.setEllipsize(null);
+        drawerWhyReason.setLineSpacing(4f, 1.22f);
+        drawerWhyReason.setPadding(0, 0, 0, 14);
+        rightDetailsDrawer.addView(drawerWhyReason);
+
+        // Clean story summary (untruncated)
+        drawerSynopsisHdr = makeText("Story", 12.5f, "#8A93A6", FONT_MEDIUM, 1);
+        drawerSynopsisHdr.setPadding(0, 0, 0, 4);
+        rightDetailsDrawer.addView(drawerSynopsisHdr);
+
+        drawerSynopsis = makeText("", 13.5f, "#B8C0D2", FONT_REGULAR, 8);
+        drawerSynopsis.setEllipsize(null);
+        drawerSynopsis.setLineSpacing(3f, 1.2f);
+        drawerSynopsis.setPadding(0, 0, 0, 10);
+        rightDetailsDrawer.addView(drawerSynopsis);
+
+        rightDetailsScroll.addView(rightDetailsDrawer, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
 
         FrameLayout.LayoutParams detLp = new FrameLayout.LayoutParams(
             RIGHT_DRAWER_W, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END);
-        rightScrim.addView(rightDetailsDrawer, detLp);
+        rightScrim.addView(rightDetailsScroll, detLp);
 
-        // 2. Right-Hand Slide-Over Profile & AI Interests Drawer
+        // 2. Right-Hand Slide-Over Profile & Guide AI (Personal + Default) Drawer
         GradientDrawable dBg2 = new GradientDrawable();
         dBg2.setColor(COLOR_BG_DRAWER);
         dBg2.setStroke(1, COLOR_DRAWER_BORDER);
 
+        rightTasteScroll = new ScrollView(this);
+        rightTasteScroll.setVerticalScrollBarEnabled(false);
+        rightTasteScroll.setFillViewport(true);
+        rightTasteScroll.setBackground(dBg2);
+        rightTasteScroll.setVisibility(View.GONE);
+        rightTasteScroll.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+
         rightTasteDrawer = new LinearLayout(this);
         rightTasteDrawer.setOrientation(LinearLayout.VERTICAL);
-        rightTasteDrawer.setPadding(40, 34, 40, 28);
-        rightTasteDrawer.setBackground(dBg2);
-        rightTasteDrawer.setVisibility(View.GONE);
-        rightTasteDrawer.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        rightTasteDrawer.setPadding(36, 28, 36, 28);
 
-        tasteDrawerTitle = makeText("Profile & AI Guide", 24f, "#FFFFFF", FONT_DISPLAY, 1);
+        tasteDrawerTitle = makeText("Guide AI & Profile Settings", 23f, "#FFFFFF", FONT_DISPLAY, 1);
         rightTasteDrawer.addView(tasteDrawerTitle);
 
-        tasteDrawerSub = makeText("Personalize your profile and tell Aura what you love watching:", 13f, "#9AA2B8", FONT_REGULAR, 2);
-        tasteDrawerSub.setPadding(0, 6, 0, 14);
+        tasteDrawerSub = makeText("Customize Personal Guide AI for this profile and Default Guide AI for everyone:", 12.5f, "#9AA2B8", FONT_REGULAR, 2);
+        tasteDrawerSub.setPadding(0, 4, 0, 12);
         rightTasteDrawer.addView(tasteDrawerSub);
 
+        // Action row at the top of Guide AI drawer for instant reachability
+        LinearLayout tasteActions = new LinearLayout(this);
+        tasteActions.setOrientation(LinearLayout.HORIZONTAL);
+        tasteActions.setPadding(0, 0, 0, 14);
+        tasteSaveBtn = makePillBtn("✓  Save", true, this::saveProfileAndCurate);
+        tasteNewProfileBtn = makePillBtn("+  New Profile", false, () -> openTasteGuideDrawer(true));
+        tasteDeleteProfileBtn = makePillBtn("Delete", false, this::deleteCurrentProfile);
+        tasteCloseBtn = makePillBtn("←  Back", false, this::closeRightDrawers);
+        trapLeftFocus(tasteSaveBtn);
+
+        tasteActions.addView(tasteSaveBtn);
+        tasteActions.addView(tasteNewProfileBtn);
+        tasteActions.addView(tasteDeleteProfileBtn);
+        tasteActions.addView(tasteCloseBtn);
+        rightTasteDrawer.addView(tasteActions);
+
         TextView nameLbl = makeText("Profile name", 12f, "#8E95A8", FONT_MEDIUM, 1);
-        nameLbl.setPadding(0, 0, 0, 6);
+        nameLbl.setPadding(0, 0, 0, 5);
         rightTasteDrawer.addView(nameLbl);
 
         profileNameInput = new EditText(this);
-        profileNameInput.setHint("Profile name…");
+        profileNameInput.setHint("Profile name (e.g. Satyam, Partner)…");
         profileNameInput.setHintTextColor(Color.parseColor("#6E758A"));
         profileNameInput.setTextColor(Color.WHITE);
-        profileNameInput.setTextSize(14f);
+        profileNameInput.setTextSize(13.5f);
         profileNameInput.setTypeface(FONT_REGULAR);
         profileNameInput.setSingleLine(true);
-        profileNameInput.setPadding(18, 10, 18, 10);
+        profileNameInput.setPadding(16, 9, 16, 9);
         styleInputBox(profileNameInput, false);
         profileNameInput.setOnFocusChangeListener((v, hasFocus) -> styleInputBox(profileNameInput, hasFocus));
         trapLeftFocus(profileNameInput);
         rightTasteDrawer.addView(profileNameInput, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        TextView interestLbl = makeText("Interests & mood guidance", 12f, "#8E95A8", FONT_MEDIUM, 1);
-        interestLbl.setPadding(0, 14, 0, 6);
-        rightTasteDrawer.addView(interestLbl);
+        personalGuideHdr = makeText("Personal Guide AI (for this profile)", 12.5f, "#F5C518", FONT_MEDIUM, 1);
+        personalGuideHdr.setPadding(0, 12, 0, 5);
+        rightTasteDrawer.addView(personalGuideHdr);
 
         tasteEditInput = new EditText(this);
-        tasteEditInput.setHint("e.g. Sports dramas, Formula 1, mind-bending sci-fi…");
+        tasteEditInput.setHint("e.g. Formula 1, sports dramas, hard sci-fi…");
         tasteEditInput.setHintTextColor(Color.parseColor("#6E758A"));
         tasteEditInput.setTextColor(Color.WHITE);
-        tasteEditInput.setTextSize(14f);
+        tasteEditInput.setTextSize(13.5f);
         tasteEditInput.setTypeface(FONT_REGULAR);
         tasteEditInput.setSingleLine(true);
-        tasteEditInput.setPadding(18, 10, 18, 10);
+        tasteEditInput.setPadding(16, 9, 16, 9);
         styleInputBox(tasteEditInput, false);
         tasteEditInput.setOnFocusChangeListener((v, hasFocus) -> styleInputBox(tasteEditInput, hasFocus));
         trapLeftFocus(tasteEditInput);
         rightTasteDrawer.addView(tasteEditInput, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        TextView presetHdr = makeText("Quick interest tags", 12f, "#8E95A8", FONT_MEDIUM, 1);
-        presetHdr.setPadding(0, 14, 0, 8);
+        TextView presetHdr = makeText("Quick interest tags", 11.5f, "#8E95A8", FONT_MEDIUM, 1);
+        presetHdr.setPadding(0, 10, 0, 6);
         rightTasteDrawer.addView(presetHdr);
 
         tasteTagsContainer = new LinearLayout(this);
         tasteTagsContainer.setOrientation(LinearLayout.VERTICAL);
         rightTasteDrawer.addView(tasteTagsContainer);
 
-        LinearLayout tasteActions = new LinearLayout(this);
-        tasteActions.setOrientation(LinearLayout.HORIZONTAL);
-        tasteActions.setPadding(0, 18, 0, 0);
-        tasteSaveBtn = makePillBtn("✓  Save & Curate", true, this::saveProfileAndCurate);
-        tasteDeleteProfileBtn = makePillBtn("Delete", false, this::deleteCurrentProfile);
-        tasteCloseBtn = makePillBtn("←  Back", false, this::closeRightDrawers);
-        trapLeftAndDownFocus(tasteSaveBtn);
-        trapDownFocus(tasteDeleteProfileBtn);
-        trapDownFocus(tasteCloseBtn);
+        defaultGuideHdr = makeText("Default Guide AI (Shared across all profiles)", 12.5f, "#A6B0C6", FONT_MEDIUM, 1);
+        defaultGuideHdr.setPadding(0, 10, 0, 5);
+        rightTasteDrawer.addView(defaultGuideHdr);
 
-        tasteActions.addView(tasteSaveBtn);
-        tasteActions.addView(tasteDeleteProfileBtn);
-        tasteActions.addView(tasteCloseBtn);
-        rightTasteDrawer.addView(tasteActions);
+        defaultTasteEditInput = new EditText(this);
+        defaultTasteEditInput.setHint("Global baseline rules for all profiles…");
+        defaultTasteEditInput.setHintTextColor(Color.parseColor("#6E758A"));
+        defaultTasteEditInput.setTextColor(Color.WHITE);
+        defaultTasteEditInput.setTextSize(13f);
+        defaultTasteEditInput.setTypeface(FONT_REGULAR);
+        defaultTasteEditInput.setSingleLine(true);
+        defaultTasteEditInput.setPadding(16, 9, 16, 9);
+        styleInputBox(defaultTasteEditInput, false);
+        defaultTasteEditInput.setOnFocusChangeListener((v, hasFocus) -> styleInputBox(defaultTasteEditInput, hasFocus));
+        trapLeftAndDownFocus(defaultTasteEditInput);
+        rightTasteDrawer.addView(defaultTasteEditInput, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        rightTasteScroll.addView(rightTasteDrawer, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
 
         FrameLayout.LayoutParams tstLp = new FrameLayout.LayoutParams(
             RIGHT_DRAWER_W, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END);
-        rightScrim.addView(rightTasteDrawer, tstLp);
+        rightScrim.addView(rightTasteScroll, tstLp);
 
         rootFrame.addView(rightScrim, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
@@ -800,7 +854,7 @@ public class AuraActivity extends Activity {
             ? item.optString("title")
             : item.optString("series_title");
         final String titleKey = AuraDb.normalizeTitleKey(mainTitle);
-        final String appName = cleanAppName(item.optString("app", item.optString("app_name", "Streaming")));
+        final String appName = cleanAppName(item.optString("app", item.optString("app_name", "Netflix")));
         String rawImdb = item.optString("rating", "8.2").replace("★", "").trim();
         int rt = item.optInt("runtime_min", 48);
         int year = item.optInt("year", 2024);
@@ -809,7 +863,7 @@ public class AuraActivity extends Activity {
         String rawSyn = item.optString("synopsis").trim();
         String rawReason = item.optString("reason").trim();
         if (rawReason.isEmpty() || rawReason.equalsIgnoreCase(rawSyn)) {
-            rawReason = "Recommended for " + db.getProfileLabel(memProfile) + " based on your interest in " + genres + " and top-rated titles.";
+            rawReason = "Recommended for " + db.getProfileLabel(memProfile) + " based on your Guide AI preferences and interest in " + genres + ".";
         }
 
         String cleanReason = formatCompleteSentences(rawReason, 280);
@@ -830,7 +884,7 @@ public class AuraActivity extends Activity {
             drawerSynopsis.setVisibility(View.GONE);
         }
 
-        drawerOpenAppBtn.setText("▶  Watch on " + appName);
+        drawerOpenAppBtn.setText("▶  Open " + shortAppBadge(appName));
         drawerOpenAppBtn.setOnClickListener(v -> {
             closeRightDrawers();
             String uri = item.optString("launch_uri");
@@ -840,7 +894,7 @@ public class AuraActivity extends Activity {
         });
 
         final boolean isW = memWatchedKeys.contains(titleKey);
-        drawerWatchedBtn.setText(isW ? "✕  Unwatch" : "✓  Watched");
+        drawerWatchedBtn.setText(isW ? "✕  Unwatch" : "✓  Mark Watched");
         drawerWatchedBtn.setOnClickListener(v -> {
             closeRightDrawers();
             handleMarkWatchedInPlace(posterView, item, mainTitle);
@@ -852,8 +906,9 @@ public class AuraActivity extends Activity {
         activeDrawerScore = memUserRatings.getOrDefault(titleKey, item.optInt("user_rating", 0));
         refreshRatingButtonStyles();
 
-        rightTasteDrawer.setVisibility(View.GONE);
-        animateOpenDrawer(rightDetailsDrawer, drawerOpenAppBtn);
+        rightTasteScroll.setVisibility(View.GONE);
+        rightDetailsScroll.scrollTo(0, 0);
+        animateOpenDrawer(rightDetailsScroll, drawerOpenAppBtn);
     }
 
     private void onRatingNumberClicked(int sc) {
@@ -896,29 +951,37 @@ public class AuraActivity extends Activity {
         setSidebarExpanded(false);
         blockBackgroundFocus(true);
 
+        String defaultGuide = db.getDefaultTasteGuide();
+        defaultTasteEditInput.setText(defaultGuide);
+
         if (addNewMode) {
             String suggestedName = "User_" + (100 + (int) (Math.random() * 899));
-            tasteDrawerTitle.setText("New Profile");
-            tasteDrawerSub.setText("Choose a name and interests so Aura can curate a personal feed:");
+            tasteDrawerTitle.setText("New Profile & Guide AI");
+            tasteDrawerSub.setText("Set a profile name and Personal Guide AI (or use Default Guide AI below):");
             profileNameInput.setText(suggestedName);
+            personalGuideHdr.setText("Personal Guide AI (" + suggestedName + ")");
             tasteEditInput.setText("");
-            tasteSaveBtn.setText("✓  Create & Curate");
+            tasteSaveBtn.setText("✓  Create");
+            tasteNewProfileBtn.setVisibility(View.GONE);
             tasteDeleteProfileBtn.setVisibility(View.GONE);
         } else {
             String profName = db.getProfileLabel(memProfile);
             String currentTaste = db.getProfileTaste(memProfile);
-            tasteDrawerTitle.setText("Profile & AI Guide");
-            tasteDrawerSub.setText("Update your name, refine interests, or remove this profile:");
+            tasteDrawerTitle.setText("Guide AI  ·  " + profName);
+            tasteDrawerSub.setText("Configure Personal Guide AI for " + profName + " and Default Guide AI for all profiles:");
             profileNameInput.setText(profName);
+            personalGuideHdr.setText("Personal Guide AI (" + profName + ")");
             tasteEditInput.setText(currentTaste);
-            tasteSaveBtn.setText("✓  Save & Curate");
+            tasteSaveBtn.setText("✓  Save");
+            tasteNewProfileBtn.setVisibility(View.VISIBLE);
             tasteDeleteProfileBtn.setVisibility(View.VISIBLE);
         }
 
         populateTastePresetRows();
 
-        rightDetailsDrawer.setVisibility(View.GONE);
-        animateOpenDrawer(rightTasteDrawer, tasteSaveBtn);
+        rightDetailsScroll.setVisibility(View.GONE);
+        rightTasteScroll.scrollTo(0, 0);
+        animateOpenDrawer(rightTasteScroll, tasteSaveBtn);
     }
 
     private void animateOpenDrawer(final View drawer, final View initialFocusTarget) {
@@ -951,21 +1014,14 @@ public class AuraActivity extends Activity {
     private void populateTastePresetRows() {
         tasteTagsContainer.removeAllViews();
         List<String> dynamicTags = new ArrayList<>();
+        String[] coreInterests = {"Sports & F1", "Hard Sci-Fi", "Crime Thriller", "Smart Comedy", "Mystery", "Biographical"};
+        for (String s : coreInterests) dynamicTags.add(s);
+
         JSONArray followUps = memVoiceSession.optJSONArray("follow_ups");
         if (followUps != null) {
-            for (int i = 0; i < followUps.length(); i++) {
+            for (int i = 0; i < followUps.length() && dynamicTags.size() < 6; i++) {
                 String f = followUps.optString(i).trim();
-                if (!f.isEmpty() && !dynamicTags.contains(f)) dynamicTags.add(f);
-            }
-        }
-        for (int i = 0; i < memRecos.length() && dynamicTags.size() < 6; i++) {
-            JSONObject r = memRecos.optJSONObject(i);
-            if (r == null) continue;
-            for (String g : cleanGenres(r.optString("genres")).split(",")) {
-                String gt = g.trim();
-                if (!gt.isEmpty() && !dynamicTags.contains(gt) && dynamicTags.size() < 6) {
-                    dynamicTags.add(gt);
-                }
+                if (!f.isEmpty() && !dynamicTags.contains(f)) dynamicTags.set(i % dynamicTags.size(), f);
             }
         }
 
@@ -975,7 +1031,7 @@ public class AuraActivity extends Activity {
             if (i % 2 == 0) {
                 row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setPadding(0, 0, 0, 8);
+                row.setPadding(0, 0, 0, 6);
                 tasteTagsContainer.addView(row);
             }
             final String tag = dynamicTags.get(i);
@@ -997,17 +1053,19 @@ public class AuraActivity extends Activity {
 
     private void saveProfileAndCurate() {
         final String newName = profileNameInput.getText().toString().trim();
-        final String newTaste = tasteEditInput.getText().toString().trim();
+        final String newPersonalTaste = tasteEditInput.getText().toString().trim();
+        final String newDefaultTaste = defaultTasteEditInput.getText().toString().trim();
         final boolean isNew = creatingNewProfileMode;
         closeRightDrawers();
 
         bgPool.submit(() -> {
+            db.setDefaultTasteGuide(newDefaultTaste);
             final String targetPid;
             if (isNew) {
-                targetPid = db.addProfile(newName, newTaste);
+                targetPid = db.addProfile(newName, newPersonalTaste);
             } else {
                 targetPid = memProfile;
-                db.saveProfileRecord(targetPid, newName, newTaste);
+                db.saveProfileRecord(targetPid, newName, newPersonalTaste);
             }
             final String label = db.getProfileLabel(targetPid);
             uiHandler.post(() -> {
@@ -1052,14 +1110,14 @@ public class AuraActivity extends Activity {
             imm.hideSoftInputFromWindow(rootFrame.getWindowToken(), 0);
         }
 
-        final View activeDrawer = (rightDetailsDrawer != null && rightDetailsDrawer.getVisibility() == View.VISIBLE)
-            ? rightDetailsDrawer
-            : rightTasteDrawer;
+        final View activeDrawer = (rightDetailsScroll != null && rightDetailsScroll.getVisibility() == View.VISIBLE)
+            ? rightDetailsScroll
+            : rightTasteScroll;
 
         if (lastFocusedPoster != null && lastFocusedPoster.getParent() != null) {
             lastFocusedPoster.requestFocus();
-        } else if (carouselRow != null && carouselRow.getChildCount() > 0) {
-            carouselRow.getChildAt(0).requestFocus();
+        } else if (!gridTiles.isEmpty()) {
+            gridTiles.get(0).requestFocus();
         }
 
         if (activeDrawer != null) {
@@ -1077,8 +1135,8 @@ public class AuraActivity extends Activity {
             .withEndAction(() -> {
                 drawerClosing = false;
                 rightScrim.setVisibility(View.GONE);
-                if (rightDetailsDrawer != null) rightDetailsDrawer.setVisibility(View.GONE);
-                if (rightTasteDrawer != null) rightTasteDrawer.setVisibility(View.GONE);
+                if (rightDetailsScroll != null) rightDetailsScroll.setVisibility(View.GONE);
+                if (rightTasteScroll != null) rightTasteScroll.setVisibility(View.GONE);
             })
             .start();
     }
@@ -1092,14 +1150,12 @@ public class AuraActivity extends Activity {
         int year = item.optInt("year", 2024);
         String genres = cleanGenres(item.optString("genres", "Drama"));
         String appName = cleanAppName(item.optString("app", item.optString("app_name", "")));
-        String reason = formatCompleteSentences(item.optString("reason", ""), 125);
 
         CharSequence oldTitle = headerTitle.getText();
         boolean changed = oldTitle == null || !mainTitle.contentEquals(oldTitle);
 
         headerTitle.setText(mainTitle);
         headerMeta.setText(year + "   ·   " + rt + " min   ·   " + genres + (appName.isEmpty() ? "" : ("   ·   " + appName)));
-        headerReasonPreview.setVisibility(View.GONE);
 
         if (changed && heroHeaderBox != null) {
             heroHeaderBox.animate().cancel();
@@ -1171,23 +1227,30 @@ public class AuraActivity extends Activity {
 
     private void refreshCardsOnly(boolean focusFirstCard) {
         JSONArray items = getFilteredItemsFromMemory();
-        int limit = Math.min(items.length(), MAX_CAROUSEL_CARDS);
+        int limit = Math.min(items.length(), MAX_GRID_CARDS);
 
-        // Reuse existing poster views in carouselRow to avoid GC & View creation overhead!
-        while (carouselRow.getChildCount() > limit) {
-            carouselRow.removeViewAt(carouselRow.getChildCount() - 1);
-        }
+        gridRowsContainer.removeAllViews();
+        gridTiles.clear();
 
+        LinearLayout currentRow = null;
         for (int i = 0; i < limit; i++) {
             JSONObject item = items.optJSONObject(i);
             if (item == null) continue;
-            FrameLayout tile;
-            if (i < carouselRow.getChildCount()) {
-                tile = (FrameLayout) carouselRow.getChildAt(i);
-                bindPosterTile(tile, item, i == 0);
-            } else {
-                tile = buildPurePosterTile(item, i == 0);
-                carouselRow.addView(tile);
+            if (i % COLS_PER_ROW == 0) {
+                currentRow = new LinearLayout(this);
+                currentRow.setOrientation(LinearLayout.HORIZONTAL);
+                currentRow.setClipChildren(false);
+                currentRow.setClipToPadding(false);
+                LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                rowLp.setMargins(0, 0, 0, 22);
+                gridRowsContainer.addView(currentRow, rowLp);
+            }
+            final int tileIdx = gridTiles.size();
+            FrameLayout tile = buildGridPosterTile(item, tileIdx);
+            gridTiles.add(tile);
+            if (currentRow != null) {
+                currentRow.addView(tile);
             }
         }
 
@@ -1196,15 +1259,14 @@ public class AuraActivity extends Activity {
         } else {
             headerTitle.setText("No matching titles");
             headerMeta.setText("Select 'All' or update Guide AI");
-            headerReasonPreview.setVisibility(View.GONE);
         }
-        if (focusFirstCard && carouselRow.getChildCount() > 0) {
+        if (focusFirstCard && !gridTiles.isEmpty()) {
             setSidebarExpanded(false);
-            carouselRow.getChildAt(0).requestFocus();
+            gridTiles.get(0).requestFocus();
         }
     }
 
-    private FrameLayout buildPurePosterTile(final JSONObject item, boolean isFirst) {
+    private FrameLayout buildGridPosterTile(final JSONObject item, final int tileIdx) {
         final FrameLayout posterFrame = new FrameLayout(this);
         posterFrame.setPadding(4, 4, 4, 4);
         posterFrame.setFocusable(true);
@@ -1222,49 +1284,98 @@ public class AuraActivity extends Activity {
         posterFrame.addView(img, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(264, 396);
+        // 5 columns per row: 5 * 316px + 4 * 22px = 1668px (fits cleanly inside 1776px stage, showing 2+ rows vertically)
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(316, 352);
         lp.setMargins(0, 0, 22, 0);
         posterFrame.setLayoutParams(lp);
 
-        bindPosterTile(posterFrame, item, isFirst);
-        return posterFrame;
-    }
-
-    private void bindPosterTile(final FrameLayout posterFrame, final JSONObject item, boolean isFirst) {
-        ImageView img = (ImageView) posterFrame.getChildAt(0);
         ImageLoader.load(this, item.optString("poster_url"), img);
 
         posterFrame.setOnFocusChangeListener((v, hasFocus) -> {
             if (hasFocus && sidebarExpanded) setSidebarExpanded(false);
             stylePosterFrame(posterFrame, hasFocus);
             posterFrame.animate()
-                .scaleX(hasFocus ? 1.05f : 1.0f)
-                .scaleY(hasFocus ? 1.05f : 1.0f)
-                .translationY(hasFocus ? -4f : 0f)
+                .scaleX(hasFocus ? 1.045f : 1.0f)
+                .scaleY(hasFocus ? 1.045f : 1.0f)
+                .translationY(hasFocus ? -3f : 0f)
                 .setDuration(130)
                 .setInterpolator(SMOOTH_INTERP)
                 .start();
             posterFrame.setElevation(hasFocus ? 16f : 2f);
-            if (hasFocus) updateHeaderForCard(item);
+            if (hasFocus) {
+                updateHeaderForCard(item);
+                ensureTileRowVisible(posterFrame);
+            }
         });
 
         posterFrame.setOnClickListener(v -> openDetailsDrawer(item, posterFrame));
 
-        if (isFirst) {
-            posterFrame.setOnKeyListener((v, keyCode, event) -> {
-                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && event.getAction() == KeyEvent.ACTION_DOWN) {
+        // Deterministic 2D Grid D-Pad Navigation across 5 columns and multiple rows
+        posterFrame.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            int total = gridTiles.size();
+            int row = tileIdx / COLS_PER_ROW;
+            int col = tileIdx % COLS_PER_ROW;
+
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                if (col == 0) {
                     focusSideProfileById(memProfile);
                     return true;
+                } else if (tileIdx - 1 >= 0) {
+                    gridTiles.get(tileIdx - 1).requestFocus();
+                    return true;
                 }
-                return false;
-            });
-        } else {
-            posterFrame.setOnKeyListener(null);
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                if (col < COLS_PER_ROW - 1 && tileIdx + 1 < total) {
+                    gridTiles.get(tileIdx + 1).requestFocus();
+                }
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                int nextIdx = tileIdx + COLS_PER_ROW;
+                if (nextIdx < total) {
+                    gridTiles.get(nextIdx).requestFocus();
+                } else if ((row + 1) * COLS_PER_ROW < total) {
+                    gridTiles.get(total - 1).requestFocus();
+                }
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                if (row > 0) {
+                    gridTiles.get(tileIdx - COLS_PER_ROW).requestFocus();
+                    return true;
+                } else {
+                    if (filterChipsRow != null && filterChipsRow.getChildCount() > 0) {
+                        filterChipsRow.getChildAt(0).requestFocus();
+                    } else if (searchInput != null) {
+                        searchInput.requestFocus();
+                    }
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        return posterFrame;
+    }
+
+    private void ensureTileRowVisible(View tile) {
+        if (gridScrollView == null || tile == null) return;
+        View parentRow = (View) tile.getParent();
+        if (parentRow == null) return;
+        int rowTop = parentRow.getTop();
+        int rowBottom = parentRow.getBottom();
+        int scrollY = gridScrollView.getScrollY();
+        int svHeight = gridScrollView.getHeight();
+        if (svHeight <= 0) return;
+
+        if (rowTop < scrollY + 20) {
+            gridScrollView.smoothScrollTo(0, Math.max(0, rowTop - 16));
+        } else if (rowBottom > scrollY + svHeight - 20) {
+            gridScrollView.smoothScrollTo(0, rowBottom - svHeight + 28);
         }
     }
 
     private void handleMarkWatchedInPlace(View posterView, final JSONObject item, final String title) {
-        int idx = carouselRow.indexOfChild(posterView);
+        int idx = gridTiles.indexOf(posterView);
         String key = AuraDb.normalizeTitleKey(title);
         final boolean nowWatched = !memWatchedKeys.contains(key);
         if (nowWatched) {
@@ -1277,13 +1388,10 @@ public class AuraActivity extends Activity {
         updateSideButtonLabels();
         setLoader(false, nowWatched ? ("✓ Watched: " + title) : ("Unwatched: " + title));
 
-        if (idx >= 0) {
-            carouselRow.removeViewAt(idx);
-            int remaining = carouselRow.getChildCount();
-            if (remaining > 0) {
-                int targetIdx = Math.min(idx, remaining - 1);
-                carouselRow.getChildAt(targetIdx).requestFocus();
-            }
+        refreshCardsOnly(false);
+        if (!gridTiles.isEmpty()) {
+            int targetIdx = Math.max(0, Math.min(idx, gridTiles.size() - 1));
+            gridTiles.get(targetIdx).requestFocus();
         }
 
         bgPool.submit(() -> {
@@ -1306,6 +1414,7 @@ public class AuraActivity extends Activity {
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
                 if (o == null || o.optString("poster_url").isEmpty()) continue;
+                if (o.optInt("year", 2024) > JustWatchGraph.MAX_RELEASED_YEAR) continue;
                 String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
                 String k = AuraDb.normalizeTitleKey(t);
                 if (!k.isEmpty() && !memWatchedKeys.contains(k) && !seenKeys.contains(k)) {
@@ -1327,7 +1436,7 @@ public class AuraActivity extends Activity {
             }
         }
         if (strict.length() < 6) {
-            for (int i = 0; i < pool.length() && strict.length() < 10; i++) {
+            for (int i = 0; i < pool.length() && strict.length() < 12; i++) {
                 JSONObject o = pool.optJSONObject(i);
                 String k = o != null ? AuraDb.normalizeTitleKey(o.optString("title")) : "";
                 if (o != null && !added.contains(k) && matchesAnyFilter(o, memFilters)) {
@@ -1430,12 +1539,26 @@ public class AuraActivity extends Activity {
             styleSideNavBtn(btn, hasFocus, isSelected);
         });
         btn.setOnKeyListener((v, keyCode, event) -> {
-            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && event.getAction() == KeyEvent.ACTION_DOWN) {
-                setSidebarExpanded(false);
-                if (carouselRow != null && carouselRow.getChildCount() > 0) {
-                    carouselRow.getChildAt(0).requestFocus();
-                    return true;
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            int idx = sidebarFocusableBtns.indexOf(btn);
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (idx >= 0 && idx + 1 < sidebarFocusableBtns.size()) {
+                    sidebarFocusableBtns.get(idx + 1).requestFocus();
                 }
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                if (idx > 0) {
+                    sidebarFocusableBtns.get(idx - 1).requestFocus();
+                }
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                focusFirstGridTileOrSearch();
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                return true;
             }
             return false;
         });
@@ -1480,7 +1603,7 @@ public class AuraActivity extends Activity {
 
     private TextView makePillBtn(String text, final boolean isSelected, final Runnable onClick) {
         final TextView btn = makeText(text, 13f, "#E2E6F0", FONT_MEDIUM, 1);
-        btn.setPadding(18, 9, 18, 9);
+        btn.setPadding(16, 9, 16, 9);
         btn.setFocusable(true);
         btn.setClickable(true);
         stylePillBtn(btn, false, isSelected);
@@ -1535,7 +1658,6 @@ public class AuraActivity extends Activity {
             }
             return s;
         }
-        // Cut cleanly at the last sentence boundary or clause boundary before maxChars so it NEVER shows "..."
         String window = s.substring(0, maxChars);
         int lastPeriod = Math.max(window.lastIndexOf(". "), Math.max(window.lastIndexOf("! "), window.lastIndexOf("? ")));
         if (lastPeriod >= 45) {
@@ -1561,7 +1683,13 @@ public class AuraActivity extends Activity {
         if (low.contains("apple")) return "Apple TV+";
         if (low.contains("sony")) return "SonyLIV";
         if (low.contains("zee")) return "ZEE5";
-        return a.isEmpty() ? "Streaming" : a;
+        return a.isEmpty() ? "Netflix" : a;
+    }
+
+    private String shortAppBadge(String appName) {
+        if (appName.contains("Hotstar")) return "Hotstar";
+        if (appName.contains("Prime")) return "Prime";
+        return appName;
     }
 
     private String cleanGenres(String g) {

@@ -10,7 +10,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -32,7 +34,7 @@ public class AiRecommender {
 
     public JSONArray getOrRefreshForProfile(String profileId, JSONObject nowPlaying, JSONArray history, boolean forceManual) {
         JSONArray cached = db.getProfileRecommendations(profileId);
-        if (!forceManual && cached.length() > 0 && db.isRecoCacheFresh(profileId)) {
+        if (!forceManual && cached.length() >= 10 && db.isRecoCacheFresh(profileId)) {
             return cached;
         }
         String prompt = buildProfilePrompt(profileId, nowPlaying, history);
@@ -68,57 +70,51 @@ public class AiRecommender {
         }
 
         String profileName = db.getProfileLabel(profileId);
-        String customTaste = db.getProfileTaste(profileId);
+        String personalGuide = db.getProfileTaste(profileId);
+        String defaultGuide = db.getDefaultTasteGuide();
         String ratingsFeedback = db.getRatingFeedbackSummary();
         List<String> activeFilters = db.getActiveFilters(profileId);
         List<String> cfPool = fetchCollaborativeCandidateNames(profileId);
         String cur = np != null ? (np.optString("series_title").isEmpty() ? np.optString("title") : np.optString("series_title")) : "";
 
-        return "You are Aura, an expert personalized TV & movie recommendation engine.\n" +
-            "Active Profile Name: '" + profileName + "' (profile_id: " + profileId + ").\n" +
-            "User's Explicit Taste Guidance / Interests for this profile: " +
-            (customTaste.isEmpty() ? "(Infer appropriate taste from Profile Name, Ratings, and Watch History)" : "\"" + customTaste + "\"") + "\n" +
-            "User's 1-10 Show Ratings Feedback: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
-            "Active UI Filters: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
-            "Currently/recently active on TV: '" + cur + "'.\n" +
-            "Already watched (STRICT EXCLUSION — NEVER recommend any of these): " + seen.toString() + ".\n" +
-            "Deterministic Candidate Pool (verified titles streaming in India from JustWatch/IMDb APIs): " + cfPool.toString() + ".\n\n" +
-            "Task (LLM Heavy Lifting):\n" +
-            "1. Filter out any watched titles, anything similar to low-rated titles (<=5/10), or anything violating active filters.\n" +
-            "2. Select & rank the 14 best shows or movies (prioritizing high-affinity matches from the Deterministic Candidate Pool plus top critically acclaimed matches for their interests).\n" +
-            "3. For EVERY title, write a specific, compelling 'reason' (1-2 sentences, max 24 words) explaining WHY this specific user should watch it and WHY it is recommended to them based on their watched shows, 1-10 ratings, or interests.\n" +
-            "Return ONLY a JSON array of 14 objects with keys: 'title', 'app' (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5), " +
-            "'genres' (comma-separated), 'runtime_min' (integer minutes), and 'reason' (personalized explanation of why they should watch it).";
+        return "You are Aura, a deeply personalized movie & TV recommendation engine for Android TV in India.\n" +
+            "Active Profile: '" + profileName + "' (profile_id: " + profileId + ").\n" +
+            "1. PERSONAL GUIDE AI (Highest Priority — specific to " + profileName + "): " +
+            (personalGuide.isEmpty() ? "(None set yet — rely on Default Guide AI, 1-10 Ratings, and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
+            "2. DEFAULT GUIDE AI (Global Household Baseline): \"" + defaultGuide + "\"\n" +
+            "3. USER'S 1-10 RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
+            "4. ACTIVE UI FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
+            "5. RECENTLY ACTIVE ON TV: '" + cur + "'.\n" +
+            "6. STRICT WATCHED EXCLUSION LIST (NEVER recommend any of these): " + seen.toString() + ".\n" +
+            "7. VERIFIED COLLABORATIVE CANDIDATES STREAMING IN INDIA: " + cfPool.toString() + ".\n\n" +
+            "STRICT CURATION RULES:\n" +
+            "- ONLY recommend ALREADY-RELEASED movies or series (release year <= 2025) that are currently streaming on subscription OTT in India (Netflix, Disney+ Hotstar, Prime Video, Apple TV+, SonyLIV, or ZEE5).\n" +
+            "- NEVER recommend unreleased/upcoming 2026 or 2027 titles (such as 'The Batman: Part II', 'The Odyssey', 'Project Hail Mary', 'The Hunt for Gollum', 'Beyond the Spider-Verse').\n" +
+            "- Prioritize Personal Guide AI first, then Default Guide AI, then high-affinity matches to their 8-10/10 rated shows.\n" +
+            "- Ensure strong variety across 18 picks (mixing top matches for their personal taste, critically acclaimed thrillers/sci-fi/dramas, and hidden gems with IMDb >= 7.5).\n" +
+            "- For EVERY title, write a natural, specific 1-2 sentence 'reason' (18-28 words) explaining WHY '" + profileName + "' will love it based on their Personal Guide AI, Default Guide AI, or watch history.\n" +
+            "Return ONLY a JSON array of 18 objects with keys: 'title', 'app' (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5), " +
+            "'genres' (comma-separated), 'runtime_min' (integer minutes), and 'reason' (personalized explanation).";
     }
 
     public List<String> fetchCollaborativeCandidateNames(String profileId) {
         List<String> dynamicAnchors = db.getDynamicTasteAnchors(profileId);
         List<String> names = new ArrayList<>();
+        Set<String> seenNorm = new HashSet<>();
         for (String seed : dynamicAnchors) {
+            if (seed == null || seed.trim().isEmpty()) continue;
             JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seed);
             for (int i = 0; i < sim.length() && i < 6; i++) {
                 JSONObject o = sim.optJSONObject(i);
-                if (o != null && !o.optString("title").isEmpty() && !db.isTitleWatched(o.optString("title"))) {
-                    String t = o.optString("title");
-                    db.saveCachedGti("jw_imdb_v3:" + t.trim().toLowerCase(), o.toString());
-                    names.add(t + " [" + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app", "Streaming") + "]");
-                }
-            }
-        }
-        String customInterests = db.getProfileTaste(profileId);
-        if (!customInterests.isEmpty()) {
-            for (String part : customInterests.split(",")) {
-                String kw = part.trim();
-                if (kw.isEmpty()) continue;
-                JSONArray searchHits = JustWatchGraph.fetchDeterministicSearchCandidates(kw);
-                for (int i = 0; i < searchHits.length() && i < 5; i++) {
-                    JSONObject o = searchHits.optJSONObject(i);
-                    if (o != null && !o.optString("title").isEmpty() && !db.isTitleWatched(o.optString("title"))) {
-                        String t = o.optString("title");
-                        db.saveCachedGti("jw_imdb_v3:" + t.trim().toLowerCase(), o.toString());
-                        String entry = t + " [" + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app", "Streaming") + "]";
-                        if (!names.contains(entry)) names.add(entry);
-                    }
+                if (o == null) continue;
+                String t = o.optString("title");
+                String norm = AuraDb.normalizeTitleKey(t);
+                if (!t.isEmpty() && !seenNorm.contains(norm) && !db.isTitleWatched(t)
+                    && o.optInt("year", 9999) <= JustWatchGraph.MAX_RELEASED_YEAR
+                    && o.optBoolean("has_flatrate_offer", false)) {
+                    seenNorm.add(norm);
+                    db.saveCachedGti("jw_imdb_v4:" + t.trim().toLowerCase(), o.toString());
+                    names.add(t + " (" + o.optInt("year") + ", " + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app", "Streaming") + ")");
                 }
             }
         }
@@ -130,34 +126,47 @@ public class AiRecommender {
         if (raw == null) return out;
         int n = raw.length();
         final JSONObject[] results = new JSONObject[n];
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(6);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
         for (int i = 0; i < n; i++) {
             final int idx = i;
             final JSONObject p = raw.optJSONObject(i);
             if (p == null) continue;
             pool.submit(() -> {
-                String title = p.optString("title");
+                String title = p.optString("title").trim();
+                if (title.isEmpty() || db.isTitleWatched(title)) return;
                 JSONObject meta = fetchOpenMetadata(title);
-                String verifiedApp = !meta.optString("app").isEmpty() ? meta.optString("app") : p.optString("app", "Streaming");
+                int year = meta.optInt("year", p.optInt("year", 2023));
+                // Strictly reject unreleased future titles (2026+) or titles without posters
+                if (year > JustWatchGraph.MAX_RELEASED_YEAR) return;
+                String posterUrl = meta.optString("poster_url");
+                if (posterUrl.isEmpty()) return;
+
+                String verifiedApp = !meta.optString("app").isEmpty() ? meta.optString("app") : p.optString("app", "Netflix");
+                if (verifiedApp.toLowerCase().contains("store") || "Streaming".equalsIgnoreCase(verifiedApp)) {
+                    verifiedApp = !p.optString("app").isEmpty() && !p.optString("app").equalsIgnoreCase("Streaming")
+                        ? p.optString("app")
+                        : "Netflix";
+                }
+
                 JSONObject card = new JSONObject();
                 try {
-                    card.put("title", title);
+                    card.put("title", !meta.optString("title").isEmpty() ? meta.optString("title") : title);
                     card.put("badge", verifiedApp);
                     card.put("app", verifiedApp);
-                    card.put("year", meta.optInt("year", 2024));
+                    card.put("year", year);
                     card.put("type", meta.optString("type", "Series"));
                     String reason = p.optString("reason");
                     if (reason.isEmpty()) reason = meta.optString("synopsis");
                     card.put("reason", reason);
                     card.put("synopsis", !meta.optString("synopsis").isEmpty() ? meta.optString("synopsis") : reason);
-                    card.put("poster_url", meta.optString("poster_url"));
+                    card.put("poster_url", posterUrl);
                     String genres = !meta.optString("genres").isEmpty()
                         ? meta.optString("genres")
                         : p.optString("genres", p.optString("genre", "Drama"));
                     card.put("genres", genres);
-                    int rt = meta.optInt("runtime_min", p.optInt("runtime_min", 45));
+                    int rt = meta.optInt("runtime_min", p.optInt("runtime_min", 48));
                     card.put("runtime_min", rt);
-                    card.put("rating", meta.optString("rating", p.optString("rating", "8.2")));
+                    card.put("rating", meta.optString("rating", p.optString("rating", "8.1")));
                     String deepUri = !meta.optString("launch_uri").isEmpty()
                         ? meta.optString("launch_uri")
                         : db.findNativeLaunchUri(title);
@@ -172,8 +181,15 @@ public class AiRecommender {
         }
         pool.shutdown();
         try { pool.awaitTermination(8, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+        Set<String> seenKeys = new HashSet<>();
         for (JSONObject r : results) {
-            if (r != null) out.put(r);
+            if (r != null) {
+                String k = AuraDb.normalizeTitleKey(r.optString("title"));
+                if (!k.isEmpty() && !seenKeys.contains(k)) {
+                    seenKeys.add(k);
+                    out.put(r);
+                }
+            }
         }
         return out;
     }
@@ -181,7 +197,7 @@ public class AiRecommender {
     public JSONObject fetchOpenMetadata(String title) {
         JSONObject res = new JSONObject();
         if (title == null || title.isEmpty()) return res;
-        String cacheKey = "jw_imdb_v3:" + title.trim().toLowerCase();
+        String cacheKey = "jw_imdb_v4:" + title.trim().toLowerCase();
         String cached = db.getCachedGti(cacheKey);
         if (cached != null) {
             try { return new JSONObject(cached); } catch (Exception ignored) {}
@@ -199,8 +215,11 @@ public class AiRecommender {
                     for (int k = 0; k < d.length(); k++) {
                         JSONObject item = d.optJSONObject(k);
                         if (item == null) continue;
+                        int y = item.optInt("y", 2023);
+                        if (y > JustWatchGraph.MAX_RELEASED_YEAR) continue;
                         JSONObject iObj = item.optJSONObject("i");
                         if (iObj != null && !iObj.optString("imageUrl").isEmpty()) {
+                            res.put("year", y);
                             res.put("poster_url", iObj.optString("imageUrl").replace("._V1_.jpg", "._V1_UX360_.jpg"));
                             break;
                         }
@@ -209,7 +228,7 @@ public class AiRecommender {
             } catch (Exception ignored) {}
         }
 
-        if (!res.optString("poster_url").isEmpty()) {
+        if (!res.optString("poster_url").isEmpty() && res.optInt("year", 2024) <= JustWatchGraph.MAX_RELEASED_YEAR) {
             db.saveCachedGti(cacheKey, res.toString());
         }
         return res;
@@ -254,7 +273,7 @@ public class AiRecommender {
                 JSONObject body = new JSONObject();
                 JSONArray contents = new JSONArray().put(new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", prompt))));
                 body.put("contents", contents);
-                body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.65));
+                body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.55));
                 String resp = httpPost(url, body.toString());
                 JSONObject root = new JSONObject(resp);
                 return root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
@@ -271,7 +290,7 @@ public class AiRecommender {
             JSONObject body = new JSONObject();
             JSONArray contents = new JSONArray().put(new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", prompt))));
             body.put("contents", contents);
-            body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.6));
+            body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.55));
             String resp = httpPost(url, body.toString());
             JSONObject root = new JSONObject(resp);
             String text = root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");

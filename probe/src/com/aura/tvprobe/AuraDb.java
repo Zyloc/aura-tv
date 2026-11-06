@@ -37,6 +37,7 @@ public class AuraDb extends SQLiteOpenHelper {
         this.appCtx = ctx.getApplicationContext();
         applyBundledEnvIfPresent();
         ensureDefaultProfileExists();
+        purgeUnreleasedFromRecos();
         if (sInstance == null) sInstance = this;
     }
 
@@ -285,6 +286,48 @@ public class AuraDb extends SQLiteOpenHelper {
         String clean = taste != null ? taste.trim() : "";
         setSetting("profile_taste_" + profileId, clean);
         saveProfileRecord(profileId, getProfileLabel(profileId), clean);
+    }
+
+    public String getDefaultTasteGuide() {
+        String def = getSetting("default_guide_ai", "").trim();
+        if (def.isEmpty()) {
+            return "Critically acclaimed released titles (IMDb 7.5+), gripping storytelling, smart pacing, streaming on Netflix, Prime Video, Disney+ Hotstar, or Apple TV+";
+        }
+        return def;
+    }
+
+    public void setDefaultTasteGuide(String guide) {
+        setSetting("default_guide_ai", guide != null ? guide.trim() : "");
+    }
+
+    public void purgeUnreleasedFromRecos() {
+        try {
+            SQLiteDatabase db = getWritableDatabase();
+            List<String> toDeleteProfiles = new ArrayList<>();
+            try (Cursor c = db.rawQuery("SELECT profile_id, payload_json FROM profile_recos", null)) {
+                while (c.moveToNext()) {
+                    String pid = c.getString(0);
+                    JSONArray arr = new JSONArray(c.getString(1));
+                    boolean hasUnreleased = false;
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject o = arr.optJSONObject(i);
+                        if (o == null) continue;
+                        int y = o.optInt("year", 2024);
+                        String app = o.optString("app", "");
+                        if (y > 2025 || app.contains("Store")) {
+                            hasUnreleased = true;
+                            break;
+                        }
+                    }
+                    if (hasUnreleased) {
+                        toDeleteProfiles.add(pid);
+                    }
+                }
+            }
+            for (String pid : toDeleteProfiles) {
+                db.delete("profile_recos", "profile_id = ?", new String[]{pid});
+            }
+        } catch (Exception ignored) {}
     }
 
     public List<String> getDynamicTasteAnchors(String profileId) {

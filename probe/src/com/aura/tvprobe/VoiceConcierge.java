@@ -122,17 +122,23 @@ public class VoiceConcierge {
             if (t != null) conv.append(t.optString("role")).append(": ").append(t.optString("text")).append("\n");
         }
         List<String> cfPool = ai.fetchCollaborativeCandidateNames(profileId);
+        String personalGuide = db.getProfileTaste(profileId);
+        String defaultGuide = db.getDefaultTasteGuide();
         return "You are Aura, a high-taste movie & TV concierge for profile '" + db.getProfileLabel(profileId) + "'.\n" +
+            "Personal Guide AI (for this profile): " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
+            "Default Guide AI (global baseline): " + defaultGuide + "\n" +
             "STRICT EXCLUSION LIST — Already watched (NEVER recommend any of these): " + watched.toString() + "\n" +
             "Collaborative Filtering Graph Candidates (co-watched high-affinity titles in India): " + cfPool.toString() + "\n" +
             "Active Persistent Filters (MUST obey): " + (filters.isEmpty() ? "None" : filters.toString()) + "\n" +
             "Session Flow so far:\n" + conv.toString() +
             "New User Input: \"" + userText + "\"\n\n" +
-            "Prioritize critically acclaimed hidden gems, recent prestige releases (2020-2026), and collaborative-filtering matches (IMDb >= 7.5) over cliché top-10 blockbusters.\n" +
+            "STRICT RULES:\n" +
+            "- ONLY recommend ALREADY-RELEASED titles (release year <= 2025) currently streaming on subscription OTT in India (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5).\n" +
+            "- NEVER recommend unreleased 2026/2027 titles.\n" +
             "Return a JSON object with:\n" +
             "1. 'reply': Short 1-sentence summary of what was matched.\n" +
-            "2. 'results': Array of 10 unwatched titles matching the session & filters, each with keys: 'title', 'app' (exact streaming service in India: 'Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (max 16 words explaining the taste match).\n" +
-            "3. 'follow_ups': Array of 4 short 2-3 word refinement chips (e.g. 'Post-2022 only', 'Slow-burn mystery', 'Under 100 mins', 'Korean thrillers').";
+            "2. 'results': Array of 15 unwatched released titles matching the session & filters, each with keys: 'title', 'app' ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their request & taste).\n" +
+            "3. 'follow_ups': Array of 4 short 2-3 word refinement chips.";
     }
 
     private List<String> collectWatchedNames(String profileId) {
