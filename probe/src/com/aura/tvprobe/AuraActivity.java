@@ -3,6 +3,8 @@ package com.aura.tvprobe;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -26,15 +28,17 @@ import org.json.JSONObject;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
  * Main Launcher Activity for Aura TV v2.
- * Composes NavPanelBuilder, HeroSliderBuilder, RailBuilder, SearchOverlay, and DetailOverlay.
+ * Native Android TV feel with high-visibility D-pad focus rings, real app banners, and hero carousel.
  */
 public class AuraActivity extends Activity implements
         NavPanelBuilder.NavCallback,
@@ -52,12 +56,15 @@ public class AuraActivity extends Activity implements
     private SyncManager sync;
     private VoiceConcierge voice;
     private String activeProfile = AuraDb.DEFAULT_PROFILE;
+    private boolean initialFocusSet = false;
 
     private FrameLayout rootLayout;
+    private ScrollView mainScroll;
     private LinearLayout navPanel;
     private FrameLayout heroSlider;
     private LinearLayout railsContainer;
     private LinearLayout chipsRow;
+    private LinearLayout searchBox;
     private EditText searchInput;
     private TextView statusBanner;
     private TextView profileClockLabel;
@@ -102,7 +109,6 @@ public class AuraActivity extends Activity implements
         rootLayout = new FrameLayout(this);
         rootLayout.setBackgroundColor(GlassTheme.BG_AMBIENT);
         rootLayout.addView(buildMainScrollArea());
-        rootLayout.addView(buildFloatingTopBar());
         navPanel = NavPanelBuilder.build(this, this);
         rootLayout.addView(navPanel);
         addOverlays();
@@ -110,78 +116,100 @@ public class AuraActivity extends Activity implements
     }
 
     private ScrollView buildMainScrollArea() {
-        ScrollView sv = new ScrollView(this);
-        sv.setVerticalScrollBarEnabled(false);
-        sv.setFillViewport(true);
+        mainScroll = new ScrollView(this);
+        mainScroll.setVerticalScrollBarEnabled(false);
+        mainScroll.setFillViewport(true);
+        mainScroll.setFocusable(false);
+        mainScroll.setClipChildren(false);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        lp.leftMargin = dp(GlassTheme.NAV_COLLAPSED_W);
-        sv.setLayoutParams(lp);
-        sv.addView(buildMainColumn());
-        return sv;
+        lp.leftMargin = dp(GlassTheme.NAV_COLLAPSED_W + 8);
+        mainScroll.setLayoutParams(lp);
+        mainScroll.addView(buildMainColumn());
+        return mainScroll;
     }
 
     private LinearLayout buildMainColumn() {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setClipChildren(false);
+        col.setClipToPadding(false);
+        col.addView(buildTopBar());
         heroSlider = HeroSliderBuilder.build(this, this);
         col.addView(heroSlider);
-        statusBanner = GlassTheme.makeText(this, "", 11f, GlassTheme.ACCENT, GlassTheme.FONT_MEDIUM, 1);
-        statusBanner.setPadding(dp(24), dp(2), dp(24), dp(2));
+        statusBanner = GlassTheme.makeText(this, "", 11f, GlassTheme.ACCENT, GlassTheme.FONT_BOLD, 1);
+        statusBanner.setPadding(dp(20), dp(2), dp(20), dp(2));
         statusBanner.setVisibility(View.GONE);
         col.addView(statusBanner);
         railsContainer = new LinearLayout(this);
         railsContainer.setOrientation(LinearLayout.VERTICAL);
-        railsContainer.setPadding(dp(16), 0, dp(16), dp(28));
+        railsContainer.setClipChildren(false);
+        railsContainer.setClipToPadding(false);
+        railsContainer.setPadding(dp(8), 0, dp(12), dp(32));
         col.addView(railsContainer, GlassTheme.matchWrapParams());
         return col;
     }
 
-    private LinearLayout buildFloatingTopBar() {
+    private LinearLayout buildTopBar() {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(16), dp(10), dp(20), dp(8));
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.leftMargin = dp(GlassTheme.NAV_COLLAPSED_W + 8);
-        bar.setLayoutParams(lp);
+        bar.setClipChildren(false);
+        bar.setPadding(dp(16), dp(10), dp(16), dp(6));
         bar.addView(buildSearchBox());
         bar.addView(buildChipsScroll(), GlassTheme.weightParams(1f));
-        profileClockLabel = GlassTheme.makeText(this, "", 11f,
+        profileClockLabel = GlassTheme.makeText(this, "", 11.5f,
             GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        profileClockLabel.setBackground(GlassTheme.glassPanel(dp(12)));
-        profileClockLabel.setPadding(dp(10), dp(5), dp(10), dp(5));
+        profileClockLabel.setBackground(GlassTheme.glassCard(dp(10)));
+        profileClockLabel.setPadding(dp(12), dp(6), dp(12), dp(6));
         bar.addView(profileClockLabel);
         return bar;
     }
 
     private LinearLayout buildSearchBox() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.HORIZONTAL);
-        box.setGravity(Gravity.CENTER_VERTICAL);
-        box.setBackground(GlassTheme.glassPanel(dp(14)));
-        box.setElevation(dp(4));
-        box.setPadding(dp(12), dp(4), dp(8), dp(4));
-        searchInput = createSearchEditText();
-        box.addView(searchInput, new LinearLayout.LayoutParams(dp(260), dp(32)));
-        TextView askBtn = GlassTheme.makePrimaryButton(this, "Ask AI");
+        searchBox = new LinearLayout(this);
+        searchBox.setOrientation(LinearLayout.HORIZONTAL);
+        searchBox.setGravity(Gravity.CENTER_VERTICAL);
+        float r = dp(12);
+        searchBox.setBackground(GlassTheme.glassCard(r));
+        searchBox.setPadding(dp(12), dp(4), dp(6), dp(4));
+
+        TextView icon = GlassTheme.makeText(this, "\uD83D\uDD0D", 12f,
+            GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_REGULAR, 1);
+        icon.setGravity(Gravity.CENTER);
+        searchBox.addView(icon, GlassTheme.wrapParams());
+
+        searchInput = createSearchEditText(r);
+        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(dp(230), dp(30));
+        etLp.gravity = Gravity.CENTER_VERTICAL;
+        searchBox.addView(searchInput, etLp);
+
+        TextView askBtn = GlassTheme.makePrimaryButton(this, "Search");
         askBtn.setTextSize(11f);
-        askBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
+        askBtn.setPadding(dp(10), dp(5), dp(10), dp(5));
         askBtn.setOnClickListener(v -> runSearchQuery(searchInput.getText().toString()));
-        box.addView(askBtn);
-        return box;
+        searchBox.addView(askBtn);
+        return searchBox;
     }
 
-    private EditText createSearchEditText() {
+    private EditText createSearchEditText(float r) {
         EditText et = new EditText(this);
-        et.setHint("\uD83D\uDD0D Search shows or ask Aura AI\u2026");
+        et.setHint("Search shows or ask Aura AI\u2026");
         et.setHintTextColor(GlassTheme.TEXT_MUTED);
         et.setTextColor(GlassTheme.TEXT_PRIMARY);
         et.setTextSize(12f);
         et.setSingleLine(true);
+        et.setIncludeFontPadding(false);
+        et.setGravity(Gravity.CENTER_VERTICAL);
+        et.setPadding(dp(8), 0, dp(8), 0);
         et.setBackground(null);
+        et.setOnFocusChangeListener((v, focused) -> {
+            if (searchBox != null) {
+                searchBox.setBackground(focused
+                    ? GlassTheme.focusRounded(Color.WHITE, GlassTheme.ACCENT, dp(2), r)
+                    : GlassTheme.glassCard(r));
+            }
+        });
         et.setOnEditorActionListener((v, actionId, ev) -> {
             runSearchQuery(et.getText().toString());
             return true;
@@ -192,9 +220,13 @@ public class AuraActivity extends Activity implements
     private HorizontalScrollView buildChipsScroll() {
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         hsv.setHorizontalScrollBarEnabled(false);
-        hsv.setPadding(dp(10), 0, dp(10), 0);
+        hsv.setClipChildren(false);
+        hsv.setClipToPadding(false);
+        hsv.setPadding(dp(10), dp(2), dp(10), dp(2));
         chipsRow = new LinearLayout(this);
         chipsRow.setOrientation(LinearLayout.HORIZONTAL);
+        chipsRow.setGravity(Gravity.CENTER_VERTICAL);
+        chipsRow.setClipChildren(false);
         hsv.addView(chipsRow);
         return hsv;
     }
@@ -204,7 +236,7 @@ public class AuraActivity extends Activity implements
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         slp.topMargin = dp(56);
-        slp.leftMargin = dp(GlassTheme.NAV_COLLAPSED_W + 16);
+        slp.leftMargin = dp(GlassTheme.NAV_COLLAPSED_W + 20);
         searchOverlay.setLayoutParams(slp);
         rootLayout.addView(searchOverlay);
         detailOverlay = DetailOverlay.build(this, this);
@@ -236,7 +268,7 @@ public class AuraActivity extends Activity implements
         populateTraversalChips();
         JSONArray cached = db.getProfileRecommendations(activeProfile);
         if (cached.length() > 0) renderHomeContent(cached);
-        setBannerText("Syncing personalized recommendations\u2026", true);
+        setBannerText("Updating recommendations\u2026", true);
         bgPool.submit(() -> {
             JSONArray history = db.listHistory(activeProfile);
             JSONObject np = history.length() > 0 ? history.optJSONObject(0) : null;
@@ -263,8 +295,8 @@ public class AuraActivity extends Activity implements
         chipsRow.removeAllViews();
         for (String chip : db.getTraversalChips(activeProfile)) {
             TextView btn = GlassTheme.makeGlassButton(this, "\u2726 " + chip);
-            btn.setTextSize(11f);
-            btn.setPadding(dp(10), dp(4), dp(10), dp(4));
+            btn.setTextSize(10.5f);
+            btn.setPadding(dp(10), dp(5), dp(10), dp(5));
             LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
             lp.rightMargin = dp(6);
             btn.setLayoutParams(lp);
@@ -279,21 +311,31 @@ public class AuraActivity extends Activity implements
         HeroSliderBuilder.setItems(heroSlider, heroList, this, this);
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
         railsContainer.removeAllViews();
-        addContinueAndAppsStrip();
+        railsContainer.addView(RailBuilder.buildAppsDock(this, discoverTvApps(), this));
+        addContinueWatchingIfPresent();
         addCategorizedRails(all);
+        if (!initialFocusSet) {
+            initialFocusSet = true;
+            ui.post(() -> HeroSliderBuilder.requestInitialFocus(heroSlider));
+        }
     }
 
-    private void addContinueAndAppsStrip() {
-        LinearLayout strip = new LinearLayout(this);
-        strip.setOrientation(LinearLayout.HORIZONTAL);
-        List<JSONObject> history = toJsonList(db.listHistory(activeProfile));
-        if (!history.isEmpty()) {
-            LinearLayout cw = RailBuilder.buildContinueWatching(this, history, this);
-            strip.addView(cw, GlassTheme.weightParams(1f));
+    private void addContinueWatchingIfPresent() {
+        List<JSONObject> rawHistory = toJsonList(db.listHistory(activeProfile));
+        List<JSONObject> filtered = new ArrayList<>();
+        for (JSONObject item : rawHistory) {
+            String title = item.optString("title", "");
+            String app = item.optString("app_name", item.optString("app", "")).toLowerCase();
+            String pkg = item.optString("app_pkg", "").toLowerCase();
+            if (title.isEmpty()) continue;
+            if (app.contains("recommended") || app.contains("youtube") || pkg.contains("smarttube") || pkg.contains("youtube")) {
+                continue;
+            }
+            filtered.add(item);
         }
-        LinearLayout apps = RailBuilder.buildAppsDock(this, getDefaultStreamingApps(), this);
-        strip.addView(apps, GlassTheme.weightParams(1f));
-        railsContainer.addView(strip, GlassTheme.matchWrapParams());
+        if (!filtered.isEmpty()) {
+            railsContainer.addView(RailBuilder.buildContinueWatching(this, filtered, this));
+        }
     }
 
     private void addCategorizedRails(List<JSONObject> all) {
@@ -315,16 +357,48 @@ public class AuraActivity extends Activity implements
         }
     }
 
-    private List<JSONObject> getDefaultStreamingApps() {
+    private List<JSONObject> discoverTvApps() {
         List<JSONObject> list = new ArrayList<>();
-        addAppJson(list, "Netflix", "com.netflix.ninja", "#E50914");
-        addAppJson(list, "Prime Video", "com.amazon.amazonvideo.livingroom", "#00A8E1");
-        addAppJson(list, "Hotstar", "in.startv.hotstar", "#1D4ED8");
-        addAppJson(list, "Apple TV+", "com.apple.atve.androidtv.appletv", "#1A1A1A");
-        addAppJson(list, "YouTube", "org.smarttube.stable", "#FF0000");
-        addAppJson(list, "SonyLIV", "com.sonyliv", "#141414");
-        addAppJson(list, "ZEE5", "com.graymatrix.did", "#8B22AE");
+        Set<String> added = new HashSet<>();
+        added.add(getPackageName());
+        added.add("com.spocky.projengmenu");
+        addFallbackStreamingApps(list, added);
+        PackageManager pm = getPackageManager();
+        Intent leanback = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
+        List<ResolveInfo> resolved = pm.queryIntentActivities(leanback, 0);
+        if (resolved != null) {
+            for (ResolveInfo ri : resolved) {
+                if (ri.activityInfo == null) continue;
+                String pkg = ri.activityInfo.packageName;
+                if (added.contains(pkg)) continue;
+                CharSequence lbl = ri.loadLabel(pm);
+                String name = lbl != null ? lbl.toString() : pkg;
+                if (name.toLowerCase().contains("phone media")) continue;
+                added.add(pkg);
+                addAppJson(list, name, pkg, "#1E293B");
+            }
+        }
         return list;
+    }
+
+    private void addFallbackStreamingApps(List<JSONObject> list, Set<String> added) {
+        String[][] defaults = {
+            {"Netflix", "com.netflix.ninja", "#E50914"},
+            {"JioHotstar", "in.startv.hotstar", "#1D4ED8"},
+            {"Prime Video", "com.amazon.amazonvideo.livingroom", "#00A8E1"},
+            {"YouTube", "com.google.android.youtube.tv", "#FF0000"},
+            {"SmartTube", "org.smarttube.stable", "#DC2626"},
+            {"MX Player", "com.mxtech.videoplayer.television", "#2563EB"},
+            {"Apple TV+", "com.apple.atve.androidtv.appletv", "#1A1A1A"},
+            {"SonyLIV", "com.sonyliv", "#141414"},
+            {"ZEE5", "com.graymatrix.did", "#8B22AE"}
+        };
+        for (String[] d : defaults) {
+            if (!added.contains(d[1])) {
+                added.add(d[1]);
+                addAppJson(list, d[0], d[1], d[2]);
+            }
+        }
     }
 
     private void addAppJson(List<JSONObject> list, String name, String pkg, String color) {
@@ -445,6 +519,20 @@ public class AuraActivity extends Activity implements
         launchMediaItem(item);
     }
 
+    @Override
+    public void onMoveUpFromTopRail() {
+        if (mainScroll != null) mainScroll.smoothScrollTo(0, 0);
+        HeroSliderBuilder.requestInitialFocus(heroSlider);
+    }
+
+    @Override
+    public void onMoveLeftToNav() {
+        if (navPanel != null) {
+            NavPanelBuilder.setExpanded(navPanel, true, this);
+            navPanel.requestFocus();
+        }
+    }
+
     // ── Callbacks: SearchOverlay & DetailOverlay ─────────────────────────
 
     private void runSearchQuery(String query) {
@@ -548,14 +636,14 @@ public class AuraActivity extends Activity implements
         et.setText(db.getSetting("gemini_api_key", ""));
         et.setHint("Gemini API Key (optional — works offline without key)");
         new AlertDialog.Builder(this)
-            .setTitle("Aura Settings · Remote at :" + REMOTE_PORT)
+            .setTitle("Aura Settings \u00B7 Phone Remote at :" + REMOTE_PORT)
             .setView(et)
-            .setPositiveButton("Save", (d, w) -> {
+            .setPositiveButton("Save Key", (d, w) -> {
                 db.setSetting("gemini_api_key", et.getText().toString().trim());
                 refreshAllData(true);
             })
-            .setNeutralButton("QR Remote", (d, w) -> onQrOpen())
-            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Android TV Settings", (d, w) -> openSystemSetting("sys_all"))
+            .setNegativeButton("Close", null)
             .show();
     }
 
@@ -605,8 +693,10 @@ public class AuraActivity extends Activity implements
             if (li != null) {
                 li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(li);
+                return;
             }
         } catch (Exception ignored) {}
+        Toast.makeText(this, "App not installed: " + pkg, Toast.LENGTH_SHORT).show();
     }
 
     @Override
@@ -622,6 +712,7 @@ public class AuraActivity extends Activity implements
             }
             if (NavPanelBuilder.isExpanded(navPanel)) {
                 NavPanelBuilder.setExpanded(navPanel, false, this);
+                HeroSliderBuilder.requestInitialFocus(heroSlider);
                 return true;
             }
             return true;

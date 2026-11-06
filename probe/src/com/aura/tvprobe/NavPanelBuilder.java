@@ -4,7 +4,6 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
-import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -15,16 +14,14 @@ import org.json.JSONObject;
 import java.util.List;
 
 /**
- * Builds the collapsible left navigation panel for Aura TV launcher.
- * Glass-themed, D-pad navigable, expand/collapse with smooth animation.
+ * Clean, native-feeling collapsible left navigation bar for Aura TV.
  */
 public final class NavPanelBuilder {
 
     private static final String TAG_CONTENT = "nav_content";
     private static final String TAG_PROFILES = "nav_profiles";
     private static final String TAG_STATUS = "nav_status";
-    private static final String TAG_NAV_ITEM = "nav_item_";
-    private static final int ANIM_DURATION = 220;
+    private static final String TAG_BRAND = "nav_brand";
 
     private static final class PanelState {
         boolean expanded;
@@ -47,17 +44,18 @@ public final class NavPanelBuilder {
         scroll.addView(content, GlassTheme.matchWrapParams());
         panel.addView(scroll, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        populateCollapsed(panel, content, ctx, callback);
+        populateItems(panel, content, ctx, callback);
         return panel;
     }
 
     public static void setExpanded(LinearLayout panel, boolean expanded, Context ctx) {
         if (isExpanded(panel) == expanded) return;
-        PanelState st = getState(panel);
-        st.expanded = expanded;
+        getState(panel).expanded = expanded;
         int targetW = dp(ctx, expanded ? GlassTheme.NAV_EXPANDED_W : GlassTheme.NAV_COLLAPSED_W);
-        animateWidth(panel, targetW);
-        updateContentVisibility(panel, expanded);
+        ViewGroup.LayoutParams lp = panel.getLayoutParams();
+        lp.width = targetW;
+        panel.setLayoutParams(lp);
+        updateContentVisibility(panel, expanded, ctx);
     }
 
     public static boolean isExpanded(LinearLayout panel) {
@@ -80,7 +78,12 @@ public final class NavPanelBuilder {
                                      String ram, String remotePort) {
         LinearLayout statusBox = findByTag(panel, TAG_STATUS);
         if (statusBox == null) return;
-        updateStatusText(statusBox, serverStatus, ram, remotePort);
+        statusBox.removeAllViews();
+        Context ctx = statusBox.getContext();
+        TextView tv = GlassTheme.makeText(ctx,
+            serverStatus + " \u00B7 " + ram + " \u00B7 :" + remotePort,
+            9f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
+        statusBox.addView(tv, GlassTheme.wrapParams());
     }
 
     private static PanelState getState(LinearLayout panel) {
@@ -93,10 +96,14 @@ public final class NavPanelBuilder {
     private static LinearLayout createPanel(Context ctx, NavCallback cb) {
         LinearLayout panel = new LinearLayout(ctx);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackground(GlassTheme.glassPanel(dp(ctx, 20)));
-        panel.setElevation(dp(ctx, 8));
+        GradientDrawable bg = GlassTheme.solidRounded(Color.argb(242, 255, 255, 255), dp(ctx, 18));
+        bg.setStroke(dp(ctx, 1), GlassTheme.BORDER_STRONG);
+        panel.setBackground(bg);
+        panel.setElevation(dp(ctx, 14));
         int w = dp(ctx, GlassTheme.NAV_COLLAPSED_W);
-        panel.setLayoutParams(new FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.MATCH_PARENT);
+        lp.setMargins(dp(ctx, 6), dp(ctx, 8), 0, dp(ctx, 8));
+        panel.setLayoutParams(lp);
         PanelState st = new PanelState();
         st.callback = cb;
         panel.setTag(st);
@@ -119,24 +126,33 @@ public final class NavPanelBuilder {
         return content;
     }
 
-    private static void populateCollapsed(LinearLayout panel, LinearLayout content,
-                                           Context ctx, NavCallback cb) {
+    private static void populateItems(LinearLayout panel, LinearLayout content,
+                                       Context ctx, NavCallback cb) {
         addBrandLogo(content, ctx);
         addProfilesSection(panel, content, ctx, cb);
-        addNavSection(panel, content, ctx, cb);
         addDivider(content, ctx);
-        addHdmiSection(panel, content, ctx, cb);
-        addSystemSection(panel, content, ctx, cb);
+        addNavItem(panel, content, ctx, "\uD83C\uDFE0", "Home", v -> cb.onNavigate("home"));
+        addNavItem(panel, content, ctx, "\u2728", "Guide AI", v -> cb.onNavigate("guide_ai"));
+        addNavItem(panel, content, ctx, "\uD83C\uDFAC", "Watched", v -> cb.onNavigate("watched"));
+        addDivider(content, ctx);
+        addNavItem(panel, content, ctx, "H1", "HDMI 1", v -> cb.onHdmiSelect(1));
+        addNavItem(panel, content, ctx, "H2", "HDMI 2", v -> cb.onHdmiSelect(2));
+        addNavItem(panel, content, ctx, "\uD83D\uDCF6", "Wi-Fi & Net", v -> cb.onNavigate("sys_wi-fi"));
+        addDivider(content, ctx);
+        addNavItem(panel, content, ctx, "\uD83D\uDCF1", "Phone Remote", v -> cb.onQrOpen());
+        addNavItem(panel, content, ctx, "\u2699", "Settings", v -> cb.onSettingsOpen());
         addStatusSection(content, ctx);
-        addBottomActions(panel, content, ctx, cb);
     }
 
     private static void addBrandLogo(LinearLayout content, Context ctx) {
-        TextView logo = GlassTheme.makeText(ctx, "A", 20, GlassTheme.ACCENT, GlassTheme.FONT_BOLD, 1);
+        TextView logo = GlassTheme.makeText(ctx, "A", 18f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
         logo.setGravity(Gravity.CENTER);
-        logo.setPadding(0, 0, 0, dp(ctx, 8));
-        logo.setTag(TAG_NAV_ITEM + "brand");
-        content.addView(logo, GlassTheme.wrapParams());
+        logo.setBackground(GlassTheme.solidRounded(GlassTheme.ACCENT, dp(ctx, 10)));
+        logo.setTag(TAG_BRAND);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(ctx, 34), dp(ctx, 34));
+        lp.bottomMargin = dp(ctx, 10);
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        content.addView(logo, lp);
     }
 
     private static void addProfilesSection(LinearLayout panel, LinearLayout content,
@@ -146,134 +162,43 @@ public final class NavPanelBuilder {
         profiles.setGravity(Gravity.CENTER_HORIZONTAL);
         profiles.setTag(TAG_PROFILES);
         content.addView(profiles, GlassTheme.matchWrapParams());
-        View item = makeNavItem(panel, ctx, "+", "Add Profile", false, v -> cb.onAddProfile());
-        styleDashedBorder(item, ctx);
-        content.addView(item, itemParams(ctx));
-    }
-
-    private static void addNavSection(LinearLayout panel, LinearLayout content,
-                                       Context ctx, NavCallback cb) {
-        addSectionLabel(content, ctx, "MENU");
-        addNavButton(panel, content, ctx, "\uD83C\uDFE0", "Home", "home", true, cb);
-        addNavButton(panel, content, ctx, "\u2728", "Guide AI", "guide_ai", false, cb);
-        addNavButton(panel, content, ctx, "\u2705", "Watched", "watched", false, cb);
-    }
-
-    private static void addNavButton(LinearLayout panel, LinearLayout parent, Context ctx,
-                                      String icon, String label, String dest,
-                                      boolean active, NavCallback cb) {
-        View item = makeNavItem(panel, ctx, icon, label, active, v -> cb.onNavigate(dest));
-        item.setTag(TAG_NAV_ITEM + dest);
-        parent.addView(item, itemParams(ctx));
-    }
-
-    private static void addHdmiSection(LinearLayout panel, LinearLayout content,
-                                        Context ctx, NavCallback cb) {
-        addSectionLabel(content, ctx, "INPUTS");
-        for (int port = 1; port <= 3; port++) {
-            addHdmiItem(panel, content, ctx, port, cb);
-        }
-    }
-
-    private static void addHdmiItem(LinearLayout panel, LinearLayout parent,
-                                     Context ctx, int port, NavCallback cb) {
-        String label = "HDMI " + port;
-        View item = makeNavItem(panel, ctx, "\uD83D\uDCFA", label, false, v -> cb.onHdmiSelect(port));
-        if (port == 1) addBadge((LinearLayout) item, ctx, "Live", GlassTheme.COLOR_SUCCESS);
-        parent.addView(item, itemParams(ctx));
-    }
-
-    private static void addSystemSection(LinearLayout panel, LinearLayout content,
-                                          Context ctx, NavCallback cb) {
-        addSectionLabel(content, ctx, "SYSTEM");
-        addSystemItem(panel, content, ctx, "\uD83D\uDCF6", "Wi-Fi", "5G", cb);
-        addSystemItem(panel, content, ctx, "\uD83D\uDD35", "Bluetooth", null, cb);
-        addSystemItem(panel, content, ctx, "\uD83D\uDD06", "Display", null, cb);
-        addSystemItem(panel, content, ctx, "\uD83D\uDD0A", "Audio", null, cb);
-    }
-
-    private static void addSystemItem(LinearLayout panel, LinearLayout parent, Context ctx,
-                                       String icon, String label, String badge, NavCallback cb) {
-        LinearLayout item = (LinearLayout) makeNavItem(panel, ctx, icon, label, false,
-            v -> cb.onNavigate("sys_" + label.toLowerCase()));
-        if (badge != null) addBadge(item, ctx, badge, GlassTheme.ACCENT);
-        parent.addView(item, itemParams(ctx));
+        addNavItem(panel, content, ctx, "+", "New Profile", v -> cb.onAddProfile());
     }
 
     private static void addStatusSection(LinearLayout content, Context ctx) {
         LinearLayout statusBox = new LinearLayout(ctx);
         statusBox.setOrientation(LinearLayout.VERTICAL);
-        statusBox.setBackground(GlassTheme.glassSubtle(dp(ctx, 10)));
-        statusBox.setPadding(dp(ctx, 8), dp(ctx, 5), dp(ctx, 8), dp(ctx, 5));
+        statusBox.setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 2));
         statusBox.setTag(TAG_STATUS);
         statusBox.setVisibility(View.GONE);
-        content.addView(statusBox, itemParams(ctx));
+        content.addView(statusBox, GlassTheme.matchWrapParams());
     }
 
-    private static void updateStatusText(LinearLayout statusBox, String server,
-                                          String ram, String port) {
-        statusBox.removeAllViews();
-        Context ctx = statusBox.getContext();
-        addStatusLine(statusBox, ctx, "Server: \u25CF " + server);
-        addStatusLine(statusBox, ctx, "RAM: " + ram);
-        addStatusLine(statusBox, ctx, "Remote: :" + port);
-    }
-
-    private static void addStatusLine(LinearLayout box, Context ctx, String text) {
-        TextView tv = GlassTheme.makeText(ctx, text, 9, GlassTheme.TEXT_MUTED, GlassTheme.FONT_REGULAR, 1);
-        box.addView(tv, GlassTheme.wrapParams());
-    }
-
-    private static void addBottomActions(LinearLayout panel, LinearLayout content,
-                                          Context ctx, NavCallback cb) {
-        addDivider(content, ctx);
-        View qr = makeNavItem(panel, ctx, "\uD83D\uDCF1", "Mobile Remote", false, v -> cb.onQrOpen());
-        content.addView(qr, itemParams(ctx));
-        View settings = makeNavItem(panel, ctx, "\u2699\uFE0F", "Settings", false, v -> cb.onSettingsOpen());
-        content.addView(settings, itemParams(ctx));
-    }
-
-    private static View makeNavItem(LinearLayout panel, Context ctx, String icon, String label,
-                                     boolean active, View.OnClickListener click) {
+    private static void addNavItem(LinearLayout panel, LinearLayout parent, Context ctx,
+                                    String badgeText, String label, View.OnClickListener click) {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(ctx, 6), dp(ctx, 5), dp(ctx, 6), dp(ctx, 5));
-        addIconAndLabel(row, ctx, icon, label);
-        if (active) row.setBackground(GlassTheme.solidRounded(GlassTheme.ACCENT_BG, dp(ctx, 10)));
-        applyFocusAndClick(panel, row, click, ctx);
-        return row;
-    }
-
-    private static void addIconAndLabel(LinearLayout row, Context ctx,
-                                         String icon, String label) {
-        TextView iconTv = GlassTheme.makeText(ctx, icon, 14, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_REGULAR, 1);
-        iconTv.setGravity(Gravity.CENTER);
-        iconTv.setMinWidth(dp(ctx, 26));
-        row.addView(iconTv, GlassTheme.wrapParams());
-        TextView labelTv = GlassTheme.makeText(ctx, label, 12, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_MEDIUM, 1);
-        labelTv.setPadding(dp(ctx, 8), 0, 0, 0);
+        row.setGravity(Gravity.CENTER);
+        row.setPadding(dp(ctx, 6), dp(ctx, 6), dp(ctx, 6), dp(ctx, 6));
+        TextView iconPill = createIconPill(ctx, badgeText);
+        row.addView(iconPill);
+        TextView labelTv = GlassTheme.makeText(ctx, label, 12f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        labelTv.setPadding(dp(ctx, 10), 0, 0, 0);
         labelTv.setVisibility(View.GONE);
         row.addView(labelTv, GlassTheme.wrapParams());
+        bindRowFocusAndClick(panel, row, iconPill, labelTv, false, click, ctx);
+        parent.addView(row, itemParams(ctx));
     }
 
-    private static void applyFocusAndClick(LinearLayout panel, View item,
-                                            View.OnClickListener click, Context ctx) {
-        item.setFocusable(true);
-        item.setClickable(true);
-        if (click != null) item.setOnClickListener(click);
-        item.setOnFocusChangeListener((v, hasFocus) -> {
-            applyFocusHighlight(v, hasFocus, ctx);
-            if (hasFocus) setExpanded(panel, true, ctx);
-        });
-    }
-
-    private static void applyFocusHighlight(View v, boolean hasFocus, Context ctx) {
-        if (hasFocus) {
-            v.setBackground(GlassTheme.solidRounded(GlassTheme.ACCENT_BG, dp(ctx, 10)));
-        } else {
-            v.setBackground(null);
-        }
+    private static TextView createIconPill(Context ctx, String badgeText) {
+        TextView tv = GlassTheme.makeText(ctx, badgeText, 12f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        tv.setGravity(Gravity.CENTER);
+        int s = dp(ctx, 32);
+        tv.setLayoutParams(new LinearLayout.LayoutParams(s, s));
+        tv.setBackground(GlassTheme.solidRounded(GlassTheme.BG_AMBIENT, dp(ctx, 9)));
+        return tv;
     }
 
     private static void addProfileItem(LinearLayout panel, LinearLayout container,
@@ -282,61 +207,53 @@ public final class NavPanelBuilder {
         String id = profile.optString("id", "");
         String name = profile.optString("name", "User");
         boolean active = id.equals(activeId);
-        View item = makeProfileRow(panel, ctx, name, active, id, expanded, cb);
-        container.addView(item, itemParams(ctx));
-    }
-
-    private static View makeProfileRow(LinearLayout panel, Context ctx, String name,
-                                        boolean active, String id, boolean expanded, NavCallback cb) {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(expanded ? (Gravity.START | Gravity.CENTER_VERTICAL) : Gravity.CENTER);
-        row.setPadding(dp(ctx, 6), dp(ctx, 4), dp(ctx, 6), dp(ctx, 4));
-        addAvatarCircle(row, ctx, name, active);
-        addProfileLabel(row, ctx, name, expanded);
-        if (active) row.setBackground(GlassTheme.solidRounded(GlassTheme.ACCENT_BG, dp(ctx, 10)));
-        row.setTag(TAG_NAV_ITEM + "profile_" + id);
-        applyFocusAndClick(panel, row, cb != null ? v -> cb.onProfileSelected(id) : null, ctx);
-        return row;
-    }
-
-    private static void addAvatarCircle(LinearLayout row, Context ctx,
-                                         String name, boolean active) {
-        String initial = name.isEmpty() ? "U" : name.substring(0, 1).toUpperCase();
-        int color = active ? GlassTheme.ACCENT : GlassTheme.TEXT_MUTED;
-        TextView avatar = GlassTheme.makeText(ctx, initial, 11, Color.WHITE, GlassTheme.FONT_BOLD, 1);
-        avatar.setGravity(Gravity.CENTER);
-        int size = dp(ctx, 26);
-        avatar.setBackground(GlassTheme.solidRounded(color, dp(ctx, 13)));
-        row.addView(avatar, new LinearLayout.LayoutParams(size, size));
-    }
-
-    private static void addProfileLabel(LinearLayout row, Context ctx, String name, boolean exp) {
-        TextView label = GlassTheme.makeText(ctx, name, 12, GlassTheme.TEXT_PRIMARY,
-                                              GlassTheme.FONT_MEDIUM, 1);
-        label.setPadding(dp(ctx, 8), 0, 0, 0);
-        label.setVisibility(exp ? View.VISIBLE : View.GONE);
+        row.setPadding(dp(ctx, 6), dp(ctx, 5), dp(ctx, 6), dp(ctx, 5));
+        TextView avatar = createAvatar(ctx, name, active);
+        row.addView(avatar);
+        TextView label = GlassTheme.makeText(ctx, name, 12f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        label.setPadding(dp(ctx, 10), 0, 0, 0);
+        label.setVisibility(expanded ? View.VISIBLE : View.GONE);
         row.addView(label, GlassTheme.wrapParams());
+        if (active) row.setBackground(GlassTheme.solidRounded(GlassTheme.ACCENT_LIGHT, dp(ctx, 10)));
+        bindRowFocusAndClick(panel, row, avatar, label, active,
+            cb != null ? v -> cb.onProfileSelected(id) : null, ctx);
+        container.addView(row, itemParams(ctx));
     }
 
-    private static void addBadge(LinearLayout row, Context ctx, String text, int color) {
-        TextView badge = GlassTheme.makeText(ctx, text, 8, Color.WHITE, GlassTheme.FONT_BOLD, 1);
-        badge.setPadding(dp(ctx, 5), dp(ctx, 1), dp(ctx, 5), dp(ctx, 1));
-        badge.setBackground(GlassTheme.solidRounded(color, dp(ctx, 6)));
-        badge.setGravity(Gravity.CENTER);
-        badge.setVisibility(View.GONE);
-        LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
-        lp.setMargins(dp(ctx, 4), 0, 0, 0);
-        row.addView(badge, lp);
+    private static TextView createAvatar(Context ctx, String name, boolean active) {
+        String initial = name.isEmpty() ? "U" : name.substring(0, 1).toUpperCase();
+        int bg = active ? GlassTheme.ACCENT : GlassTheme.TEXT_SECONDARY;
+        TextView avatar = GlassTheme.makeText(ctx, initial, 12f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
+        avatar.setGravity(Gravity.CENTER);
+        int s = dp(ctx, 32);
+        avatar.setLayoutParams(new LinearLayout.LayoutParams(s, s));
+        avatar.setBackground(GlassTheme.solidRounded(bg, dp(ctx, 16)));
+        return avatar;
     }
 
-    private static void addSectionLabel(LinearLayout parent, Context ctx, String text) {
-        TextView label = GlassTheme.makeText(ctx, text, 9, GlassTheme.TEXT_HINT,
-                                              GlassTheme.FONT_BOLD, 1);
-        label.setPadding(dp(ctx, 8), dp(ctx, 6), 0, dp(ctx, 2));
-        label.setVisibility(View.GONE);
-        label.setTag(TAG_NAV_ITEM + "section_" + text);
-        parent.addView(label, GlassTheme.wrapParams());
+    private static void bindRowFocusAndClick(LinearLayout panel, LinearLayout row,
+                                              TextView iconView, TextView labelView,
+                                              boolean isActiveProfile,
+                                              View.OnClickListener click, Context ctx) {
+        row.setFocusable(true);
+        row.setClickable(true);
+        if (click != null) row.setOnClickListener(click);
+        row.setOnFocusChangeListener((v, focused) -> {
+            if (focused) {
+                setExpanded(panel, true, ctx);
+                row.setBackground(GlassTheme.focusRounded(
+                    GlassTheme.ACCENT, Color.WHITE, dp(ctx, 2), dp(ctx, 10)));
+                labelView.setTextColor(Color.WHITE);
+            } else {
+                row.setBackground(isActiveProfile
+                    ? GlassTheme.solidRounded(GlassTheme.ACCENT_LIGHT, dp(ctx, 10)) : null);
+                labelView.setTextColor(GlassTheme.TEXT_PRIMARY);
+            }
+        });
     }
 
     private static void addDivider(LinearLayout parent, Context ctx) {
@@ -344,71 +261,46 @@ public final class NavPanelBuilder {
         divider.setBackgroundColor(GlassTheme.DIVIDER);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 1));
-        lp.setMargins(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4));
+        lp.setMargins(dp(ctx, 6), dp(ctx, 4), dp(ctx, 6), dp(ctx, 4));
         parent.addView(divider, lp);
-    }
-
-    private static void styleDashedBorder(View item, Context ctx) {
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.RECTANGLE);
-        d.setCornerRadius(dp(ctx, 10));
-        d.setStroke(dp(ctx, 1), GlassTheme.TEXT_MUTED, dp(ctx, 4), dp(ctx, 3));
-        d.setColor(Color.TRANSPARENT);
-        item.setBackground(d);
     }
 
     private static LinearLayout.LayoutParams itemParams(Context ctx) {
         LinearLayout.LayoutParams lp = GlassTheme.matchWrapParams();
-        lp.setMargins(0, dp(ctx, 1), 0, dp(ctx, 1));
+        lp.setMargins(0, dp(ctx, 2), 0, dp(ctx, 2));
         return lp;
     }
 
-    private static void animateWidth(LinearLayout panel, int targetW) {
-        panel.animate().cancel();
-        ViewGroup.LayoutParams lp = panel.getLayoutParams();
-        lp.width = targetW;
-        panel.setLayoutParams(lp);
-    }
-
-    private static void updateContentVisibility(LinearLayout panel, boolean expanded) {
+    private static void updateContentVisibility(LinearLayout panel, boolean expanded, Context ctx) {
         LinearLayout content = findByTag(panel, TAG_CONTENT);
         if (content == null) return;
         for (int i = 0; i < content.getChildCount(); i++) {
-            updateChildVisibility(content.getChildAt(i), expanded);
+            toggleRowMode(content.getChildAt(i), expanded);
         }
         LinearLayout profiles = findByTag(content, TAG_PROFILES);
         if (profiles != null) {
             for (int i = 0; i < profiles.getChildCount(); i++) {
-                updateChildVisibility(profiles.getChildAt(i), expanded);
+                toggleRowMode(profiles.getChildAt(i), expanded);
             }
         }
-        updatePanelGravity(content, expanded);
-    }
-
-    private static void updateChildVisibility(View child, boolean expanded) {
-        if (child instanceof LinearLayout && !TAG_PROFILES.equals(child.getTag())
-                && !TAG_STATUS.equals(child.getTag())) {
-            updateRowChildren((LinearLayout) child, expanded);
+        TextView brand = findByTag(content, TAG_BRAND);
+        if (brand != null) brand.setText(expanded ? "AURA AI" : "A");
+        if (brand != null) {
+            brand.getLayoutParams().width = dp(ctx, expanded ? 120 : 34);
+            brand.requestLayout();
         }
-        if (child.getTag() != null && child.getTag().toString().startsWith(TAG_NAV_ITEM + "section_")) {
-            child.setVisibility(expanded ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    private static void updateRowChildren(LinearLayout row, boolean expanded) {
-        for (int j = 0; j < row.getChildCount(); j++) {
-            View v = row.getChildAt(j);
-            if (j > 0 && v instanceof TextView) {
-                v.setVisibility(expanded ? View.VISIBLE : View.GONE);
-            }
-        }
-        row.setGravity(expanded ? (Gravity.START | Gravity.CENTER_VERTICAL) : Gravity.CENTER);
-    }
-
-    private static void updatePanelGravity(LinearLayout content, boolean expanded) {
-        content.setGravity(expanded ? Gravity.START : Gravity.CENTER_HORIZONTAL);
         LinearLayout statusBox = findByTag(content, TAG_STATUS);
         if (statusBox != null) statusBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
+    }
+
+    private static void toggleRowMode(View child, boolean expanded) {
+        if (!(child instanceof LinearLayout)) return;
+        if (TAG_PROFILES.equals(child.getTag()) || TAG_STATUS.equals(child.getTag())) return;
+        LinearLayout row = (LinearLayout) child;
+        if (row.getChildCount() >= 2 && row.getChildAt(1) instanceof TextView) {
+            row.getChildAt(1).setVisibility(expanded ? View.VISIBLE : View.GONE);
+        }
+        row.setGravity(expanded ? (Gravity.START | Gravity.CENTER_VERTICAL) : Gravity.CENTER);
     }
 
     @SuppressWarnings("unchecked")
