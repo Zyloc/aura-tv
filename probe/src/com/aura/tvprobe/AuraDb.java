@@ -290,8 +290,10 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public String getDefaultTasteGuide() {
         String def = getSetting("default_guide_ai", "").trim();
+        int curYear = JustWatchGraph.getCurrentYear();
+        int minYear = JustWatchGraph.getDefaultMinModernYear();
         if (def.isEmpty()) {
-            return "Modern critically acclaimed releases (2020-2026, IMDb 7.5+), gripping storytelling, smart pacing, streaming on Netflix, Prime Video, Disney+ Hotstar, or Apple TV+";
+            return "Modern critically acclaimed releases (" + minYear + "-" + curYear + ", IMDb 7.5+), gripping storytelling, smart pacing, streaming on Netflix, Prime Video, Disney+ Hotstar, or Apple TV+";
         }
         return def;
     }
@@ -313,13 +315,14 @@ public class AuraDb extends SQLiteOpenHelper {
             } catch (Exception ignored) {}
         }
         if (out.isEmpty()) {
+            int curYear = JustWatchGraph.getCurrentYear();
             List<String> anchors = getDynamicTasteAnchors(profileId);
             if (!anchors.isEmpty()) {
                 out.add("Similar to " + anchors.get(0));
             } else {
-                out.add("2024–2026 Prestige Series");
+                out.add((curYear - 2) + "–" + curYear + " Prestige Series");
             }
-            out.add("Mind-Bending Sci-Fi (2021–2026)");
+            out.add("Mind-Bending Sci-Fi");
             out.add("Gripping Crime Thrillers");
         }
         return out;

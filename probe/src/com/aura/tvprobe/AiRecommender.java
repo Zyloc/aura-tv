@@ -59,13 +59,16 @@ public class AiRecommender {
         int minModernYear = JustWatchGraph.getDefaultMinModernYear();
         List<String> watchedList = collectWatchedTitles(history);
 
-        // Agent Step 1: Multi-Hop Graph Traversal from Watched Shows & Guide AI Seeds
-        if (progress != null) progress.onStep("Agent 1/2 · Traversing " + minModernYear + "–" + currentYear + " graph from watched & Guide AI…");
-        JSONObject seedPlan = buildFastSeedPlan(profileId, "");
+        // Agent Step 1: LLM Query Planner guides primary queries + watched-show second-hop traversal seeds
+        if (progress != null) progress.onStep("Agent 1/3 · LLM planning queries & watched seeds…");
+        JSONObject seedPlan = planAgentSearchStrategy(profileId, "", watchedList, minModernYear, currentYear);
+
+        // Agent Step 2: Multi-Hop Graph Traversal from Watched Shows (2nd Query) & Guide AI Seeds
+        if (progress != null) progress.onStep("Agent 2/3 · Traversing " + minModernYear + "–" + currentYear + " graph from watched & Guide AI…");
         List<String> verifiedCandidates = executeMultiHopTraversal(profileId, seedPlan, minModernYear);
 
-        // Agent Step 2: LLM Agentic Curation, Ranking, Reasoning & Next-Hop Traversal Queries
-        if (progress != null) progress.onStep("Agent 2/2 · LLM ranking 20 modern (" + minModernYear + "–" + currentYear + ") picks…");
+        // Agent Step 3: LLM Agentic Curation, Ranking & Reasoning
+        if (progress != null) progress.onStep("Agent 3/3 · LLM ranking 20 modern (" + minModernYear + "–" + currentYear + ") picks…");
         String prompt = buildAgentRankingPrompt(profileId, nowPlaying, watchedList, verifiedCandidates, minModernYear, currentYear);
         for (String model : MODELS) {
             JSONArray raw = callGemini(model, prompt);
@@ -127,15 +130,16 @@ public class AiRecommender {
         List<String> watchedList = collectWatchedTitles(db.listHistory(profileId));
         String personalGuide = db.getProfileTaste(profileId);
         String defaultGuide = db.getDefaultTasteGuide();
+        String todayDate = JustWatchGraph.getCurrentDateString();
 
-        String prompt = "Current Date: November " + currentYear + ".\n" +
+        String prompt = "Current TV System Date: " + todayDate + " (titles released up to today in " + currentYear + " are valid).\n" +
             "User just watched/selected '" + seedTitle + "' and wants a second-hop traversal of similar modern titles.\n" +
             "Active Profile: '" + db.getProfileLabel(profileId) + "'.\n" +
             "Personal Guide AI: " + (personalGuide.isEmpty() ? "(Use Default Guide AI)" : personalGuide) + "\n" +
             "Default Guide AI: " + defaultGuide + "\n" +
             "Already Watched (STRICT EXCLUSION): " + watchedList.toString() + "\n" +
             "Graph Traversal Candidates for '" + seedTitle + "' (" + minModernYear + "-" + currentYear + "): " + candidateSummaries.toString() + "\n\n" +
-            "Select & rank 15 modern released titles (" + minModernYear + " to " + currentYear + " ONLY — NO pre-" + minModernYear + " old shows and NO 2027 unreleased titles) that someone who watched '" + seedTitle + "' will love next.\n" +
+            "Select & rank 15 modern released titles (" + minModernYear + " to " + currentYear + " ONLY — NO pre-" + minModernYear + " old shows and NO unreleased " + (currentYear + 1) + "+ titles) that someone who watched '" + seedTitle + "' will love next.\n" +
             "Return ONLY a JSON array of 15 objects with keys: 'title', 'app' (Netflix, Disney+ Hotstar, Prime Video, Apple TV+, SonyLIV, or ZEE5), 'genres', 'runtime_min' (integer), and 'reason' (1-2 sentences explaining why it connects to '" + seedTitle + "' and their taste).";
 
         for (String model : MODELS) {
@@ -163,7 +167,8 @@ public class AiRecommender {
         String ratingsFeedback = db.getRatingFeedbackSummary();
         List<String> anchors = db.getDynamicTasteAnchors(profileId);
 
-        String plannerPrompt = "You are Aura's Search Query Planner Agent. Current date: November " + currentYear + ".\n" +
+        String todayDate = JustWatchGraph.getCurrentDateString();
+        String plannerPrompt = "You are Aura's Search Query Planner Agent. Current TV System Date: " + todayDate + ".\n" +
             "Profile: '" + profileName + "'.\n" +
             "Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
             "Default Guide AI: " + defaultGuide + "\n" +
@@ -174,7 +179,7 @@ public class AiRecommender {
             "Task:\n" +
             "1. Plan 'primary_queries': 5 specific modern (" + minModernYear + "-" + currentYear + ") critically acclaimed show/movie titles that match the user's query and Guide AI.\n" +
             "2. Plan 'watched_traversal_seeds': 3 titles from the user's watched/rated list (or top affinity anchors) to run a second co-watch graph traversal query ('user watched X -> find what viewers watched next').\n" +
-            "3. Plan 'traversal_chips': 3 short clickable search-engine traversal phrases (max 24 chars each, e.g. 'Similar to " + (!anchors.isEmpty() ? anchors.get(0) : "Severance") + "', '2024-2026 Sci-Fi', 'High-Pace Thrillers').\n" +
+            "3. Plan 'traversal_chips': 3 short clickable search-engine traversal phrases (max 24 chars each, e.g. 'Similar to " + (!anchors.isEmpty() ? anchors.get(0) : "Severance") + "', '" + (currentYear - 2) + "-" + currentYear + " Sci-Fi', 'High-Pace Thrillers').\n" +
             "Return ONLY a JSON object with keys: 'primary_queries' (array of strings), 'watched_traversal_seeds' (array of strings), 'traversal_chips' (array of 3 strings).";
 
         String raw = callGeminiJson(plannerPrompt);
@@ -227,12 +232,16 @@ public class AiRecommender {
             if (!seedsToTraverse.contains(a) && seedsToTraverse.size() < 5) seedsToTraverse.add(a);
         }
 
-        ExecutorService pool = Executors.newFixedThreadPool(4);
-        // Hop 1: Execute LLM-planned search queries
+        ExecutorService pool = Executors.newFixedThreadPool(5);
+        // Hop 1: Execute LLM-planned search queries + direct title verification
         for (final String q : queriesToRun) {
             pool.submit(() -> {
+                JSONObject exact = JustWatchGraph.lookupTitleInIndia(q);
+                if (JustWatchGraph.isValidModernStreamingCandidate(exact, minModernYear, 7.0)) {
+                    addCandidateIfValid(exact, seenNorm, summaries);
+                }
                 JSONArray hits = JustWatchGraph.fetchDeterministicSearchCandidates(q, minModernYear);
-                for (int i = 0; i < hits.length() && i < 4; i++) {
+                for (int i = 0; i < hits.length() && i < 3; i++) {
                     addCandidateIfValid(hits.optJSONObject(i), seenNorm, summaries);
                 }
             });
@@ -297,8 +306,11 @@ public class AiRecommender {
         List<String> activeFilters = db.getActiveFilters(profileId);
         String cur = np != null ? (np.optString("series_title").isEmpty() ? np.optString("title") : np.optString("series_title")) : "";
 
+        String todayDate = JustWatchGraph.getCurrentDateString();
+        int recentPriorityStart = Math.max(minModernYear, currentYear - 5);
+
         return "You are Aura's Ranking & Reasoning Agent for Android TV in India.\n" +
-            "Current Date: November " + currentYear + " (2026 releases that are already out are valid; 2027+ titles are unreleased).\n" +
+            "Current TV System Date: " + todayDate + " (any title released up to " + todayDate + " in " + currentYear + " is valid; " + (currentYear + 1) + "+ titles are unreleased).\n" +
             "Active Profile: '" + profileName + "' (profile_id: " + profileId + ").\n" +
             "1. PERSONAL GUIDE AI (Highest Priority for " + profileName + "): " +
             (personalGuide.isEmpty() ? "(Use Default Guide AI and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
@@ -309,10 +321,10 @@ public class AiRecommender {
             "6. STRICT WATCHED EXCLUSION LIST (NEVER recommend any of these): " + watchedList.toString() + ".\n" +
             "7. MULTI-HOP GRAPH TRAVERSAL CANDIDATES (" + minModernYear + "–" + currentYear + " verified streaming in India): " + verifiedCandidates.toString() + ".\n\n" +
             "STRICT CURATION RULES:\n" +
-            "- MODERN RECENCY WINDOW: ONLY recommend shows and movies released between " + minModernYear + " and " + currentYear + " (strongly prioritize 2021–" + currentYear + " releases).\n" +
+            "- MODERN RECENCY WINDOW: ONLY recommend shows and movies released between " + minModernYear + " and " + currentYear + " (strongly prioritize " + recentPriorityStart + "–" + currentYear + " releases, including recent releases up to " + todayDate + ").\n" +
             "- NEVER recommend old shows/movies from the 1980s, 1990s, 2000s, or early 2010s (nothing older than " + minModernYear + ").\n" +
-            "- NEVER recommend unreleased 2027+ titles.\n" +
-            "- Select & rank 20 titles (for a 4-row x 5-column grid) combining the best matches from the Multi-Hop Graph Traversal Candidates with top 2021–" + currentYear + " releases on Netflix, Disney+ Hotstar, Prime Video, Apple TV+, SonyLIV, or ZEE5.\n" +
+            "- NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
+            "- Select & rank 20 titles (for a 4-row x 5-column grid) combining the best matches from the Multi-Hop Graph Traversal Candidates with top " + recentPriorityStart + "–" + currentYear + " releases on Netflix, Disney+ Hotstar, Prime Video, Apple TV+, SonyLIV, or ZEE5.\n" +
             "- For EVERY title, write a specific 1-2 sentence 'reason' (18-28 words) explaining WHY it was selected for '" + profileName + "' based on their watched shows, Personal Guide AI, or Default Guide AI.\n" +
             "Return ONLY a JSON array of 20 objects with keys: 'title', 'app' (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5), " +
             "'genres' (comma-separated), 'runtime_min' (integer minutes), and 'reason' (personalized explanation).";
@@ -422,7 +434,7 @@ public class AiRecommender {
                         JSONObject iObj = item.optJSONObject("i");
                         if (iObj != null && !iObj.optString("imageUrl").isEmpty()) {
                             res.put("year", y);
-                            res.put("poster_url", iObj.optString("imageUrl").replace("._V1_.jpg", "._V1_UX360_.jpg"));
+                            res.put("poster_url", iObj.optString("imageUrl").replace("._V1_.jpg", "._V1_UX400_.jpg"));
                             break;
                         }
                     }

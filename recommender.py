@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import datetime
 import json
 import urllib.parse
 from typing import Dict, List
@@ -80,6 +81,11 @@ def build_gemini_prompt(profile: str, current: Dict, history: List[Dict]) -> str
     )
     active_filters = get_active_filters(profile)
 
+    today_iso = datetime.date.today().isoformat()
+    cur_year = datetime.date.today().year
+    min_year = cur_year - 7
+    priority_start = cur_year - 5
+
     return (
         f"You are Aura, an AI TV & movie recommendation engine.\n"
         f"Active Household Profile: '{profile_name}' (id: {profile}).\n"
@@ -90,7 +96,7 @@ def build_gemini_prompt(profile: str, current: Dict, history: List[Dict]) -> str
         f"Active Filters: {active_filters}\n"
         f"Currently watching on TV: '{now_name}'.\n"
         f"Already Watched (STRICT EXCLUSION — DO NOT recommend): {seen}.\n"
-        "Current Date: November 2026. STRICT RULE: ONLY recommend modern released shows or movies from 2019 to 2026 (prioritizing 2021-2026, IMDb >= 7.4) currently streaming on subscription OTT in India. NEVER recommend old 1980s/1990s/2000s/early-2010s titles and NEVER recommend unreleased 2027+ titles.\n"
+        f"Current System Date: {today_iso}. STRICT RULE: ONLY recommend modern released shows or movies from {min_year} to {cur_year} (prioritizing {priority_start}-{cur_year}, including titles released up to {today_iso}) currently streaming on subscription OTT in India. NEVER recommend old 1980s/1990s/2000s/early-2010s titles and NEVER recommend unreleased {cur_year + 1}+ titles.\n"
         "Return ONLY a JSON array of 15 objects with keys: "
         "'title', 'app' (Prime Video, Netflix, Disney+ Hotstar, Apple TV+, SonyLIV, or ZEE5), "
         "'genre' (comma-separated genres), "

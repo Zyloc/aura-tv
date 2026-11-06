@@ -163,8 +163,10 @@ public class VoiceConcierge {
         }
         String personalGuide = db.getProfileTaste(profileId);
         String defaultGuide = db.getDefaultTasteGuide();
+        String todayDate = JustWatchGraph.getCurrentDateString();
+        int recentPriorityStart = Math.max(minModernYear, currentYear - 5);
         return "You are Aura's Agentic Search & Recommendation Engine for profile '" + db.getProfileLabel(profileId) + "'.\n" +
-            "Current Date: November " + currentYear + " (2026 releases that are out are valid; 2027+ are unreleased).\n" +
+            "Current TV System Date: " + todayDate + " (any title released up to " + todayDate + " in " + currentYear + " is valid; " + (currentYear + 1) + "+ are unreleased).\n" +
             "Personal Guide AI (for this profile): " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
             "Default Guide AI (global baseline): " + defaultGuide + "\n" +
             "STRICT EXCLUSION LIST — Already watched (NEVER recommend any of these): " + watched.toString() + "\n" +
@@ -174,12 +176,12 @@ public class VoiceConcierge {
             "User Search / Traversal Query: \"" + userText + "\"\n\n" +
             "STRICT RULES:\n" +
             "- If the user says they watched a title (e.g. 'watched X' or 'similar to X'), treat this as a second-hop traversal query and recommend modern titles similar to X.\n" +
-            "- MODERN RECENCY WINDOW: ONLY recommend released titles from " + minModernYear + " to " + currentYear + " (strongly prioritize 2021–" + currentYear + "). Do NOT recommend old 1980s, 1990s, 2000s, or early-2010s titles unless explicitly requested.\n" +
-            "- NEVER recommend unreleased 2027+ titles.\n" +
+            "- MODERN RECENCY WINDOW: ONLY recommend released titles from " + minModernYear + " to " + currentYear + " (strongly prioritize " + recentPriorityStart + "–" + currentYear + ", including recent releases up to " + todayDate + "). Do NOT recommend old 1980s, 1990s, 2000s, or early-2010s titles unless explicitly requested.\n" +
+            "- NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +
             "1. 'reply': Short 1-sentence summary of the search traversal.\n" +
             "2. 'results': Array of 15 unwatched modern (" + minModernYear + "–" + currentYear + ") titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their query & watched history).\n" +
-            "3. 'follow_ups': Array of 3 short clickable next-hop search queries (max 24 chars each, e.g. '2024-" + currentYear + " Sci-Fi', 'More like <Top Hit>', 'High-Pace Thrillers').";
+            "3. 'follow_ups': Array of 3 short clickable next-hop search queries (max 24 chars each, e.g. '" + (currentYear - 2) + "-" + currentYear + " Sci-Fi', 'More like <Top Hit>', 'High-Pace Thrillers').";
     }
 
     private List<String> collectWatchedNames(String profileId) {
@@ -211,7 +213,7 @@ public class VoiceConcierge {
 
     private JSONArray defaultFollowUps(int currentYear) {
         JSONArray arr = new JSONArray();
-        arr.put("2024–" + currentYear + " Top Releases");
+        arr.put((currentYear - 2) + "–" + currentYear + " Top Releases");
         arr.put("Mind-Bending Sci-Fi");
         arr.put("High-Pace Thrillers");
         return arr;

@@ -8,18 +8,25 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.Calendar;
+import java.util.Locale;
 
 public class JustWatchGraph {
     private static final String GRAPHQL_URL = "https://apis.justwatch.com/graphql";
 
-    // Current year dynamically resolved (e.g. 2026 in Nov 2026)
+    // Dynamically read current year from the Android TV system clock (zero hardcoded year)
     public static int getCurrentYear() {
-        return Math.max(2026, Calendar.getInstance().get(Calendar.YEAR));
+        return Calendar.getInstance().get(Calendar.YEAR);
     }
 
-    // Default minimum year for modern recommendations (last ~7 years: 2019-2026)
-    // Prevents recommending 15-40 year old shows from the 1980s, 1990s, 2000s, or early 2010s!
+    // Dynamically read full current date (yyyy-MM-dd) from the Android TV system config
+    // so titles released today are immediately recognized as released.
+    public static String getCurrentDateString() {
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().getTime());
+    }
+
+    // Default minimum year for modern recommendations (last 7 years relative to TV clock)
     public static int getDefaultMinModernYear() {
         return getCurrentYear() - 7;
     }
@@ -174,11 +181,12 @@ public class JustWatchGraph {
         int maxYear = getCurrentYear();
         int year = parsed.optInt("year", 9999);
         if (year > maxYear || year < minYear) return false;
-        double imdb = parsed.optDouble("imdb_raw", 0.0);
-        if (imdb < minImdb) return false;
         if (!parsed.optBoolean("has_flatrate_offer", false)) return false;
         if (parsed.optString("poster_url").isEmpty()) return false;
-        return true;
+        double imdb = parsed.optDouble("imdb_raw", 0.0);
+        // Allow brand-new current-year releases streaming today even if IMDb score is not yet indexed
+        if (year == maxYear && imdb <= 0.0) return true;
+        return imdb >= minImdb;
     }
 
     private static JSONObject parseNode(JSONObject node) {

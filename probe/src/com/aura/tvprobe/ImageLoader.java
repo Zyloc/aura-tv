@@ -20,13 +20,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class ImageLoader {
-    // Target thumbnail dimensions: 168x252 RGB_565 = ~84 KB per poster!
-    // 14 posters in memory = ~1.15 MB total RAM.
-    private static final int POSTER_W = 168;
-    private static final int POSTER_H = 252;
+    // Native JustWatch s332 poster dimensions (332x473, 1:1.425 aspect ratio) for crisp HD posters
+    // without cropping off top/bottom titles or blurring via aggressive downsampling.
+    private static final int POSTER_W = 332;
+    private static final int POSTER_H = 473;
 
-    // Strict 2 MB (2048 KB) byte-measured LruCache so bitmap heap stays under 2 MB
-    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(2048) {
+    // 6 MB (6144 KB) byte-measured LruCache for crisp full-resolution poster bitmaps
+    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(6144) {
         @Override
         protected int sizeOf(String key, Bitmap value) {
             return Math.max(1, value.getAllocationByteCount() / 1024);
@@ -96,9 +96,9 @@ public class ImageLoader {
 
     private static Bitmap loadFromDiskOrNet(Context ctx, String urlStr, int reqW, int reqH) {
         try {
-            File dir = new File(ctx.getCacheDir(), "posters");
+            File dir = new File(ctx.getCacheDir(), "posters_hd");
             if (!dir.exists()) dir.mkdirs();
-            File f = new File(dir, "img_" + Math.abs(urlStr.hashCode()) + ".jpg");
+            File f = new File(dir, "poster_hd_" + Math.abs(urlStr.hashCode()) + ".jpg");
             if (f.exists() && f.length() > 400) {
                 Bitmap b = decodeCompact(f, reqW, reqH);
                 if (b != null) return b;
@@ -131,12 +131,16 @@ public class ImageLoader {
             }
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inSampleSize = sample;
-            opts.inPreferredConfig = Bitmap.Config.RGB_565;
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
             Bitmap raw = BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
             if (raw == null) return null;
 
-            if (raw.getWidth() > reqW + 24 || raw.getHeight() > reqH + 36) {
-                Bitmap scaled = Bitmap.createScaledBitmap(raw, reqW, reqH, true);
+            // Preserve exact original poster aspect ratio when scaling down oversized images
+            if (raw.getWidth() > reqW + 48) {
+                float scale = (float) reqW / (float) raw.getWidth();
+                int targetW = reqW;
+                int targetH = Math.max(1, Math.round(raw.getHeight() * scale));
+                Bitmap scaled = Bitmap.createScaledBitmap(raw, targetW, targetH, true);
                 if (scaled != raw) {
                     raw.recycle();
                 }

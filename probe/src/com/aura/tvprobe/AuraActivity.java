@@ -278,14 +278,14 @@ public class AuraActivity extends Activity {
         gridScrollView = new ScrollView(this);
         gridScrollView.setVerticalScrollBarEnabled(false);
         gridScrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        gridScrollView.setClipChildren(true);
+        gridScrollView.setClipChildren(false);
         gridScrollView.setClipToPadding(false);
 
         gridRowsContainer = new LinearLayout(this);
         gridRowsContainer.setOrientation(LinearLayout.VERTICAL);
         gridRowsContainer.setClipChildren(false);
         gridRowsContainer.setClipToPadding(false);
-        gridRowsContainer.setPadding(10, 12, 16, 40);
+        gridRowsContainer.setPadding(14, 14, 16, 40);
         gridScrollView.addView(gridRowsContainer, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
 
@@ -1298,25 +1298,27 @@ public class AuraActivity extends Activity {
 
     private FrameLayout buildGridPosterTile(final JSONObject item, final int tileIdx) {
         final FrameLayout posterFrame = new FrameLayout(this);
-        posterFrame.setPadding(4, 4, 4, 4);
+        posterFrame.setPadding(3, 3, 3, 3);
         posterFrame.setFocusable(true);
         posterFrame.setClickable(true);
         GradientDrawable border = new GradientDrawable();
-        border.setCornerRadius(16f);
-        border.setColor(Color.TRANSPARENT);
+        border.setCornerRadius(14f);
+        border.setColor(Color.parseColor("#141722"));
         border.setStroke(1, COLOR_POSTER_BORDER_IDLE);
         posterFrame.setBackground(border);
 
         ImageView img = new ImageView(this);
-        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        // True 1:1.425 poster aspect ratio (matching JustWatch 332x473 native posters) with FIT_XY
+        // so 100% of the poster and its title artwork sits cleanly inside the rectangle with zero cropping!
+        img.setScaleType(ImageView.ScaleType.FIT_XY);
         img.setBackgroundColor(Color.parseColor("#141722"));
-        ImageLoader.applyRoundedCorners(img, 13f);
+        ImageLoader.applyRoundedCorners(img, 11f);
         posterFrame.addView(img, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        // 5 columns per row: 5 * 316px + 4 * 22px = 1668px (fits cleanly inside 1776px stage, showing 2+ rows vertically)
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(316, 352);
-        lp.setMargins(0, 0, 22, 0);
+        // 5 columns per row at true 1:1.425 poster aspect ratio (274 x 390)
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(274, 390);
+        lp.setMargins(0, 0, 32, 0);
         posterFrame.setLayoutParams(lp);
 
         ImageLoader.load(this, item.optString("poster_url"), img);
@@ -1325,9 +1327,9 @@ public class AuraActivity extends Activity {
             if (hasFocus && sidebarExpanded) setSidebarExpanded(false);
             stylePosterFrame(posterFrame, hasFocus);
             posterFrame.animate()
-                .scaleX(hasFocus ? 1.045f : 1.0f)
-                .scaleY(hasFocus ? 1.045f : 1.0f)
-                .translationY(hasFocus ? -3f : 0f)
+                .scaleX(hasFocus ? 1.035f : 1.0f)
+                .scaleY(hasFocus ? 1.035f : 1.0f)
+                .translationY(hasFocus ? -2f : 0f)
                 .setDuration(130)
                 .setInterpolator(SMOOTH_INTERP)
                 .start();
@@ -1730,9 +1732,9 @@ public class AuraActivity extends Activity {
     }
 
     private void stylePosterFrame(FrameLayout frame, boolean focused) {
-        GradientDrawable d = getOrCreateDrawable(frame, 16f);
-        d.setColor(Color.TRANSPARENT);
-        d.setStroke(focused ? 4 : 1, focused ? COLOR_IMDB_GOLD : COLOR_POSTER_BORDER_IDLE);
+        GradientDrawable d = getOrCreateDrawable(frame, 14f);
+        d.setColor(Color.parseColor("#141722"));
+        d.setStroke(focused ? 3 : 1, focused ? COLOR_IMDB_GOLD : COLOR_POSTER_BORDER_IDLE);
     }
 
     private void styleInputBox(EditText et, boolean focused) {
