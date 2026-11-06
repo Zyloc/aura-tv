@@ -620,8 +620,18 @@ public class AuraActivity extends Activity implements
                 SearchOverlay.dismiss(searchOverlay);
                 return true;
             }
+            if (NavPanelBuilder.isExpanded(navPanel)) {
+                NavPanelBuilder.setExpanded(navPanel, false, this);
+                return true;
+            }
+            return true;
         }
         return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public void onBackPressed() {
+        // Home launcher never finishes on Back press
     }
 
     private void setBannerText(String msg, boolean visible) {
