@@ -291,7 +291,7 @@ public class AuraDb extends SQLiteOpenHelper {
     public String getDefaultTasteGuide() {
         String def = getSetting("default_guide_ai", "").trim();
         if (def.isEmpty()) {
-            return "Critically acclaimed released titles (IMDb 7.5+), gripping storytelling, smart pacing, streaming on Netflix, Prime Video, Disney+ Hotstar, or Apple TV+";
+            return "Modern critically acclaimed releases (2020-2026, IMDb 7.5+), gripping storytelling, smart pacing, streaming on Netflix, Prime Video, Disney+ Hotstar, or Apple TV+";
         }
         return def;
     }
@@ -300,26 +300,59 @@ public class AuraDb extends SQLiteOpenHelper {
         setSetting("default_guide_ai", guide != null ? guide.trim() : "");
     }
 
+    public List<String> getTraversalChips(String profileId) {
+        List<String> out = new ArrayList<>();
+        String raw = getSetting("traversal_chips_" + profileId, "");
+        if (!raw.isEmpty()) {
+            try {
+                JSONArray arr = new JSONArray(raw);
+                for (int i = 0; i < arr.length() && out.size() < 4; i++) {
+                    String s = arr.optString(i).trim();
+                    if (!s.isEmpty()) out.add(s);
+                }
+            } catch (Exception ignored) {}
+        }
+        if (out.isEmpty()) {
+            List<String> anchors = getDynamicTasteAnchors(profileId);
+            if (!anchors.isEmpty()) {
+                out.add("Similar to " + anchors.get(0));
+            } else {
+                out.add("2024–2026 Prestige Series");
+            }
+            out.add("Mind-Bending Sci-Fi (2021–2026)");
+            out.add("Gripping Crime Thrillers");
+        }
+        return out;
+    }
+
+    public void saveTraversalChips(String profileId, JSONArray chips) {
+        if (chips != null && chips.length() > 0) {
+            setSetting("traversal_chips_" + profileId, chips.toString());
+        }
+    }
+
     public void purgeUnreleasedFromRecos() {
         try {
             SQLiteDatabase db = getWritableDatabase();
+            int maxYear = JustWatchGraph.getCurrentYear();
+            int minModernYear = JustWatchGraph.getDefaultMinModernYear();
             List<String> toDeleteProfiles = new ArrayList<>();
             try (Cursor c = db.rawQuery("SELECT profile_id, payload_json FROM profile_recos", null)) {
                 while (c.moveToNext()) {
                     String pid = c.getString(0);
                     JSONArray arr = new JSONArray(c.getString(1));
-                    boolean hasUnreleased = false;
+                    boolean hasStaleOrOld = false;
                     for (int i = 0; i < arr.length(); i++) {
                         JSONObject o = arr.optJSONObject(i);
                         if (o == null) continue;
-                        int y = o.optInt("year", 2024);
+                        int y = o.optInt("year", maxYear);
                         String app = o.optString("app", "");
-                        if (y > 2025 || app.contains("Store")) {
-                            hasUnreleased = true;
+                        if (y > maxYear || y < minModernYear || app.contains("Store")) {
+                            hasStaleOrOld = true;
                             break;
                         }
                     }
-                    if (hasUnreleased) {
+                    if (hasStaleOrOld) {
                         toDeleteProfiles.add(pid);
                     }
                 }

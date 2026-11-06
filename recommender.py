@@ -90,7 +90,7 @@ def build_gemini_prompt(profile: str, current: Dict, history: List[Dict]) -> str
         f"Active Filters: {active_filters}\n"
         f"Currently watching on TV: '{now_name}'.\n"
         f"Already Watched (STRICT EXCLUSION — DO NOT recommend): {seen}.\n"
-        "STRICT RULE: ONLY recommend already-released shows or movies (release year <= 2025, IMDb >= 7.4) currently streaming on subscription OTT in India. NEVER recommend unreleased 2026/2027 titles.\n"
+        "Current Date: November 2026. STRICT RULE: ONLY recommend modern released shows or movies from 2019 to 2026 (prioritizing 2021-2026, IMDb >= 7.4) currently streaming on subscription OTT in India. NEVER recommend old 1980s/1990s/2000s/early-2010s titles and NEVER recommend unreleased 2027+ titles.\n"
         "Return ONLY a JSON array of 15 objects with keys: "
         "'title', 'app' (Prime Video, Netflix, Disney+ Hotstar, Apple TV+, SonyLIV, or ZEE5), "
         "'genre' (comma-separated genres), "

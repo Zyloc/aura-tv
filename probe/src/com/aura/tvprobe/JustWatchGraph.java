@@ -8,14 +8,25 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Calendar;
 
 public class JustWatchGraph {
     private static final String GRAPHQL_URL = "https://apis.justwatch.com/graphql";
-    public static final int MAX_RELEASED_YEAR = 2025;
+
+    // Current year dynamically resolved (e.g. 2026 in Nov 2026)
+    public static int getCurrentYear() {
+        return Math.max(2026, Calendar.getInstance().get(Calendar.YEAR));
+    }
+
+    // Default minimum year for modern recommendations (last ~7 years: 2019-2026)
+    // Prevents recommending 15-40 year old shows from the 1980s, 1990s, 2000s, or early 2010s!
+    public static int getDefaultMinModernYear() {
+        return getCurrentYear() - 7;
+    }
 
     private static final String SEARCH_QUERY =
         "query GetTitle($searchQuery: String!, $country: Country!, $language: Language!) {" +
-        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 4) {" +
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 5) {" +
         "    edges { node {" +
         "      objectType" +
         "      content(country: $country, language: $language) {" +
@@ -51,7 +62,7 @@ public class JustWatchGraph {
 
     private static final String CANDIDATE_POOL_QUERY =
         "query GetCandidatePool($searchQuery: String!, $country: Country!, $language: Language!) {" +
-        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 15) {" +
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 16) {" +
         "    edges { node {" +
         "      objectType" +
         "      content(country: $country, language: $language) {" +
@@ -78,12 +89,18 @@ public class JustWatchGraph {
                 .optJSONArray("edges");
             if (edges == null || edges.length() == 0) return new JSONObject();
             String normTarget = AuraDb.normalizeTitleKey(title);
+            int maxYear = getCurrentYear();
             JSONObject best = null;
             for (int i = 0; i < edges.length(); i++) {
                 JSONObject node = edges.getJSONObject(i).optJSONObject("node");
                 JSONObject parsed = parseNode(node);
                 if (parsed.optString("title").isEmpty()) continue;
-                if (parsed.optInt("year", 9999) > MAX_RELEASED_YEAR) continue;
+                int y = parsed.optInt("year", 9999);
+                // Reject future years (> 2026) or unreleased 2026 titles that have no IMDb rating & no streaming offer
+                if (y > maxYear) continue;
+                if (y == maxYear && parsed.optDouble("imdb_raw", 0.0) <= 0.0 && !parsed.optBoolean("has_flatrate_offer", false)) {
+                    continue;
+                }
                 if (best == null) best = parsed;
                 if (AuraDb.normalizeTitleKey(parsed.optString("title")).equals(normTarget)
                     && parsed.optBoolean("has_flatrate_offer", false)) {
@@ -97,6 +114,10 @@ public class JustWatchGraph {
     }
 
     public static JSONArray fetchDeterministicSearchCandidates(String searchQuery) {
+        return fetchDeterministicSearchCandidates(searchQuery, getDefaultMinModernYear());
+    }
+
+    public static JSONArray fetchDeterministicSearchCandidates(String searchQuery, int minYear) {
         JSONArray out = new JSONArray();
         try {
             JSONObject vars = new JSONObject()
@@ -112,7 +133,7 @@ public class JustWatchGraph {
                 JSONObject edge = edges.optJSONObject(i);
                 if (edge == null) continue;
                 JSONObject parsed = parseNode(edge.optJSONObject("node"));
-                if (isValidReleasedStreamingCandidate(parsed, 7.0)) {
+                if (isValidModernStreamingCandidate(parsed, minYear, 7.0)) {
                     out.put(parsed);
                 }
             }
@@ -121,6 +142,10 @@ public class JustWatchGraph {
     }
 
     public static JSONArray fetchCollaborativeSimilar(String seedTitle) {
+        return fetchCollaborativeSimilar(seedTitle, getDefaultMinModernYear());
+    }
+
+    public static JSONArray fetchCollaborativeSimilar(String seedTitle, int minYear) {
         JSONArray out = new JSONArray();
         try {
             JSONObject vars = new JSONObject()
@@ -136,7 +161,7 @@ public class JustWatchGraph {
             if (sim == null) return out;
             for (int i = 0; i < sim.length(); i++) {
                 JSONObject parsed = parseNode(sim.optJSONObject(i));
-                if (isValidReleasedStreamingCandidate(parsed, 7.2)) {
+                if (isValidModernStreamingCandidate(parsed, minYear, 7.1)) {
                     out.put(parsed);
                 }
             }
@@ -144,10 +169,11 @@ public class JustWatchGraph {
         return out;
     }
 
-    public static boolean isValidReleasedStreamingCandidate(JSONObject parsed, double minImdb) {
+    public static boolean isValidModernStreamingCandidate(JSONObject parsed, int minYear, double minImdb) {
         if (parsed == null || parsed.optString("title").isEmpty()) return false;
+        int maxYear = getCurrentYear();
         int year = parsed.optInt("year", 9999);
-        if (year > MAX_RELEASED_YEAR || year < 1970) return false;
+        if (year > maxYear || year < minYear) return false;
         double imdb = parsed.optDouble("imdb_raw", 0.0);
         if (imdb < minImdb) return false;
         if (!parsed.optBoolean("has_flatrate_offer", false)) return false;
@@ -163,7 +189,7 @@ public class JustWatchGraph {
             JSONObject content = node.optJSONObject("content");
             if (content == null) return res;
             res.put("title", content.optString("title"));
-            res.put("year", content.optInt("originalReleaseYear", 2024));
+            res.put("year", content.optInt("originalReleaseYear", getCurrentYear()));
             res.put("type", "MOVIE".equalsIgnoreCase(objType) ? "Movie" : "Series");
             int rt = content.optInt("runtime", "MOVIE".equalsIgnoreCase(objType) ? 115 : 48);
             res.put("runtime_min", rt > 0 ? rt : 48);

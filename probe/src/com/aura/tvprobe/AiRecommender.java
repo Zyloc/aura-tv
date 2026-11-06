@@ -13,10 +13,17 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class AiRecommender {
+    public interface AgentProgressListener {
+        void onStep(String stepMessage);
+    }
+
     private static final String[] MODELS = {
         "gemini-3.1-flash-lite-preview",
         "gemini-flash-lite-latest",
@@ -33,15 +40,37 @@ public class AiRecommender {
     }
 
     public JSONArray getOrRefreshForProfile(String profileId, JSONObject nowPlaying, JSONArray history, boolean forceManual) {
+        return getOrRefreshForProfile(profileId, nowPlaying, history, forceManual, null);
+    }
+
+    public JSONArray getOrRefreshForProfile(
+        String profileId,
+        JSONObject nowPlaying,
+        JSONArray history,
+        boolean forceManual,
+        AgentProgressListener progress
+    ) {
         JSONArray cached = db.getProfileRecommendations(profileId);
         if (!forceManual && cached.length() >= 10 && db.isRecoCacheFresh(profileId)) {
             return cached;
         }
-        String prompt = buildProfilePrompt(profileId, nowPlaying, history);
+
+        int currentYear = JustWatchGraph.getCurrentYear();
+        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
+        List<String> watchedList = collectWatchedTitles(history);
+
+        // Agent Step 1: Multi-Hop Graph Traversal from Watched Shows & Guide AI Seeds
+        if (progress != null) progress.onStep("Agent 1/2 · Traversing " + minModernYear + "–" + currentYear + " graph from watched & Guide AI…");
+        JSONObject seedPlan = buildFastSeedPlan(profileId, "");
+        List<String> verifiedCandidates = executeMultiHopTraversal(profileId, seedPlan, minModernYear);
+
+        // Agent Step 2: LLM Agentic Curation, Ranking, Reasoning & Next-Hop Traversal Queries
+        if (progress != null) progress.onStep("Agent 2/2 · LLM ranking 20 modern (" + minModernYear + "–" + currentYear + ") picks…");
+        String prompt = buildAgentRankingPrompt(profileId, nowPlaying, watchedList, verifiedCandidates, minModernYear, currentYear);
         for (String model : MODELS) {
             JSONArray raw = callGemini(model, prompt);
             if (raw != null && raw.length() > 0) {
-                JSONArray enriched = enrichAll(raw);
+                JSONArray enriched = enrichAll(raw, minModernYear, currentYear);
                 if (enriched.length() > 0) {
                     db.saveProfileRecommendations(profileId, enriched);
                     return enriched;
@@ -51,7 +80,188 @@ public class AiRecommender {
         return cached;
     }
 
-    private String buildProfilePrompt(String profileId, JSONObject np, JSONArray history) {
+    private JSONObject buildFastSeedPlan(String profileId, String userQuery) {
+        JSONObject plan = new JSONObject();
+        try {
+            JSONArray pq = new JSONArray();
+            if (userQuery != null && !userQuery.trim().isEmpty()) {
+                pq.put(userQuery.trim());
+            }
+            String personal = db.getProfileTaste(profileId);
+            if (!personal.isEmpty()) {
+                for (String part : personal.split(",")) {
+                    String kw = part.trim();
+                    if (!kw.isEmpty() && pq.length() < 4) pq.put(kw);
+                }
+            }
+            List<String> anchors = db.getDynamicTasteAnchors(profileId);
+            for (String a : anchors) {
+                if (pq.length() < 5) pq.put(a);
+            }
+            plan.put("primary_queries", pq);
+            plan.put("watched_traversal_seeds", new JSONArray(anchors));
+        } catch (Exception ignored) {}
+        return plan;
+    }
+
+    /**
+     * Triggered as a second-hop traversal when the user marks a title as Watched or clicks "Similar".
+     */
+    public JSONArray traverseSimilarToWatched(String profileId, String seedTitle, AgentProgressListener progress) {
+        int currentYear = JustWatchGraph.getCurrentYear();
+        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
+        if (progress != null) progress.onStep("Traversing " + minModernYear + "–" + currentYear + " titles similar to " + seedTitle + "…");
+
+        JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seedTitle, minModernYear);
+        List<String> candidateSummaries = new ArrayList<>();
+        for (int i = 0; i < sim.length() && i < 12; i++) {
+            JSONObject o = sim.optJSONObject(i);
+            if (o == null) continue;
+            String t = o.optString("title");
+            if (!t.isEmpty() && !db.isTitleWatched(t)) {
+                db.saveCachedGti("jw_imdb_v5:" + t.trim().toLowerCase(), o.toString());
+                candidateSummaries.add(t + " (" + o.optInt("year") + ", " + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app") + ")");
+            }
+        }
+
+        List<String> watchedList = collectWatchedTitles(db.listHistory(profileId));
+        String personalGuide = db.getProfileTaste(profileId);
+        String defaultGuide = db.getDefaultTasteGuide();
+
+        String prompt = "Current Date: November " + currentYear + ".\n" +
+            "User just watched/selected '" + seedTitle + "' and wants a second-hop traversal of similar modern titles.\n" +
+            "Active Profile: '" + db.getProfileLabel(profileId) + "'.\n" +
+            "Personal Guide AI: " + (personalGuide.isEmpty() ? "(Use Default Guide AI)" : personalGuide) + "\n" +
+            "Default Guide AI: " + defaultGuide + "\n" +
+            "Already Watched (STRICT EXCLUSION): " + watchedList.toString() + "\n" +
+            "Graph Traversal Candidates for '" + seedTitle + "' (" + minModernYear + "-" + currentYear + "): " + candidateSummaries.toString() + "\n\n" +
+            "Select & rank 15 modern released titles (" + minModernYear + " to " + currentYear + " ONLY — NO pre-" + minModernYear + " old shows and NO 2027 unreleased titles) that someone who watched '" + seedTitle + "' will love next.\n" +
+            "Return ONLY a JSON array of 15 objects with keys: 'title', 'app' (Netflix, Disney+ Hotstar, Prime Video, Apple TV+, SonyLIV, or ZEE5), 'genres', 'runtime_min' (integer), and 'reason' (1-2 sentences explaining why it connects to '" + seedTitle + "' and their taste).";
+
+        for (String model : MODELS) {
+            JSONArray raw = callGemini(model, prompt);
+            if (raw != null && raw.length() > 0) {
+                JSONArray enriched = enrichAll(raw, minModernYear, currentYear);
+                if (enriched.length() > 0) {
+                    return enriched;
+                }
+            }
+        }
+        return sim;
+    }
+
+    public JSONObject planAgentSearchStrategy(
+        String profileId,
+        String userQuery,
+        List<String> watchedList,
+        int minModernYear,
+        int currentYear
+    ) {
+        String profileName = db.getProfileLabel(profileId);
+        String personalGuide = db.getProfileTaste(profileId);
+        String defaultGuide = db.getDefaultTasteGuide();
+        String ratingsFeedback = db.getRatingFeedbackSummary();
+        List<String> anchors = db.getDynamicTasteAnchors(profileId);
+
+        String plannerPrompt = "You are Aura's Search Query Planner Agent. Current date: November " + currentYear + ".\n" +
+            "Profile: '" + profileName + "'.\n" +
+            "Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
+            "Default Guide AI: " + defaultGuide + "\n" +
+            "User Ratings Feedback: " + ratingsFeedback + "\n" +
+            "Recent Watched/Liked Anchors: " + anchors.toString() + "\n" +
+            "Already Watched (do not recommend): " + watchedList.toString() + "\n" +
+            "User Search Query (if any): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
+            "Task:\n" +
+            "1. Plan 'primary_queries': 5 specific modern (" + minModernYear + "-" + currentYear + ") critically acclaimed show/movie titles that match the user's query and Guide AI.\n" +
+            "2. Plan 'watched_traversal_seeds': 3 titles from the user's watched/rated list (or top affinity anchors) to run a second co-watch graph traversal query ('user watched X -> find what viewers watched next').\n" +
+            "3. Plan 'traversal_chips': 3 short clickable search-engine traversal phrases (max 24 chars each, e.g. 'Similar to " + (!anchors.isEmpty() ? anchors.get(0) : "Severance") + "', '2024-2026 Sci-Fi', 'High-Pace Thrillers').\n" +
+            "Return ONLY a JSON object with keys: 'primary_queries' (array of strings), 'watched_traversal_seeds' (array of strings), 'traversal_chips' (array of 3 strings).";
+
+        String raw = callGeminiJson(plannerPrompt);
+        if (raw != null) {
+            try {
+                JSONObject plan = new JSONObject(raw);
+                JSONArray chips = plan.optJSONArray("traversal_chips");
+                if (chips != null && chips.length() > 0) {
+                    db.saveTraversalChips(profileId, chips);
+                }
+                return plan;
+            } catch (Exception ignored) {}
+        }
+
+        // Deterministic fallback plan if offline
+        JSONObject fallback = new JSONObject();
+        try {
+            JSONArray pq = new JSONArray();
+            if (userQuery != null && !userQuery.isEmpty()) pq.put(userQuery);
+            for (String a : anchors) pq.put(a);
+            fallback.put("primary_queries", pq);
+            fallback.put("watched_traversal_seeds", new JSONArray(anchors));
+        } catch (Exception ignored) {}
+        return fallback;
+    }
+
+    public List<String> executeMultiHopTraversal(String profileId, JSONObject searchPlan, int minModernYear) {
+        final List<String> summaries = java.util.Collections.synchronizedList(new ArrayList<>());
+        final Set<String> seenNorm = java.util.Collections.synchronizedSet(new HashSet<>());
+        List<String> queriesToRun = new ArrayList<>();
+        List<String> seedsToTraverse = new ArrayList<>();
+
+        if (searchPlan != null) {
+            JSONArray pq = searchPlan.optJSONArray("primary_queries");
+            if (pq != null) {
+                for (int i = 0; i < pq.length() && i < 5; i++) {
+                    String q = pq.optString(i).trim();
+                    if (!q.isEmpty()) queriesToRun.add(q);
+                }
+            }
+            JSONArray ws = searchPlan.optJSONArray("watched_traversal_seeds");
+            if (ws != null) {
+                for (int i = 0; i < ws.length() && i < 4; i++) {
+                    String s = ws.optString(i).trim();
+                    if (!s.isEmpty() && !seedsToTraverse.contains(s)) seedsToTraverse.add(s);
+                }
+            }
+        }
+        for (String a : db.getDynamicTasteAnchors(profileId)) {
+            if (!seedsToTraverse.contains(a) && seedsToTraverse.size() < 5) seedsToTraverse.add(a);
+        }
+
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        // Hop 1: Execute LLM-planned search queries
+        for (final String q : queriesToRun) {
+            pool.submit(() -> {
+                JSONArray hits = JustWatchGraph.fetchDeterministicSearchCandidates(q, minModernYear);
+                for (int i = 0; i < hits.length() && i < 4; i++) {
+                    addCandidateIfValid(hits.optJSONObject(i), seenNorm, summaries);
+                }
+            });
+        }
+        // Hop 2 ("Watched -> Second Query"): Traverse similarTitles graph from watched/seed shows
+        for (final String seed : seedsToTraverse) {
+            pool.submit(() -> {
+                JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seed, minModernYear);
+                for (int i = 0; i < sim.length() && i < 6; i++) {
+                    addCandidateIfValid(sim.optJSONObject(i), seenNorm, summaries);
+                }
+            });
+        }
+        pool.shutdown();
+        try { pool.awaitTermination(5, TimeUnit.SECONDS); } catch (Exception ignored) {}
+        return summaries;
+    }
+
+    private void addCandidateIfValid(JSONObject o, Set<String> seenNorm, List<String> summaries) {
+        if (o == null) return;
+        String t = o.optString("title").trim();
+        String norm = AuraDb.normalizeTitleKey(t);
+        if (t.isEmpty() || seenNorm.contains(norm) || db.isTitleWatched(t)) return;
+        seenNorm.add(norm);
+        db.saveCachedGti("jw_imdb_v5:" + t.toLowerCase(), o.toString());
+        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app") + ")");
+    }
+
+    private List<String> collectWatchedTitles(JSONArray history) {
         List<String> seen = new ArrayList<>();
         JSONArray manual = db.listManuallyWatched();
         for (int i = 0; i < manual.length(); i++) {
@@ -61,72 +271,63 @@ public class AiRecommender {
                 if (!t.isEmpty() && !seen.contains(t)) seen.add(t);
             }
         }
-        for (int i = 0; i < history.length() && seen.size() < 45; i++) {
-            JSONObject h = history.optJSONObject(i);
-            if (h == null) continue;
-            if (h.optString("app_pkg").contains("youtube")) continue;
-            String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
-            if (!t.isEmpty() && !seen.contains(t)) seen.add(t);
+        if (history != null) {
+            for (int i = 0; i < history.length() && seen.size() < 45; i++) {
+                JSONObject h = history.optJSONObject(i);
+                if (h == null || h.optString("app_pkg").contains("youtube")) continue;
+                String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
+                if (!t.isEmpty() && !seen.contains(t)) seen.add(t);
+            }
         }
+        return seen;
+    }
 
+    private String buildAgentRankingPrompt(
+        String profileId,
+        JSONObject np,
+        List<String> watchedList,
+        List<String> verifiedCandidates,
+        int minModernYear,
+        int currentYear
+    ) {
         String profileName = db.getProfileLabel(profileId);
         String personalGuide = db.getProfileTaste(profileId);
         String defaultGuide = db.getDefaultTasteGuide();
         String ratingsFeedback = db.getRatingFeedbackSummary();
         List<String> activeFilters = db.getActiveFilters(profileId);
-        List<String> cfPool = fetchCollaborativeCandidateNames(profileId);
         String cur = np != null ? (np.optString("series_title").isEmpty() ? np.optString("title") : np.optString("series_title")) : "";
 
-        return "You are Aura, a deeply personalized movie & TV recommendation engine for Android TV in India.\n" +
+        return "You are Aura's Ranking & Reasoning Agent for Android TV in India.\n" +
+            "Current Date: November " + currentYear + " (2026 releases that are already out are valid; 2027+ titles are unreleased).\n" +
             "Active Profile: '" + profileName + "' (profile_id: " + profileId + ").\n" +
-            "1. PERSONAL GUIDE AI (Highest Priority — specific to " + profileName + "): " +
-            (personalGuide.isEmpty() ? "(None set yet — rely on Default Guide AI, 1-10 Ratings, and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
-            "2. DEFAULT GUIDE AI (Global Household Baseline): \"" + defaultGuide + "\"\n" +
-            "3. USER'S 1-10 RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
+            "1. PERSONAL GUIDE AI (Highest Priority for " + profileName + "): " +
+            (personalGuide.isEmpty() ? "(Use Default Guide AI and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
+            "2. DEFAULT GUIDE AI (Global Baseline): \"" + defaultGuide + "\"\n" +
+            "3. USER 1-10 RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
             "4. ACTIVE UI FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
             "5. RECENTLY ACTIVE ON TV: '" + cur + "'.\n" +
-            "6. STRICT WATCHED EXCLUSION LIST (NEVER recommend any of these): " + seen.toString() + ".\n" +
-            "7. VERIFIED COLLABORATIVE CANDIDATES STREAMING IN INDIA: " + cfPool.toString() + ".\n\n" +
+            "6. STRICT WATCHED EXCLUSION LIST (NEVER recommend any of these): " + watchedList.toString() + ".\n" +
+            "7. MULTI-HOP GRAPH TRAVERSAL CANDIDATES (" + minModernYear + "–" + currentYear + " verified streaming in India): " + verifiedCandidates.toString() + ".\n\n" +
             "STRICT CURATION RULES:\n" +
-            "- ONLY recommend ALREADY-RELEASED movies or series (release year <= 2025) that are currently streaming on subscription OTT in India (Netflix, Disney+ Hotstar, Prime Video, Apple TV+, SonyLIV, or ZEE5).\n" +
-            "- NEVER recommend unreleased/upcoming 2026 or 2027 titles (such as 'The Batman: Part II', 'The Odyssey', 'Project Hail Mary', 'The Hunt for Gollum', 'Beyond the Spider-Verse').\n" +
-            "- Prioritize Personal Guide AI first, then Default Guide AI, then high-affinity matches to their 8-10/10 rated shows.\n" +
-            "- Ensure strong variety across 18 picks (mixing top matches for their personal taste, critically acclaimed thrillers/sci-fi/dramas, and hidden gems with IMDb >= 7.5).\n" +
-            "- For EVERY title, write a natural, specific 1-2 sentence 'reason' (18-28 words) explaining WHY '" + profileName + "' will love it based on their Personal Guide AI, Default Guide AI, or watch history.\n" +
-            "Return ONLY a JSON array of 18 objects with keys: 'title', 'app' (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5), " +
+            "- MODERN RECENCY WINDOW: ONLY recommend shows and movies released between " + minModernYear + " and " + currentYear + " (strongly prioritize 2021–" + currentYear + " releases).\n" +
+            "- NEVER recommend old shows/movies from the 1980s, 1990s, 2000s, or early 2010s (nothing older than " + minModernYear + ").\n" +
+            "- NEVER recommend unreleased 2027+ titles.\n" +
+            "- Select & rank 20 titles (for a 4-row x 5-column grid) combining the best matches from the Multi-Hop Graph Traversal Candidates with top 2021–" + currentYear + " releases on Netflix, Disney+ Hotstar, Prime Video, Apple TV+, SonyLIV, or ZEE5.\n" +
+            "- For EVERY title, write a specific 1-2 sentence 'reason' (18-28 words) explaining WHY it was selected for '" + profileName + "' based on their watched shows, Personal Guide AI, or Default Guide AI.\n" +
+            "Return ONLY a JSON array of 20 objects with keys: 'title', 'app' (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5), " +
             "'genres' (comma-separated), 'runtime_min' (integer minutes), and 'reason' (personalized explanation).";
     }
 
-    public List<String> fetchCollaborativeCandidateNames(String profileId) {
-        List<String> dynamicAnchors = db.getDynamicTasteAnchors(profileId);
-        List<String> names = new ArrayList<>();
-        Set<String> seenNorm = new HashSet<>();
-        for (String seed : dynamicAnchors) {
-            if (seed == null || seed.trim().isEmpty()) continue;
-            JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seed);
-            for (int i = 0; i < sim.length() && i < 6; i++) {
-                JSONObject o = sim.optJSONObject(i);
-                if (o == null) continue;
-                String t = o.optString("title");
-                String norm = AuraDb.normalizeTitleKey(t);
-                if (!t.isEmpty() && !seenNorm.contains(norm) && !db.isTitleWatched(t)
-                    && o.optInt("year", 9999) <= JustWatchGraph.MAX_RELEASED_YEAR
-                    && o.optBoolean("has_flatrate_offer", false)) {
-                    seenNorm.add(norm);
-                    db.saveCachedGti("jw_imdb_v4:" + t.trim().toLowerCase(), o.toString());
-                    names.add(t + " (" + o.optInt("year") + ", " + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app", "Streaming") + ")");
-                }
-            }
-        }
-        return names;
+    public JSONArray enrichAll(JSONArray raw) {
+        return enrichAll(raw, JustWatchGraph.getDefaultMinModernYear(), JustWatchGraph.getCurrentYear());
     }
 
-    public JSONArray enrichAll(JSONArray raw) {
+    public JSONArray enrichAll(JSONArray raw, final int minAllowedYear, final int maxAllowedYear) {
         JSONArray out = new JSONArray();
         if (raw == null) return out;
         int n = raw.length();
         final JSONObject[] results = new JSONObject[n];
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        ExecutorService pool = Executors.newFixedThreadPool(4);
         for (int i = 0; i < n; i++) {
             final int idx = i;
             final JSONObject p = raw.optJSONObject(i);
@@ -135,9 +336,9 @@ public class AiRecommender {
                 String title = p.optString("title").trim();
                 if (title.isEmpty() || db.isTitleWatched(title)) return;
                 JSONObject meta = fetchOpenMetadata(title);
-                int year = meta.optInt("year", p.optInt("year", 2023));
-                // Strictly reject unreleased future titles (2026+) or titles without posters
-                if (year > JustWatchGraph.MAX_RELEASED_YEAR) return;
+                int year = meta.optInt("year", p.optInt("year", maxAllowedYear));
+                // Enforce modern recency window [minAllowedYear .. maxAllowedYear]
+                if (year > maxAllowedYear || year < minAllowedYear) return;
                 String posterUrl = meta.optString("poster_url");
                 if (posterUrl.isEmpty()) return;
 
@@ -180,7 +381,7 @@ public class AiRecommender {
             });
         }
         pool.shutdown();
-        try { pool.awaitTermination(8, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+        try { pool.awaitTermination(8, TimeUnit.SECONDS); } catch (Exception ignored) {}
         Set<String> seenKeys = new HashSet<>();
         for (JSONObject r : results) {
             if (r != null) {
@@ -197,12 +398,13 @@ public class AiRecommender {
     public JSONObject fetchOpenMetadata(String title) {
         JSONObject res = new JSONObject();
         if (title == null || title.isEmpty()) return res;
-        String cacheKey = "jw_imdb_v4:" + title.trim().toLowerCase();
+        String cacheKey = "jw_imdb_v5:" + title.trim().toLowerCase();
         String cached = db.getCachedGti(cacheKey);
         if (cached != null) {
             try { return new JSONObject(cached); } catch (Exception ignored) {}
         }
         res = JustWatchGraph.lookupTitleInIndia(title);
+        int maxYear = JustWatchGraph.getCurrentYear();
 
         if (res.optString("poster_url").isEmpty()) {
             try {
@@ -215,8 +417,8 @@ public class AiRecommender {
                     for (int k = 0; k < d.length(); k++) {
                         JSONObject item = d.optJSONObject(k);
                         if (item == null) continue;
-                        int y = item.optInt("y", 2023);
-                        if (y > JustWatchGraph.MAX_RELEASED_YEAR) continue;
+                        int y = item.optInt("y", maxYear);
+                        if (y > maxYear) continue;
                         JSONObject iObj = item.optJSONObject("i");
                         if (iObj != null && !iObj.optString("imageUrl").isEmpty()) {
                             res.put("year", y);
@@ -228,7 +430,7 @@ public class AiRecommender {
             } catch (Exception ignored) {}
         }
 
-        if (!res.optString("poster_url").isEmpty() && res.optInt("year", 2024) <= JustWatchGraph.MAX_RELEASED_YEAR) {
+        if (!res.optString("poster_url").isEmpty() && res.optInt("year", maxYear) <= maxYear) {
             db.saveCachedGti(cacheKey, res.toString());
         }
         return res;
@@ -273,7 +475,7 @@ public class AiRecommender {
                 JSONObject body = new JSONObject();
                 JSONArray contents = new JSONArray().put(new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", prompt))));
                 body.put("contents", contents);
-                body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.55));
+                body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.5));
                 String resp = httpPost(url, body.toString());
                 JSONObject root = new JSONObject(resp);
                 return root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
@@ -290,11 +492,24 @@ public class AiRecommender {
             JSONObject body = new JSONObject();
             JSONArray contents = new JSONArray().put(new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", prompt))));
             body.put("contents", contents);
-            body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.55));
+            body.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.5));
             String resp = httpPost(url, body.toString());
             JSONObject root = new JSONObject(resp);
-            String text = root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
-            return new JSONArray(text);
+            String text = root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text").trim();
+            if (text.startsWith("[")) {
+                return new JSONArray(text);
+            }
+            if (text.startsWith("{")) {
+                JSONObject obj = new JSONObject(text);
+                JSONArray names = obj.names();
+                if (names != null) {
+                    for (int i = 0; i < names.length(); i++) {
+                        JSONArray arr = obj.optJSONArray(names.getString(i));
+                        if (arr != null && arr.length() > 0) return arr;
+                    }
+                }
+            }
+            return null;
         } catch (Exception e) {
             return null;
         }

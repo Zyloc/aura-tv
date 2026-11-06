@@ -131,6 +131,7 @@ public class AuraActivity extends Activity {
     private TextView drawerGenres;
     private TextView drawerOpenAppBtn;
     private TextView drawerWatchedBtn;
+    private TextView drawerSimilarBtn;
     private TextView drawerCloseBtn;
     private TextView drawerRatingLabel;
     private LinearLayout drawerRatingRow;
@@ -230,7 +231,13 @@ public class AuraActivity extends Activity {
             JSONArray recos = db.getProfileRecommendations(targetProfile);
 
             if (recos.length() < 8) {
-                recos = ai.getOrRefreshForProfile(targetProfile, new JSONObject(), db.listHistory(targetProfile), true);
+                recos = ai.getOrRefreshForProfile(
+                    targetProfile,
+                    new JSONObject(),
+                    db.listHistory(targetProfile),
+                    true,
+                    step -> uiHandler.post(() -> setLoader(true, step))
+                );
             }
             final JSONArray initialRecos = recos;
 
@@ -637,18 +644,20 @@ public class AuraActivity extends Activity {
         drawerGenres.setPadding(0, 4, 0, 14);
         rightDetailsDrawer.addView(drawerGenres);
 
-        // PRIMARY ACTION ROW — Placed right under Title/Genres so Watch & Watched are NEVER hidden!
+        // PRIMARY ACTION ROW — Placed right under Title/Genres so Watch, Watched & Similar are NEVER hidden!
         LinearLayout actionBtns = new LinearLayout(this);
         actionBtns.setOrientation(LinearLayout.HORIZONTAL);
         actionBtns.setGravity(Gravity.CENTER_VERTICAL);
         actionBtns.setPadding(0, 0, 0, 14);
 
-        drawerOpenAppBtn = makePillBtn("▶  Open App", true, null);
-        drawerWatchedBtn = makePillBtn("✓  Mark Watched", false, null);
+        drawerOpenAppBtn = makePillBtn("▶  Open", true, null);
+        drawerWatchedBtn = makePillBtn("✓  Watched", false, null);
+        drawerSimilarBtn = makePillBtn("🔍  Similar", false, null);
         drawerCloseBtn = makePillBtn("←  Back", false, this::closeRightDrawers);
         trapLeftFocus(drawerOpenAppBtn);
         actionBtns.addView(drawerOpenAppBtn);
         actionBtns.addView(drawerWatchedBtn);
+        actionBtns.addView(drawerSimilarBtn);
         actionBtns.addView(drawerCloseBtn);
         rightDetailsDrawer.addView(actionBtns);
 
@@ -884,7 +893,7 @@ public class AuraActivity extends Activity {
             drawerSynopsis.setVisibility(View.GONE);
         }
 
-        drawerOpenAppBtn.setText("▶  Open " + shortAppBadge(appName));
+        drawerOpenAppBtn.setText("▶  Watch");
         drawerOpenAppBtn.setOnClickListener(v -> {
             closeRightDrawers();
             String uri = item.optString("launch_uri");
@@ -894,10 +903,16 @@ public class AuraActivity extends Activity {
         });
 
         final boolean isW = memWatchedKeys.contains(titleKey);
-        drawerWatchedBtn.setText(isW ? "✕  Unwatch" : "✓  Mark Watched");
+        drawerWatchedBtn.setText(isW ? "✕  Unwatch" : "✓  Watched");
         drawerWatchedBtn.setOnClickListener(v -> {
             closeRightDrawers();
             handleMarkWatchedInPlace(posterView, item, mainTitle);
+        });
+
+        drawerSimilarBtn.setText("🔍  Similar");
+        drawerSimilarBtn.setOnClickListener(v -> {
+            closeRightDrawers();
+            runWatchedSecondHopTraversal(mainTitle, true);
         });
 
         activeDrawerItem = item;
@@ -1076,7 +1091,13 @@ public class AuraActivity extends Activity {
                 setLoader(true, "AI curating for " + label + "…");
             });
 
-            JSONArray fresh = ai.getOrRefreshForProfile(targetPid, new JSONObject(), db.listHistory(targetPid), true);
+            JSONArray fresh = ai.getOrRefreshForProfile(
+                targetPid,
+                new JSONObject(),
+                db.listHistory(targetPid),
+                true,
+                step -> uiHandler.post(() -> setLoader(true, step))
+            );
             sync.syncWithHost();
             final List<JSONObject> profList = db.listProfiles();
             uiHandler.post(() -> {
@@ -1200,6 +1221,15 @@ public class AuraActivity extends Activity {
             });
             chip.setTag("filter_" + fid);
             filterChipsRow.addView(chip);
+        }
+
+        // Add LLM-planned Search Engine Traversal chip right in the top bar
+        List<String> tChips = db.getTraversalChips(memProfile);
+        if (!tChips.isEmpty()) {
+            final String topTraversal = tChips.get(0);
+            String shortLabel = topTraversal.length() > 22 ? topTraversal.substring(0, 22).trim() + "…" : topTraversal;
+            TextView travBtn = makePillBtn("🔍 " + shortLabel, false, () -> runSearchSessionTurn(topTraversal));
+            filterChipsRow.addView(travBtn);
         }
     }
 
@@ -1398,6 +1428,55 @@ public class AuraActivity extends Activity {
             db.markTitleWatched(item, nowWatched);
             sync.syncWithHost();
         });
+        if (nowWatched) {
+            // Automatic Second Query: user marked this watched -> traverse similar modern titles!
+            runWatchedSecondHopTraversal(title, false);
+        }
+    }
+
+    private void runWatchedSecondHopTraversal(final String watchedTitle, final boolean replaceAsSearchView) {
+        final String prof = memProfile;
+        setLoader(true, "2nd Query · Traversing titles like " + watchedTitle + "…");
+        bgPool.submit(() -> {
+            final JSONArray similarModern = ai.traverseSimilarToWatched(
+                prof,
+                watchedTitle,
+                step -> uiHandler.post(() -> setLoader(true, step))
+            );
+            if (similarModern != null && similarModern.length() > 0) {
+                // Merge discovered similar modern picks with existing recos
+                JSONArray merged = new JSONArray();
+                Set<String> seen = new HashSet<>();
+                for (int i = 0; i < similarModern.length(); i++) {
+                    JSONObject o = similarModern.optJSONObject(i);
+                    if (o == null) continue;
+                    String k = AuraDb.normalizeTitleKey(o.optString("title"));
+                    if (!k.isEmpty() && !memWatchedKeys.contains(k) && !seen.contains(k)) {
+                        seen.add(k);
+                        merged.put(o);
+                    }
+                }
+                for (int i = 0; i < memRecos.length() && merged.length() < 20; i++) {
+                    JSONObject o = memRecos.optJSONObject(i);
+                    if (o == null) continue;
+                    String k = AuraDb.normalizeTitleKey(o.optString("title"));
+                    if (!k.isEmpty() && !memWatchedKeys.contains(k) && !seen.contains(k)) {
+                        seen.add(k);
+                        merged.put(o);
+                    }
+                }
+                db.saveProfileRecommendations(prof, merged);
+                final JSONArray finalMerged = merged;
+                uiHandler.post(() -> {
+                    memRecos = finalMerged;
+                    if (replaceAsSearchView) showingVoiceResults = false;
+                    setLoader(false, "✓ Added picks like " + watchedTitle);
+                    refreshCardsOnly(replaceAsSearchView);
+                });
+            } else {
+                uiHandler.post(() -> setLoader(false, "✓ Watched: " + watchedTitle));
+            }
+        });
     }
 
     private JSONArray getFilteredItemsFromMemory() {
@@ -1409,12 +1488,15 @@ public class AuraActivity extends Activity {
         JSONArray pool = new JSONArray();
         Set<String> seenKeys = new HashSet<>();
         JSONArray[] sources = showingVoiceResults ? new JSONArray[]{primary, memRecos} : new JSONArray[]{memRecos};
+        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
+        int maxYear = JustWatchGraph.getCurrentYear();
         for (JSONArray arr : sources) {
             if (arr == null) continue;
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
                 if (o == null || o.optString("poster_url").isEmpty()) continue;
-                if (o.optInt("year", 2024) > JustWatchGraph.MAX_RELEASED_YEAR) continue;
+                int y = o.optInt("year", maxYear);
+                if (y > maxYear || y < minModernYear) continue;
                 String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
                 String k = AuraDb.normalizeTitleKey(t);
                 if (!k.isEmpty() && !memWatchedKeys.contains(k) && !seenKeys.contains(k)) {
@@ -1483,10 +1565,15 @@ public class AuraActivity extends Activity {
 
     private void runSearchSessionTurn(final String query) {
         showingWatchedList = false;
-        setLoader(true, "Curating: \"" + query + "\"…");
+        setLoader(true, "Search Agent · \"" + query + "\"…");
         final String prof = memProfile;
         bgPool.submit(() -> {
-            final JSONObject res = voice.handleTurn(prof, query, false);
+            final JSONObject res = voice.handleTurn(
+                prof,
+                query,
+                false,
+                step -> uiHandler.post(() -> setLoader(true, step))
+            );
             uiHandler.post(() -> {
                 memVoiceSession = res;
                 showingVoiceResults = true;
@@ -1498,15 +1585,21 @@ public class AuraActivity extends Activity {
     }
 
     private void triggerManualRefresh() {
-        setLoader(true, "AI curating picks…");
+        setLoader(true, "Agent 1/3 · Planning queries…");
         final String prof = memProfile;
         bgPool.submit(() -> {
-            JSONArray fresh = ai.getOrRefreshForProfile(prof, new JSONObject(), db.listHistory(prof), true);
+            JSONArray fresh = ai.getOrRefreshForProfile(
+                prof,
+                new JSONObject(),
+                db.listHistory(prof),
+                true,
+                step -> uiHandler.post(() -> setLoader(true, step))
+            );
             sync.syncWithHost();
             uiHandler.post(() -> {
                 memRecos = fresh;
                 showingVoiceResults = false;
-                setLoader(false, "✓ Updated");
+                setLoader(false, "✓ Curated " + fresh.length() + " picks");
                 refreshAllSections(true);
             });
         });

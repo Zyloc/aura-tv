@@ -91,7 +91,19 @@ public class SyncManager {
             }
             JSONArray recos = remote.optJSONArray("recommendations");
             if (recos != null && recos.length() > 0 && db.getProfileRecommendations(profile).length() == 0) {
-                db.saveProfileRecommendations(profile, recos);
+                int minYear = JustWatchGraph.getDefaultMinModernYear();
+                int maxYear = JustWatchGraph.getCurrentYear();
+                JSONArray validModern = new JSONArray();
+                for (int i = 0; i < recos.length(); i++) {
+                    JSONObject r = recos.optJSONObject(i);
+                    if (r != null) {
+                        int y = r.optInt("year", maxYear);
+                        if (y >= minYear && y <= maxYear) validModern.put(r);
+                    }
+                }
+                if (validModern.length() >= 8) {
+                    db.saveProfileRecommendations(profile, validModern);
+                }
             }
             JSONObject vs = remote.optJSONObject("voice_session");
             JSONArray localRes = db.getVoiceSession(profile).optJSONArray("results");

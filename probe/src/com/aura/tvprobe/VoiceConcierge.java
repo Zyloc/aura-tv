@@ -23,13 +23,21 @@ public class VoiceConcierge {
     }
 
     public synchronized JSONObject handleTurn(String profileId, String userText, boolean reset) {
+        return handleTurn(profileId, userText, reset, null);
+    }
+
+    public synchronized JSONObject handleTurn(
+        String profileId,
+        String userText,
+        boolean reset,
+        AiRecommender.AgentProgressListener progress
+    ) {
         if (reset) {
             db.setSetting("voice_session_" + profileId, "");
             new Thread(sync::syncWithHost).start();
             return db.getVoiceSession(profileId);
         }
 
-        // Push latest watched shows, filters, and profile to host server first
         sync.syncWithHost();
 
         List<String> activeFilters = db.getActiveFilters(profileId);
@@ -37,7 +45,7 @@ public class VoiceConcierge {
             ? ("Apply filters: " + activeFilters.toString())
             : userText.trim();
 
-        JSONObject localRes = runLocalConversationalTurn(profileId, effectiveQuery, activeFilters);
+        JSONObject localRes = runAgenticSearchTurn(profileId, effectiveQuery, activeFilters, progress);
         if (localRes != null && localRes.optJSONArray("results") != null && localRes.optJSONArray("results").length() > 0) {
             new Thread(sync::syncWithHost).start();
             return localRes;
@@ -80,13 +88,31 @@ public class VoiceConcierge {
         }
     }
 
-    private JSONObject runLocalConversationalTurn(String profileId, String userText, List<String> activeFilters) {
+    private JSONObject runAgenticSearchTurn(
+        String profileId,
+        String userText,
+        List<String> activeFilters,
+        AiRecommender.AgentProgressListener progress
+    ) {
         JSONObject session = db.getVoiceSession(profileId);
         JSONArray turns = session.optJSONArray("turns");
         if (turns == null) turns = new JSONArray();
 
+        int currentYear = JustWatchGraph.getCurrentYear();
+        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
         List<String> watchedNames = collectWatchedNames(profileId);
-        String prompt = buildPrompt(profileId, turns, userText, activeFilters, watchedNames);
+
+        // Agent Step 1: Plan primary search queries + watched-show second-hop traversal seeds
+        if (progress != null) progress.onStep("Search Agent 1/3 · Planning queries for \"" + userText + "\"…");
+        JSONObject searchPlan = ai.planAgentSearchStrategy(profileId, userText, watchedNames, minModernYear, currentYear);
+
+        // Agent Step 2: Execute multi-hop search & co-watched graph traversal
+        if (progress != null) progress.onStep("Search Agent 2/3 · Traversing " + minModernYear + "–" + currentYear + " streaming graph…");
+        List<String> cfPool = ai.executeMultiHopTraversal(profileId, searchPlan, minModernYear);
+
+        // Agent Step 3: Rank & synthesize search results + next-hop traversal chips
+        if (progress != null) progress.onStep("Search Agent 3/3 · Ranking top matches…");
+        String prompt = buildPrompt(profileId, turns, userText, activeFilters, watchedNames, cfPool, minModernYear, currentYear);
         String rawJson = ai.callGeminiJson(prompt);
 
         JSONObject out = new JSONObject();
@@ -94,51 +120,66 @@ public class VoiceConcierge {
             turns.put(new JSONObject().put("role", "user").put("text", userText));
             if (rawJson != null) {
                 JSONObject parsed = new JSONObject(rawJson);
-                String reply = parsed.optString("reply", "Updated picks for your session.");
+                String reply = parsed.optString("reply", "Updated picks for your search.");
                 turns.put(new JSONObject().put("role", "assistant").put("text", reply));
                 out.put("reply", reply);
                 out.put("turns", trimTurns(turns, 8));
-                JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"));
+                JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minModernYear, currentYear);
                 out.put("results", db.filterOutWatched(enriched));
                 JSONArray followUps = parsed.optJSONArray("follow_ups");
-                out.put("follow_ups", (followUps != null && followUps.length() > 0) ? followUps : defaultFollowUps());
+                if (followUps != null && followUps.length() > 0) {
+                    db.saveTraversalChips(profileId, followUps);
+                    out.put("follow_ups", followUps);
+                } else {
+                    out.put("follow_ups", defaultFollowUps(currentYear));
+                }
             } else {
                 String reply = "Matched '" + userText + "' using local graph.";
                 turns.put(new JSONObject().put("role", "assistant").put("text", reply));
                 out.put("reply", reply);
                 out.put("turns", trimTurns(turns, 8));
                 out.put("results", db.getProfileRecommendations(profileId));
-                out.put("follow_ups", defaultFollowUps());
+                out.put("follow_ups", defaultFollowUps(currentYear));
             }
             db.saveVoiceSession(profileId, out);
         } catch (Exception ignored) {}
         return db.getVoiceSession(profileId);
     }
 
-    private String buildPrompt(String profileId, JSONArray turns, String userText, List<String> filters, List<String> watched) {
+    private String buildPrompt(
+        String profileId,
+        JSONArray turns,
+        String userText,
+        List<String> filters,
+        List<String> watched,
+        List<String> cfPool,
+        int minModernYear,
+        int currentYear
+    ) {
         StringBuilder conv = new StringBuilder();
         for (int i = 0; i < turns.length(); i++) {
             JSONObject t = turns.optJSONObject(i);
             if (t != null) conv.append(t.optString("role")).append(": ").append(t.optString("text")).append("\n");
         }
-        List<String> cfPool = ai.fetchCollaborativeCandidateNames(profileId);
         String personalGuide = db.getProfileTaste(profileId);
         String defaultGuide = db.getDefaultTasteGuide();
-        return "You are Aura, a high-taste movie & TV concierge for profile '" + db.getProfileLabel(profileId) + "'.\n" +
+        return "You are Aura's Agentic Search & Recommendation Engine for profile '" + db.getProfileLabel(profileId) + "'.\n" +
+            "Current Date: November " + currentYear + " (2026 releases that are out are valid; 2027+ are unreleased).\n" +
             "Personal Guide AI (for this profile): " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
             "Default Guide AI (global baseline): " + defaultGuide + "\n" +
             "STRICT EXCLUSION LIST — Already watched (NEVER recommend any of these): " + watched.toString() + "\n" +
-            "Collaborative Filtering Graph Candidates (co-watched high-affinity titles in India): " + cfPool.toString() + "\n" +
+            "Multi-Hop Search & Co-Watch Graph Traversal Candidates (" + minModernYear + "–" + currentYear + "): " + cfPool.toString() + "\n" +
             "Active Persistent Filters (MUST obey): " + (filters.isEmpty() ? "None" : filters.toString()) + "\n" +
             "Session Flow so far:\n" + conv.toString() +
-            "New User Input: \"" + userText + "\"\n\n" +
+            "User Search / Traversal Query: \"" + userText + "\"\n\n" +
             "STRICT RULES:\n" +
-            "- ONLY recommend ALREADY-RELEASED titles (release year <= 2025) currently streaming on subscription OTT in India (Disney+ Hotstar, Netflix, Prime Video, Apple TV+, SonyLIV, or ZEE5).\n" +
-            "- NEVER recommend unreleased 2026/2027 titles.\n" +
+            "- If the user says they watched a title (e.g. 'watched X' or 'similar to X'), treat this as a second-hop traversal query and recommend modern titles similar to X.\n" +
+            "- MODERN RECENCY WINDOW: ONLY recommend released titles from " + minModernYear + " to " + currentYear + " (strongly prioritize 2021–" + currentYear + "). Do NOT recommend old 1980s, 1990s, 2000s, or early-2010s titles unless explicitly requested.\n" +
+            "- NEVER recommend unreleased 2027+ titles.\n" +
             "Return a JSON object with:\n" +
-            "1. 'reply': Short 1-sentence summary of what was matched.\n" +
-            "2. 'results': Array of 15 unwatched released titles matching the session & filters, each with keys: 'title', 'app' ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their request & taste).\n" +
-            "3. 'follow_ups': Array of 4 short 2-3 word refinement chips.";
+            "1. 'reply': Short 1-sentence summary of the search traversal.\n" +
+            "2. 'results': Array of 15 unwatched modern (" + minModernYear + "–" + currentYear + ") titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their query & watched history).\n" +
+            "3. 'follow_ups': Array of 3 short clickable next-hop search queries (max 24 chars each, e.g. '2024-" + currentYear + " Sci-Fi', 'More like <Top Hit>', 'High-Pace Thrillers').";
     }
 
     private List<String> collectWatchedNames(String profileId) {
@@ -168,12 +209,11 @@ public class VoiceConcierge {
         return out;
     }
 
-    private JSONArray defaultFollowUps() {
+    private JSONArray defaultFollowUps(int currentYear) {
         JSONArray arr = new JSONArray();
-        arr.put("Under 100 mins");
-        arr.put("Mind-bending plot twists");
-        arr.put("High IMDb rating (8.0+)");
-        arr.put("Darker thriller tone");
+        arr.put("2024–" + currentYear + " Top Releases");
+        arr.put("Mind-Bending Sci-Fi");
+        arr.put("High-Pace Thrillers");
         return arr;
     }
 }
