@@ -329,7 +329,12 @@ public final class HeroSliderBuilder {
             st.metaView.setText("   " + buildMetaString(item));
         }
         if (st.titleView != null) {
-            st.titleView.setText(item.optString("title", ""));
+            String series = item.optString("series_title", "");
+            String rawTitle = item.optString("title", "");
+            String dispTitle = (!series.isEmpty() && !series.equalsIgnoreCase(rawTitle) && !rawTitle.isEmpty())
+                ? (series + " \u00B7 " + rawTitle)
+                : (!series.isEmpty() ? series : rawTitle);
+            st.titleView.setText(dispTitle);
         }
         if (st.synopsisView != null) {
             String syn = item.optString("synopsis", item.optString("reason", ""));
@@ -359,7 +364,7 @@ public final class HeroSliderBuilder {
         return raw;
     }
 
-    private static String buildMetaString(JSONObject item) {
+    static String buildMetaString(JSONObject item) {
         StringBuilder sb = new StringBuilder();
         String rating = extractRatingText(item);
         if (!rating.isEmpty()) sb.append(rating).append(" \u00B7 ");

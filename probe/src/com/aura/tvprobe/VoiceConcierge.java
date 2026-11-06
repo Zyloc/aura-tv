@@ -101,17 +101,18 @@ public class VoiceConcierge {
         int currentYear = JustWatchGraph.getCurrentYear();
         int minModernYear = JustWatchGraph.getDefaultMinModernYear();
         List<String> watchedNames = collectWatchedNames(profileId);
+        String contextualQuery = buildContextualQuery(turns, userText);
 
         // Agent Step 1: Plan primary search queries + watched-show second-hop traversal seeds
-        if (progress != null) progress.onStep("Search Agent 1/3 · Planning queries for \"" + userText + "\"…");
-        JSONObject searchPlan = ai.planAgentSearchStrategy(profileId, userText, watchedNames, minModernYear, currentYear);
+        if (progress != null) progress.onStep("Search Agent 1/3 · Planning follow-up & graph queries for \"" + userText + "\"…");
+        JSONObject searchPlan = ai.planAgentSearchStrategy(profileId, contextualQuery, watchedNames, minModernYear, currentYear);
 
         // Agent Step 2: Execute multi-hop search & co-watched graph traversal
         if (progress != null) progress.onStep("Search Agent 2/3 · Traversing " + minModernYear + "–" + currentYear + " streaming graph…");
         List<String> cfPool = ai.executeMultiHopTraversal(profileId, searchPlan, minModernYear);
 
         // Agent Step 3: Rank & synthesize search results + next-hop traversal chips
-        if (progress != null) progress.onStep("Search Agent 3/3 · Ranking top matches…");
+        if (progress != null) progress.onStep("Search Agent 3/3 · Ranking top matches for your conversation…");
         String prompt = buildPrompt(profileId, turns, userText, activeFilters, watchedNames, cfPool, minModernYear, currentYear);
         String rawJson = ai.callGeminiJson(prompt);
 
@@ -134,17 +135,37 @@ public class VoiceConcierge {
                     out.put("follow_ups", defaultFollowUps(currentYear));
                 }
             } else {
-                String reply = "Matched '" + userText + "' via JustWatch India graph.";
+                String reply = "Matched '" + contextualQuery + "' via JustWatch India graph.";
                 turns.put(new JSONObject().put("role", "assistant").put("text", reply));
                 out.put("reply", reply);
                 out.put("turns", trimTurns(turns, 8));
-                JSONArray jwHits = JustWatchGraph.fetchDeterministicSearchCandidates(userText, minModernYear);
+                JSONArray jwHits = JustWatchGraph.fetchDeterministicSearchCandidates(contextualQuery, minModernYear);
                 out.put("results", jwHits.length() > 0 ? db.filterOutWatched(jwHits) : db.getProfileRecommendations(profileId));
                 out.put("follow_ups", defaultFollowUps(currentYear));
             }
             db.saveVoiceSession(profileId, out);
         } catch (Exception ignored) {}
         return db.getVoiceSession(profileId);
+    }
+
+    private String buildContextualQuery(JSONArray turns, String currentQuery) {
+        if (turns == null || turns.length() == 0) return currentQuery;
+        List<String> userQueries = new ArrayList<>();
+        for (int i = 0; i < turns.length(); i++) {
+            JSONObject t = turns.optJSONObject(i);
+            if (t != null && "user".equalsIgnoreCase(t.optString("role"))) {
+                String txt = t.optString("text", "").trim();
+                if (!txt.isEmpty()) userQueries.add(txt);
+            }
+        }
+        if (userQueries.isEmpty()) return currentQuery;
+        String firstTopic = userQueries.get(0);
+        String lastTopic = userQueries.get(userQueries.size() - 1);
+        if (firstTopic.equalsIgnoreCase(currentQuery)) return currentQuery;
+        if (!firstTopic.equalsIgnoreCase(lastTopic)) {
+            return firstTopic + " -> " + lastTopic + " -> Follow-up: " + currentQuery;
+        }
+        return firstTopic + " -> Follow-up: " + currentQuery;
     }
 
     private String buildPrompt(
@@ -176,13 +197,14 @@ public class VoiceConcierge {
             "Session Flow so far:\n" + conv.toString() +
             "User Search / Traversal Query: \"" + userText + "\"\n\n" +
             "STRICT RULES:\n" +
+            "- MULTI-TURN CONVERSATION: If 'Session Flow so far' has previous user turns, treat the current query as a FOLLOW-UP REFINEMENT on that conversation (e.g. narrowing by platform, runtime, mood, rating, or pivoting from a recommended show).\n" +
             "- If the user says they watched a title (e.g. 'watched X' or 'similar to X'), treat this as a second-hop traversal query and recommend modern titles similar to X.\n" +
             "- MODERN RECENCY WINDOW: ONLY recommend released titles from " + minModernYear + " to " + currentYear + " (strongly prioritize " + recentPriorityStart + "–" + currentYear + ", including recent releases up to " + todayDate + "). Do NOT recommend old 1980s, 1990s, 2000s, or early-2010s titles unless explicitly requested.\n" +
             "- NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +
-            "1. 'reply': Short 1-sentence summary of the search traversal.\n" +
-            "2. 'results': Array of 15 unwatched modern (" + minModernYear + "–" + currentYear + ") titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their query & watched history).\n" +
-            "3. 'follow_ups': Array of 3 short clickable next-hop search queries (max 24 chars each, e.g. '" + (currentYear - 2) + "-" + currentYear + " Sci-Fi', 'More like <Top Hit>', 'High-Pace Thrillers').";
+            "1. 'reply': Short 1-sentence conversational summary explaining how you answered or refined the previous search.\n" +
+            "2. 'results': Array of 14 unwatched modern (" + minModernYear + "–" + currentYear + ") titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their query & follow-up).\n" +
+            "3. 'follow_ups': Array of 4 short conversational follow-up refinements (max 26 chars each, e.g. 'Only on Netflix & Prime', 'Shorter under 2 hours', 'Darker & grittier tone', 'More like <Top Result>').";
     }
 
     private List<String> collectWatchedNames(String profileId) {

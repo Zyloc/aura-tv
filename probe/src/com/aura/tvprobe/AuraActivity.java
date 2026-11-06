@@ -212,7 +212,7 @@ public class AuraActivity extends Activity implements
         askPill.setPadding(dp(10), dp(4), dp(10), dp(4));
         searchBox.addView(askPill, GlassTheme.wrapParams());
 
-        searchBox.setOnClickListener(v -> showSearchInputDialog());
+        searchBox.setOnClickListener(v -> openAgenticSearchStudio());
         searchBox.setOnFocusChangeListener((v, focused) -> {
             if (focused) {
                 searchBox.setBackground(GlassTheme.focusRounded(
@@ -229,31 +229,27 @@ public class AuraActivity extends Activity implements
         return searchBox;
     }
 
-    private void showSearchInputDialog() {
-        EditText et = new EditText(this);
-        et.setHint("e.g. Gripping crime thriller, sci-fi like Severance\u2026");
-        et.setText(lastSearchQuery);
-        et.setSingleLine(true);
-        et.setInputType(InputType.TYPE_CLASS_TEXT);
-        et.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("Search Shows or Ask Aura AI")
-            .setView(et)
-            .setPositiveButton("Search AI", (d, w) -> {
-                hideKeyboard(et);
-                runSearchQuery(et.getText().toString());
-            })
-            .setNegativeButton("Cancel", (d, w) -> hideKeyboard(et))
-            .create();
-
-        et.setOnEditorActionListener((v, actionId, ev) -> {
-            hideKeyboard(et);
-            dialog.dismiss();
-            runSearchQuery(et.getText().toString());
-            return true;
-        });
-        dialog.show();
+    private void openAgenticSearchStudio() {
+        hideKeyboard(rootLayout);
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        JSONObject session = db.getVoiceSession(activeProfile);
+        JSONArray turns = session != null ? session.optJSONArray("turns") : null;
+        JSONArray results = session != null ? session.optJSONArray("results") : null;
+        if (results == null || results.length() == 0) {
+            results = db.getProfileRecommendations(activeProfile);
+        }
+        SearchOverlay.setConversationTurns(searchOverlay, turns, this);
+        String reply = session != null ? session.optString("reply", "") : "";
+        if (!reply.isEmpty()) {
+            SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
+        } else {
+            SearchOverlay.addMessage(searchOverlay, "assistant",
+                "Ask any question or click a follow-up chip below to refine your recommendations across your streaming apps.", this);
+        }
+        SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
+        SearchOverlay.setResults(searchOverlay, results, this, this);
+        SearchOverlay.show(searchOverlay, this, true);
     }
 
     private void hideKeyboard(View v) {
@@ -663,9 +659,11 @@ public class AuraActivity extends Activity implements
         hideKeyboard(rootLayout);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
-        SearchOverlay.show(searchOverlay, this);
+        if (!SearchOverlay.isVisible(searchOverlay)) {
+            SearchOverlay.show(searchOverlay, this, false);
+        }
         SearchOverlay.setLoading(searchOverlay, true,
-            "Querying JustWatch India Graph & Gemini AI (using your Watch History)\u2026");
+            "Querying JustWatch India Graph & Gemini AI (using your Watch History & Thread)\u2026");
         bgPool.submit(() -> {
             JSONObject res = voice.handleTurn(activeProfile, q, false,
                 msg -> ui.post(() -> {
@@ -681,6 +679,7 @@ public class AuraActivity extends Activity implements
         if (!SearchOverlay.isVisible(searchOverlay)) return;
         SearchOverlay.setLoading(searchOverlay, false, "");
         if (res == null) return;
+        SearchOverlay.setConversationTurns(searchOverlay, res.optJSONArray("turns"), this);
         String reply = res.optString("reply", "");
         if (!reply.isEmpty()) SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
         List<String> chips = new ArrayList<>();
@@ -702,6 +701,25 @@ public class AuraActivity extends Activity implements
     @Override
     public void onFollowUpClicked(String query) {
         runSearchQuery(query);
+    }
+
+    @Override
+    public void onResetConversation() {
+        lastSearchQuery = "";
+        if (searchLabel != null) {
+            searchLabel.setText("Search shows or ask Aura AI\u2026");
+            searchLabel.setTextColor(GlassTheme.TEXT_MUTED);
+        }
+        bgPool.submit(() -> {
+            voice.handleTurn(activeProfile, "", true);
+            ui.post(() -> {
+                SearchOverlay.setConversationTurns(searchOverlay, new JSONArray(), this);
+                SearchOverlay.addMessage(searchOverlay, "assistant",
+                    "Started a fresh conversation topic. Type a query above or pick a chip below.", this);
+                SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
+                SearchOverlay.setResults(searchOverlay, db.getProfileRecommendations(activeProfile), this, this);
+            });
+        });
     }
 
     @Override
