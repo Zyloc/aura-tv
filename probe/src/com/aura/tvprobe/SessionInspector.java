@@ -143,10 +143,14 @@ public class SessionInspector {
             JSONObject r = rows.optJSONObject(i);
             if (r == null) continue;
             String pkg = r.optString("package_name");
-            if (ctx.getPackageName().equals(pkg)) continue;
+            if (ctx.getPackageName().equals(pkg) || pkg.contains("youtube") || pkg.contains("smarttube")) continue;
             String ch = defaultCh.isEmpty() ? chMap.getOrDefault(r.optLong("channel_id"), "") : defaultCh;
+            int posSec = (int) (r.optLong("last_playback_position_millis", 0) / 1000L);
+            if (posSec < 60) continue;
+
             String title = r.optString("title", "Program");
             String epTitle = r.optString("episode_title", "");
+            if (title.equalsIgnoreCase(friendlyApp(pkg))) continue;
             int durSec = (int) (r.optLong("duration_millis", 0) / 1000L);
             JSONObject item = new JSONObject();
             try {
@@ -161,7 +165,7 @@ public class SessionInspector {
                 item.put("poster_url", r.optString("poster_art_uri"));
                 item.put("runtime_min", durSec > 0 ? Math.max(1, durSec / 60) : 45);
                 item.put("launch_uri", r.optString("intent_uri"));
-                item.put("position_sec", (int) (r.optLong("last_playback_position_millis", 0) / 1000L));
+                item.put("position_sec", posSec);
                 item.put("duration_sec", durSec);
                 db.upsertWatchItem(item);
             } catch (Exception ignored) {}
@@ -219,8 +223,12 @@ public class SessionInspector {
                 out.put("series_title", meta.optString("android.media.metadata.ARTIST"));
                 out.put("poster_url", meta.optString("android.media.metadata.ALBUM_ART_URI"));
             }
-            out.put("media_key", (pkg + ":" + out.optString("series_title") + ":" + out.optString("title")).toLowerCase());
-            db.upsertWatchItem(out);
+            String checkTitle = out.optString("series_title").isEmpty() ? out.optString("title") : out.optString("series_title");
+            if (!checkTitle.isEmpty() && !checkTitle.equalsIgnoreCase(friendlyApp(pkg))
+                    && !pkg.contains("youtube") && !pkg.contains("smarttube")) {
+                out.put("media_key", (pkg + ":" + out.optString("series_title") + ":" + out.optString("title")).toLowerCase());
+                db.upsertWatchItem(out);
+            }
         } catch (Exception ignored) {}
         return out;
     }

@@ -131,6 +131,11 @@ public final class SearchOverlay {
 
     private static LinearLayout buildInnerCard(Context ctx) {
         LinearLayout card = createCardContainer(ctx);
+        TextView sourceHdr = GlassTheme.makeText(ctx,
+            "\u2726 Agent Search \u00B7 Live JustWatch India Graph + Gemini AI + Your Watch History",
+            10.5f, GlassTheme.GOLD_ACCENT, GlassTheme.FONT_BOLD, 1);
+        sourceHdr.setPadding(0, 0, 0, dp(ctx, 8));
+        card.addView(sourceHdr);
         card.addView(buildLoadingRow(ctx));
         card.addView(buildResultsScroll(ctx));
         card.addView(buildChipsScroll(ctx));
@@ -229,25 +234,37 @@ public final class SearchOverlay {
     }
 
     private static void styleResultCard(LinearLayout card, Context ctx) {
-        card.setBackground(GlassTheme.glassSubtle(dp(ctx, 10)));
+        float rad = dp(ctx, 10);
+        card.setBackground(GlassTheme.glassSubtle(rad));
         LinearLayout.LayoutParams lp = GlassTheme.matchWrapParams();
         lp.bottomMargin = dp(ctx, 6);
         card.setLayoutParams(lp);
         card.setFocusable(true);
-        applyFocusHighlight(card);
+        card.setOnFocusChangeListener((v, focused) -> {
+            if (focused) {
+                card.setBackground(GlassTheme.focusRounded(
+                    GlassTheme.SURFACE_ELEV, Color.WHITE, dp(ctx, 2), rad));
+            } else {
+                card.setBackground(GlassTheme.glassSubtle(rad));
+            }
+        });
     }
 
     private static void addResultContent(LinearLayout card, JSONObject item,
                                          Context ctx) {
-        card.addView(buildThumbnailPlaceholder(ctx));
+        card.addView(buildThumbnailView(item, ctx));
         card.addView(buildResultTextBlock(item, ctx));
     }
 
-    private static View buildThumbnailPlaceholder(Context ctx) {
-        View thumb = new View(ctx);
+    private static View buildThumbnailView(JSONObject item, Context ctx) {
+        android.widget.ImageView thumb = new android.widget.ImageView(ctx);
         int w = dp(ctx, THUMB_W), h = dp(ctx, THUMB_H);
         thumb.setLayoutParams(new LinearLayout.LayoutParams(w, h));
-        thumb.setBackground(GlassTheme.solidRounded(GlassTheme.BORDER_LIGHT, dp(ctx, 6)));
+        thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+        thumb.setBackgroundColor(GlassTheme.SURFACE_ELEV);
+        ImageLoader.applyRoundedCorners(thumb, dp(ctx, 6));
+        String url = item.optString("poster_url", "");
+        if (!url.isEmpty()) ImageLoader.load(ctx, url, thumb);
         return thumb;
     }
 
@@ -394,8 +411,8 @@ public final class SearchOverlay {
     }
 
     private static TextView buildBubble(String text, boolean isUser, Context ctx) {
-        int bg = isUser ? GlassTheme.ACCENT : GlassTheme.GLASS_CARD;
-        int fg = isUser ? Color.WHITE : GlassTheme.TEXT_PRIMARY;
+        int bg = isUser ? GlassTheme.SURFACE_ELEV : GlassTheme.GLASS_CARD;
+        int fg = isUser ? GlassTheme.GOLD_ACCENT : GlassTheme.TEXT_PRIMARY;
         TextView tv = GlassTheme.makeText(ctx, text, 13f, fg,
                 GlassTheme.FONT_REGULAR, 10);
         tv.setBackground(GlassTheme.solidRounded(bg, dp(ctx, 12)));

@@ -37,8 +37,18 @@ public class AuraDb extends SQLiteOpenHelper {
         this.appCtx = ctx.getApplicationContext();
         applyBundledEnvIfPresent();
         ensureDefaultProfileExists();
+        purgePromotionalNoiseFromHistory();
         purgeUnreleasedFromRecos();
         if (sInstance == null) sInstance = this;
+    }
+
+    public void purgePromotionalNoiseFromHistory() {
+        try {
+            SQLiteDatabase db = getWritableDatabase();
+            db.execSQL("DELETE FROM watch_history WHERE app_pkg LIKE '%youtube%' OR app_pkg LIKE '%smarttube%'");
+            db.execSQL("DELETE FROM watch_history WHERE LOWER(title) = 'netflix' OR LOWER(title) = 'prime video'");
+            db.execSQL("DELETE FROM watch_history WHERE position_sec < 60");
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -368,21 +378,23 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public List<String> getDynamicTasteAnchors(String profileId) {
         List<String> anchors = new ArrayList<>();
-        JSONArray watched = listManuallyWatched();
-        for (int i = 0; i < watched.length() && anchors.size() < 2; i++) {
-            JSONObject o = watched.optJSONObject(i);
-            if (o != null && o.optInt("user_rating", 0) >= 8) {
-                String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
-                if (!t.isEmpty() && !anchors.contains(t)) anchors.add(t);
-            }
-        }
         JSONArray hist = listHistory(profileId);
-        for (int i = 0; i < hist.length() && anchors.size() < 3; i++) {
+        for (int i = 0; i < hist.length() && anchors.size() < 4; i++) {
             JSONObject h = hist.optJSONObject(i);
             if (h == null) continue;
             if (h.optString("app_pkg").contains("youtube")) continue;
             String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
-            if (!t.isEmpty() && !anchors.contains(t)) anchors.add(t);
+            if (!t.isEmpty() && !t.equalsIgnoreCase("Netflix") && !anchors.contains(t)) {
+                anchors.add(t);
+            }
+        }
+        JSONArray watched = listManuallyWatched();
+        for (int i = 0; i < watched.length() && anchors.size() < 6; i++) {
+            JSONObject o = watched.optJSONObject(i);
+            if (o != null && o.optInt("user_rating", 8) >= 7) {
+                String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
+                if (!t.isEmpty() && !anchors.contains(t)) anchors.add(t);
+            }
         }
         return anchors;
     }

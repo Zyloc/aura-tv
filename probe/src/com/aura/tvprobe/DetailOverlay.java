@@ -294,9 +294,9 @@ public final class DetailOverlay {
     private static void bindRateButton(TextView btn, int score, int active) {
         boolean selected = score == active;
         boolean highlight = score <= active && active > 0;
-        int bg = selected ? GlassTheme.ACCENT
-               : highlight ? GlassTheme.ACCENT_LIGHT : GlassTheme.GLASS_CARD;
-        int fg = selected ? Color.WHITE : GlassTheme.TEXT_SECONDARY;
+        int bg = selected ? GlassTheme.GOLD_ACCENT
+               : highlight ? GlassTheme.SURFACE_ELEV : GlassTheme.GLASS_CARD;
+        int fg = selected ? GlassTheme.TEXT_ON_LIGHT : GlassTheme.TEXT_SECONDARY;
         btn.setBackground(GlassTheme.solidRounded(bg, 6));
         btn.setTextColor(fg);
     }
@@ -317,7 +317,7 @@ public final class DetailOverlay {
 
     private static void addReasonLabel(LinearLayout section, Context ctx) {
         TextView lbl = GlassTheme.makeLabel(ctx, "WHY AURA RECOMMENDS THIS");
-        lbl.setTextColor(GlassTheme.ACCENT);
+        lbl.setTextColor(GlassTheme.GOLD_ACCENT);
         section.addView(lbl);
     }
 
