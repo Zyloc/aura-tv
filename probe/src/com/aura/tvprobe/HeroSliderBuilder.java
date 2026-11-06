@@ -341,11 +341,7 @@ public final class HeroSliderBuilder {
             st.synopsisView.setText(syn);
         }
         if (st.provenanceView != null) {
-            String reason = item.optString("reason", "");
-            String prov = !reason.isEmpty()
-                ? ("\u2726 " + reason)
-                : "\u2726 Picked from your Watch History & JustWatch India Graph";
-            st.provenanceView.setText(prov);
+            st.provenanceView.setVisibility(View.GONE);
         }
         if (animate && st.titleView != null) {
             st.titleView.setAlpha(0.4f);

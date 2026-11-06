@@ -167,18 +167,15 @@ public class AuraActivity extends Activity implements
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setClipChildren(false);
-        bar.setPadding(dp(14), dp(10), dp(14), dp(6));
-        // 3-dash (☰) button lives inside the top bar so it scrolls cleanly and never overlaps rail headers
+        bar.setPadding(dp(18), dp(12), dp(22), dp(6));
         bar.addView(NavPanelBuilder.createTopBarHamburger(navPanel, this));
         bar.addView(buildSearchBox());
-        LinearLayout.LayoutParams chipsLp = GlassTheme.weightParams(1f);
-        chipsLp.leftMargin = dp(8);
-        chipsLp.rightMargin = dp(10);
-        bar.addView(buildChipsScroll(), chipsLp);
+        // Keep chipsRow off-screen/hidden on Home so the top bar stays ultra-minimalist
+        chipsRow = new LinearLayout(this);
+        View spacer = new View(this);
+        bar.addView(spacer, GlassTheme.weightParams(1f));
         profileClockLabel = GlassTheme.makeText(this, "", 11f,
-            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        profileClockLabel.setBackground(GlassTheme.glassCard(dp(10)));
-        profileClockLabel.setPadding(dp(12), dp(6), dp(12), dp(6));
+            GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1);
         bar.addView(profileClockLabel);
         return bar;
     }
@@ -187,9 +184,9 @@ public class AuraActivity extends Activity implements
         searchBox = new LinearLayout(this);
         searchBox.setOrientation(LinearLayout.HORIZONTAL);
         searchBox.setGravity(Gravity.CENTER_VERTICAL);
-        float r = dp(12);
+        float r = dp(18);
         searchBox.setBackground(GlassTheme.glassCard(r));
-        searchBox.setPadding(dp(12), dp(5), dp(6), dp(5));
+        searchBox.setPadding(dp(14), dp(6), dp(16), dp(6));
         searchBox.setFocusable(true);
         searchBox.setClickable(true);
 
@@ -198,19 +195,11 @@ public class AuraActivity extends Activity implements
         icon.setGravity(Gravity.CENTER);
         searchBox.addView(icon, GlassTheme.wrapParams());
 
-        searchLabel = GlassTheme.makeText(this, "Search shows or ask Aura AI\u2026", 11.5f,
-            GlassTheme.TEXT_MUTED, GlassTheme.FONT_REGULAR, 1);
+        searchLabel = GlassTheme.makeText(this, "Search", 11.5f,
+            GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1);
         searchLabel.setGravity(Gravity.CENTER_VERTICAL);
-        searchLabel.setPadding(dp(8), 0, dp(8), 0);
-        LinearLayout.LayoutParams lblLp = new LinearLayout.LayoutParams(dp(215), dp(26));
-        lblLp.gravity = Gravity.CENTER_VERTICAL;
-        searchBox.addView(searchLabel, lblLp);
-
-        TextView askPill = GlassTheme.makeText(this, "Ask AI", 10.5f,
-            GlassTheme.TEXT_ON_LIGHT, GlassTheme.FONT_BOLD, 1);
-        askPill.setBackground(GlassTheme.primaryPill(dp(8)));
-        askPill.setPadding(dp(10), dp(4), dp(10), dp(4));
-        searchBox.addView(askPill, GlassTheme.wrapParams());
+        searchLabel.setPadding(dp(8), 0, dp(4), 0);
+        searchBox.addView(searchLabel, GlassTheme.wrapParams());
 
         searchBox.setOnClickListener(v -> openAgenticSearchStudio());
         searchBox.setOnFocusChangeListener((v, focused) -> {
@@ -218,11 +207,10 @@ public class AuraActivity extends Activity implements
                 searchBox.setBackground(GlassTheme.focusRounded(
                     GlassTheme.SURFACE_ELEV, Color.WHITE, dp(2.5f), r));
                 searchLabel.setTextColor(Color.WHITE);
-                v.animate().scaleX(1.03f).scaleY(1.03f).setDuration(150).start();
+                v.animate().scaleX(1.04f).scaleY(1.04f).setDuration(150).start();
             } else {
                 searchBox.setBackground(GlassTheme.glassCard(r));
-                searchLabel.setTextColor(lastSearchQuery.isEmpty()
-                    ? GlassTheme.TEXT_MUTED : GlassTheme.TEXT_PRIMARY);
+                searchLabel.setTextColor(GlassTheme.TEXT_SECONDARY);
                 v.animate().scaleX(1f).scaleY(1f).setDuration(150).start();
             }
         });
@@ -280,10 +268,6 @@ public class AuraActivity extends Activity implements
         searchOverlay = SearchOverlay.build(this, this);
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        slp.topMargin = dp(52);
-        slp.leftMargin = dp(16);
-        slp.rightMargin = dp(16);
-        slp.bottomMargin = dp(14);
         searchOverlay.setLayoutParams(slp);
         rootLayout.addView(searchOverlay);
         detailOverlay = DetailOverlay.build(this, this);
@@ -437,27 +421,19 @@ public class AuraActivity extends Activity implements
 
     private void addCategorizedRails(List<JSONObject> all) {
         if (all.isEmpty()) return;
-        String profName = db.getProfileLabel(activeProfile);
-        List<String> anchors = db.getDynamicTasteAnchors(activeProfile);
-        String anchorSub = anchors.isEmpty()
-            ? "Modern 2020\u20132026 Releases"
-            : ("Based on " + String.join(", ", anchors.subList(0, Math.min(3, anchors.size()))));
-
         int n = all.size();
         List<JSONObject> r1 = all.subList(0, Math.min(8, n));
         railsContainer.addView(RailBuilder.buildContentRail(
-            this, "Top Picks for " + profName, anchorSub, r1, this));
+            this, "For You", "", r1, this));
         if (n > 6) {
             List<JSONObject> r2 = all.subList(Math.min(6, n), Math.min(14, n));
             railsContainer.addView(RailBuilder.buildContentRail(
-                this, "Trending Across Your Apps",
-                "Netflix \u00B7 Prime Video \u00B7 JioHotstar \u00B7 Apple TV+", r2, this));
+                this, "Trending", "", r2, this));
         }
         if (n > 12) {
             List<JSONObject> r3 = all.subList(Math.min(12, n), n);
             railsContainer.addView(RailBuilder.buildContentRail(
-                this, "Critically Acclaimed & Mind-Bending",
-                "IMDb 8.0+ \u00B7 Curated via JustWatch India Graph", r3, this));
+                this, "Critically Acclaimed", "", r3, this));
         }
     }
 

@@ -78,7 +78,7 @@ public final class RailBuilder {
     public static LinearLayout buildContinueWatching(Context ctx, List<JSONObject> items,
                                                       RailCallback cb) {
         LinearLayout rail = createRailContainer(ctx);
-        addRailHeader(rail, ctx, "Continue Watching", "Across your streaming apps");
+        addRailHeader(rail, ctx, "Continue Watching", null);
         LinearLayout row = createHorizontalRow(ctx);
         int count = Math.min(items.size(), MAX_CONTINUE);
         for (int i = 0; i < count; i++) {
@@ -91,7 +91,7 @@ public final class RailBuilder {
     public static LinearLayout buildAppsDock(Context ctx, List<JSONObject> installedApps,
                                               RailCallback cb) {
         LinearLayout rail = createRailContainer(ctx);
-        addRailHeader(rail, ctx, "Your TV Apps", null);
+        addRailHeader(rail, ctx, "Apps", null);
         LinearLayout row = createHorizontalRow(ctx);
         for (JSONObject app : installedApps) {
             addAppTile(row, ctx, app, cb);
