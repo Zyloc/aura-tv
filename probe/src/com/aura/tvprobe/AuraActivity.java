@@ -49,8 +49,9 @@ public class AuraActivity extends Activity {
 
     private static final int SIDEBAR_COLLAPSED_W = 72;
     private static final int SIDEBAR_EXPANDED_W = 244;
-    private static final int RIGHT_DRAWER_W = 600;
+    private static final int RIGHT_DRAWER_W = 640;
     private static final int COLS_PER_ROW = 5;
+    private static final int COLS_WHEN_DRAWER_OPEN = 3;
     private static final int MAX_GRID_CARDS = 20; // 4 rows x 5 columns
 
     private static final int COLOR_BG_OBSIDIAN = Color.parseColor("#08090E");
@@ -92,6 +93,7 @@ public class AuraActivity extends Activity {
     private boolean sidebarExpanded = false;
     private boolean creatingNewProfileMode = false;
     private boolean drawerClosing = false;
+    private int activeGridCols = COLS_PER_ROW;
 
     private FrameLayout rootFrame;
     private LinearLayout rightStage;
@@ -267,14 +269,14 @@ public class AuraActivity extends Activity {
     private void buildMainLayout() {
         rightStage = new LinearLayout(this);
         rightStage.setOrientation(LinearLayout.VERTICAL);
-        rightStage.setPadding(34, 24, 34, 12);
+        rightStage.setPadding(28, 20, 28, 12);
         rightStage.setClipChildren(true);
         rightStage.setClipToPadding(true);
 
         rightStage.addView(buildUnifiedTopBar());
         rightStage.addView(buildMinimalTitleRow());
 
-        // Multi-row vertical ScrollView where each row holds 5 columns (5 tiles per row)
+        // Multi-row vertical ScrollView where each row holds 5 columns (or 3 columns when right panel is open)
         gridScrollView = new ScrollView(this);
         gridScrollView.setVerticalScrollBarEnabled(false);
         gridScrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -285,7 +287,7 @@ public class AuraActivity extends Activity {
         gridRowsContainer.setOrientation(LinearLayout.VERTICAL);
         gridRowsContainer.setClipChildren(false);
         gridRowsContainer.setClipToPadding(false);
-        gridRowsContainer.setPadding(14, 14, 16, 40);
+        gridRowsContainer.setPadding(6, 12, 6, 40);
         gridScrollView.addView(gridRowsContainer, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
 
@@ -595,9 +597,10 @@ public class AuraActivity extends Activity {
 
     private void buildRightSlideDrawers() {
         rightScrim = new FrameLayout(this);
-        rightScrim.setBackgroundColor(Color.parseColor("#99040508"));
+        rightScrim.setBackgroundColor(Color.TRANSPARENT);
         rightScrim.setVisibility(View.GONE);
         rightScrim.setClickable(true);
+        rightScrim.setElevation(24f);
 
         GradientDrawable dBg = new GradientDrawable();
         dBg.setColor(COLOR_BG_DRAWER);
@@ -609,11 +612,10 @@ public class AuraActivity extends Activity {
         rightDetailsScroll.setFillViewport(true);
         rightDetailsScroll.setBackground(dBg);
         rightDetailsScroll.setVisibility(View.GONE);
-        rightDetailsScroll.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
         rightDetailsDrawer = new LinearLayout(this);
         rightDetailsDrawer.setOrientation(LinearLayout.VERTICAL);
-        rightDetailsDrawer.setPadding(36, 30, 36, 30);
+        rightDetailsDrawer.setPadding(28, 28, 28, 28);
 
         // Top metadata row: [Apple TV+]  2019 · 59 min · IMDb 8.1
         LinearLayout topMetaRow = new LinearLayout(this);
@@ -650,10 +652,10 @@ public class AuraActivity extends Activity {
         actionBtns.setGravity(Gravity.CENTER_VERTICAL);
         actionBtns.setPadding(0, 0, 0, 14);
 
-        drawerOpenAppBtn = makePillBtn("▶  Open", true, null);
-        drawerWatchedBtn = makePillBtn("✓  Watched", false, null);
-        drawerSimilarBtn = makePillBtn("🔍  Similar", false, null);
-        drawerCloseBtn = makePillBtn("←  Back", false, this::closeRightDrawers);
+        drawerOpenAppBtn = makePillBtn("▶ Watch", true, null);
+        drawerWatchedBtn = makePillBtn("✓ Watched", false, null);
+        drawerSimilarBtn = makePillBtn("🔍 Similar", false, null);
+        drawerCloseBtn = makePillBtn("← Back", false, this::closeRightDrawers);
         trapLeftFocus(drawerOpenAppBtn);
         actionBtns.addView(drawerOpenAppBtn);
         actionBtns.addView(drawerWatchedBtn);
@@ -729,11 +731,10 @@ public class AuraActivity extends Activity {
         rightTasteScroll.setFillViewport(true);
         rightTasteScroll.setBackground(dBg2);
         rightTasteScroll.setVisibility(View.GONE);
-        rightTasteScroll.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
         rightTasteDrawer = new LinearLayout(this);
         rightTasteDrawer.setOrientation(LinearLayout.VERTICAL);
-        rightTasteDrawer.setPadding(36, 28, 36, 28);
+        rightTasteDrawer.setPadding(28, 26, 28, 26);
 
         tasteDrawerTitle = makeText("Guide AI & Profile Settings", 23f, "#FFFFFF", FONT_DISPLAY, 1);
         rightTasteDrawer.addView(tasteDrawerTitle);
@@ -879,7 +880,7 @@ public class AuraActivity extends Activity {
         String cleanSyn = formatCompleteSentences(rawSyn, 280);
 
         drawerAvailableBadge.setText(appName);
-        drawerMeta.setText(year + "   ·   " + rt + " min   ·   IMDb " + rawImdb);
+        drawerMeta.setText(year + "  ·  " + rt + " min  ·  IMDb " + rawImdb);
         drawerTitle.setText(mainTitle);
         drawerGenres.setText(genres.replace(", ", "  ·  "));
         drawerWhyReason.setText(cleanReason);
@@ -893,7 +894,7 @@ public class AuraActivity extends Activity {
             drawerSynopsis.setVisibility(View.GONE);
         }
 
-        drawerOpenAppBtn.setText("▶  Watch");
+        drawerOpenAppBtn.setText("▶ Watch");
         drawerOpenAppBtn.setOnClickListener(v -> {
             closeRightDrawers();
             String uri = item.optString("launch_uri");
@@ -903,13 +904,13 @@ public class AuraActivity extends Activity {
         });
 
         final boolean isW = memWatchedKeys.contains(titleKey);
-        drawerWatchedBtn.setText(isW ? "✕  Unwatch" : "✓  Watched");
+        drawerWatchedBtn.setText(isW ? "✕ Unwatch" : "✓ Watched");
         drawerWatchedBtn.setOnClickListener(v -> {
             closeRightDrawers();
             handleMarkWatchedInPlace(posterView, item, mainTitle);
         });
 
-        drawerSimilarBtn.setText("🔍  Similar");
+        drawerSimilarBtn.setText("🔍 Similar");
         drawerSimilarBtn.setOnClickListener(v -> {
             closeRightDrawers();
             runWatchedSecondHopTraversal(mainTitle, true);
@@ -1003,27 +1004,25 @@ public class AuraActivity extends Activity {
         rightScrim.animate().cancel();
         drawer.animate().cancel();
 
-        rightScrim.setAlpha(0f);
+        relayoutGridForCols(COLS_WHEN_DRAWER_OPEN, lastFocusedPoster, true);
+
+        rightScrim.setAlpha(1f);
         rightScrim.setVisibility(View.VISIBLE);
-        rightScrim.animate()
-            .alpha(1f)
-            .setDuration(220)
-            .setInterpolator(SMOOTH_INTERP)
-            .start();
 
         drawer.setTranslationX(RIGHT_DRAWER_W);
-        drawer.setAlpha(0.4f);
+        drawer.setAlpha(0.55f);
         drawer.setVisibility(View.VISIBLE);
-        drawer.animate()
-            .translationX(0f)
-            .alpha(1f)
-            .setDuration(250)
-            .setInterpolator(SMOOTH_INTERP)
-            .start();
-
-        if (initialFocusTarget != null) {
-            initialFocusTarget.requestFocus();
-        }
+        drawer.post(() -> {
+            drawer.animate()
+                .translationX(0f)
+                .alpha(1f)
+                .setDuration(280)
+                .setInterpolator(SMOOTH_INTERP)
+                .start();
+            if (initialFocusTarget != null) {
+                initialFocusTarget.requestFocus();
+            }
+        });
     }
 
     private void populateTastePresetRows() {
@@ -1135,6 +1134,8 @@ public class AuraActivity extends Activity {
             ? rightDetailsScroll
             : rightTasteScroll;
 
+        relayoutGridForCols(COLS_PER_ROW, lastFocusedPoster, true);
+
         if (lastFocusedPoster != null && lastFocusedPoster.getParent() != null) {
             lastFocusedPoster.requestFocus();
         } else if (!gridTiles.isEmpty()) {
@@ -1145,21 +1146,19 @@ public class AuraActivity extends Activity {
             activeDrawer.animate()
                 .translationX(RIGHT_DRAWER_W)
                 .alpha(0f)
-                .setDuration(190)
+                .setDuration(220)
                 .setInterpolator(SMOOTH_INTERP)
+                .withEndAction(() -> {
+                    drawerClosing = false;
+                    rightScrim.setVisibility(View.GONE);
+                    if (rightDetailsScroll != null) rightDetailsScroll.setVisibility(View.GONE);
+                    if (rightTasteScroll != null) rightTasteScroll.setVisibility(View.GONE);
+                })
                 .start();
+        } else {
+            drawerClosing = false;
+            rightScrim.setVisibility(View.GONE);
         }
-        rightScrim.animate()
-            .alpha(0f)
-            .setDuration(190)
-            .setInterpolator(SMOOTH_INTERP)
-            .withEndAction(() -> {
-                drawerClosing = false;
-                rightScrim.setVisibility(View.GONE);
-                if (rightDetailsScroll != null) rightDetailsScroll.setVisibility(View.GONE);
-                if (rightTasteScroll != null) rightTasteScroll.setVisibility(View.GONE);
-            })
-            .start();
     }
 
     private void updateHeaderForCard(JSONObject item) {
@@ -1262,27 +1261,16 @@ public class AuraActivity extends Activity {
         gridRowsContainer.removeAllViews();
         gridTiles.clear();
 
-        LinearLayout currentRow = null;
         for (int i = 0; i < limit; i++) {
             JSONObject item = items.optJSONObject(i);
             if (item == null) continue;
-            if (i % COLS_PER_ROW == 0) {
-                currentRow = new LinearLayout(this);
-                currentRow.setOrientation(LinearLayout.HORIZONTAL);
-                currentRow.setClipChildren(false);
-                currentRow.setClipToPadding(false);
-                LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                rowLp.setMargins(0, 0, 0, 22);
-                gridRowsContainer.addView(currentRow, rowLp);
-            }
             final int tileIdx = gridTiles.size();
             FrameLayout tile = buildGridPosterTile(item, tileIdx);
             gridTiles.add(tile);
-            if (currentRow != null) {
-                currentRow.addView(tile);
-            }
         }
+
+        int targetCols = isAnyDrawerOpen() ? COLS_WHEN_DRAWER_OPEN : COLS_PER_ROW;
+        relayoutGridForCols(targetCols, null, false);
 
         if (items.length() > 0) {
             updateHeaderForCard(items.optJSONObject(0));
@@ -1293,6 +1281,72 @@ public class AuraActivity extends Activity {
         if (focusFirstCard && !gridTiles.isEmpty()) {
             setSidebarExpanded(false);
             gridTiles.get(0).requestFocus();
+        }
+    }
+
+    private void relayoutGridForCols(final int cols, final View highlightedTile, final boolean animateReflow) {
+        activeGridCols = cols;
+        if (rightStage != null && rightStage.getLayoutParams() instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams stageLp = (FrameLayout.LayoutParams) rightStage.getLayoutParams();
+            int targetRightMargin = (cols == COLS_WHEN_DRAWER_OPEN) ? RIGHT_DRAWER_W : 0;
+            if (stageLp.rightMargin != targetRightMargin) {
+                stageLp.rightMargin = targetRightMargin;
+                rightStage.setLayoutParams(stageLp);
+            }
+        }
+
+        // Remove tiles from old rows without recreating ImageViews or reloading Bitmaps
+        for (FrameLayout tile : gridTiles) {
+            if (tile.getParent() instanceof ViewGroup) {
+                ((ViewGroup) tile.getParent()).removeView(tile);
+            }
+        }
+        gridRowsContainer.removeAllViews();
+
+        // Full 5-col mode: 5 * 332 + 4 * 30 = 1780px (consumes 100% of 1780px stage width!)
+        // Split 3-col mode (drawer open): 3 * 360 + 2 * 30 = 1140px (consumes 100% of 1140px left pane with ZERO tile overlap!)
+        // Keeping tileH = 436 in both modes ensures zero vertical jump and 2 full rows fit without clipping Row 1!
+        int tileW = (cols == COLS_WHEN_DRAWER_OPEN) ? 360 : 332;
+        int tileH = 436;
+        int gap = 30;
+
+        LinearLayout currentRow = null;
+        for (int i = 0; i < gridTiles.size(); i++) {
+            if (i % cols == 0) {
+                currentRow = new LinearLayout(this);
+                currentRow.setOrientation(LinearLayout.HORIZONTAL);
+                currentRow.setClipChildren(false);
+                currentRow.setClipToPadding(false);
+                LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                rowLp.setMargins(0, 0, 0, 22);
+                gridRowsContainer.addView(currentRow, rowLp);
+            }
+            FrameLayout tile = gridTiles.get(i);
+            int col = i % cols;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(tileW, tileH);
+            lp.setMargins(0, 0, (col == cols - 1) ? 0 : gap, 0);
+            tile.setLayoutParams(lp);
+            boolean isHighlighted = (highlightedTile != null && tile == highlightedTile) || tile.hasFocus();
+            stylePosterFrame(tile, isHighlighted);
+            if (currentRow != null) {
+                currentRow.addView(tile);
+            }
+        }
+
+        if (animateReflow) {
+            gridRowsContainer.animate().cancel();
+            gridRowsContainer.setAlpha(0.68f);
+            gridRowsContainer.setTranslationX(cols == COLS_WHEN_DRAWER_OPEN ? 24f : -20f);
+            gridRowsContainer.animate()
+                .alpha(1f)
+                .translationX(0f)
+                .setDuration(260)
+                .setInterpolator(SMOOTH_INTERP)
+                .start();
+        }
+        if (highlightedTile != null) {
+            gridScrollView.post(() -> ensureTileRowVisible(highlightedTile));
         }
     }
 
@@ -1308,27 +1362,25 @@ public class AuraActivity extends Activity {
         posterFrame.setBackground(border);
 
         ImageView img = new ImageView(this);
-        // True 1:1.425 poster aspect ratio (matching JustWatch 332x473 native posters) with FIT_XY
-        // so 100% of the poster and its title artwork sits cleanly inside the rectangle with zero cropping!
+        // True poster aspect ratio with FIT_XY so 100% of the poster and its title artwork sits cleanly inside the rectangle!
         img.setScaleType(ImageView.ScaleType.FIT_XY);
         img.setBackgroundColor(Color.parseColor("#141722"));
         ImageLoader.applyRoundedCorners(img, 11f);
         posterFrame.addView(img, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        // 5 columns per row at true 1:1.425 poster aspect ratio (274 x 390)
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(274, 390);
-        lp.setMargins(0, 0, 32, 0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(332, 436);
+        lp.setMargins(0, 0, 30, 0);
         posterFrame.setLayoutParams(lp);
 
         ImageLoader.load(this, item.optString("poster_url"), img);
 
         posterFrame.setOnFocusChangeListener((v, hasFocus) -> {
             if (hasFocus && sidebarExpanded) setSidebarExpanded(false);
-            stylePosterFrame(posterFrame, hasFocus);
+            stylePosterFrame(posterFrame, hasFocus || (isAnyDrawerOpen() && posterFrame == lastFocusedPoster));
             posterFrame.animate()
-                .scaleX(hasFocus ? 1.035f : 1.0f)
-                .scaleY(hasFocus ? 1.035f : 1.0f)
+                .scaleX(hasFocus ? 1.03f : 1.0f)
+                .scaleY(hasFocus ? 1.03f : 1.0f)
                 .translationY(hasFocus ? -2f : 0f)
                 .setDuration(130)
                 .setInterpolator(SMOOTH_INTERP)
@@ -1342,12 +1394,13 @@ public class AuraActivity extends Activity {
 
         posterFrame.setOnClickListener(v -> openDetailsDrawer(item, posterFrame));
 
-        // Deterministic 2D Grid D-Pad Navigation across 5 columns and multiple rows
+        // Deterministic 2D Grid D-Pad Navigation across activeGridCols and multiple rows
         posterFrame.setOnKeyListener((v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            int cols = activeGridCols;
             int total = gridTiles.size();
-            int row = tileIdx / COLS_PER_ROW;
-            int col = tileIdx % COLS_PER_ROW;
+            int row = tileIdx / cols;
+            int col = tileIdx % cols;
 
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                 if (col == 0) {
@@ -1358,21 +1411,21 @@ public class AuraActivity extends Activity {
                     return true;
                 }
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                if (col < COLS_PER_ROW - 1 && tileIdx + 1 < total) {
+                if (col < cols - 1 && tileIdx + 1 < total) {
                     gridTiles.get(tileIdx + 1).requestFocus();
                 }
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                int nextIdx = tileIdx + COLS_PER_ROW;
+                int nextIdx = tileIdx + cols;
                 if (nextIdx < total) {
                     gridTiles.get(nextIdx).requestFocus();
-                } else if ((row + 1) * COLS_PER_ROW < total) {
+                } else if ((row + 1) * cols < total) {
                     gridTiles.get(total - 1).requestFocus();
                 }
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
                 if (row > 0) {
-                    gridTiles.get(tileIdx - COLS_PER_ROW).requestFocus();
+                    gridTiles.get(tileIdx - cols).requestFocus();
                     return true;
                 } else {
                     if (filterChipsRow != null && filterChipsRow.getChildCount() > 0) {
