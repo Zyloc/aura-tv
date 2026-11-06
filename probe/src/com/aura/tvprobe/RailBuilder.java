@@ -286,6 +286,13 @@ public final class RailBuilder {
         box.setBackground(GlassTheme.focusRounded(
             GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_STRONG, dp(ctx, 1), rad));
         box.setElevation(dp(ctx, 4));
+        box.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, android.graphics.Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), rad);
+            }
+        });
+        box.setClipToOutline(true);
         Drawable banner = loadNativeBanner(ctx, pkg);
         if (banner != null) {
             ImageView iv = new ImageView(ctx);
@@ -364,36 +371,72 @@ public final class RailBuilder {
         setupRailDpad(wrapper, cb);
     }
 
-    // ── Content rail poster card ────────────────────────────────────────
+    // ── Content rail poster card (Focus ring hugs poster artwork cleanly) ──
 
     private static void addPosterCard(LinearLayout row, Context ctx,
                                        JSONObject item, RailCallback cb) {
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setClipChildren(false);
-        int p = dp(ctx, 3);
+        card.setClipToPadding(false);
+        int p = dp(ctx, 2);
         card.setPadding(p, p, p, p);
-        addPosterImage(card, ctx, item);
-        addPosterInfo(card, ctx, item);
-        bindCardFocus(card, item, cb, false, dp(ctx, 12), ctx);
+        FrameLayout imgFrame = addPosterImage(card, ctx, item);
+        TextView titleView = addPosterInfo(card, ctx, item);
+        bindPosterFocus(card, imgFrame, titleView, item, cb, ctx);
         int w = dp(ctx, GlassTheme.POSTER_W + 6);
         addCardToRow(row, card, ctx, w, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
-    private static void addPosterImage(LinearLayout card, Context ctx, JSONObject item) {
+    private static FrameLayout addPosterImage(LinearLayout card, Context ctx, JSONObject item) {
         FrameLayout imgFrame = new FrameLayout(ctx);
         int w = dp(ctx, GlassTheme.POSTER_W);
         int h = dp(ctx, GlassTheme.POSTER_H);
+        float rad = dp(ctx, 11);
+        imgFrame.setBackground(GlassTheme.focusRounded(
+            GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_LIGHT, dp(ctx, 1), rad));
         ImageView iv = new ImageView(ctx);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         iv.setBackgroundColor(GlassTheme.SURFACE_ELEV);
-        ImageLoader.applyRoundedCorners(iv, dp(ctx, 10));
+        ImageLoader.applyRoundedCorners(iv, dp(ctx, 9));
         String url = item.optString("poster_url", "");
         if (!url.isEmpty()) ImageLoader.load(ctx, url, iv);
-        imgFrame.addView(iv, new FrameLayout.LayoutParams(w, h));
+        int inset = dp(ctx, 2);
+        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        ivLp.setMargins(inset, inset, inset, inset);
+        imgFrame.addView(iv, ivLp);
         addPlatformBadge(imgFrame, ctx, item);
         addImdbBadge(imgFrame, ctx, item);
         card.addView(imgFrame, new LinearLayout.LayoutParams(w, h));
+        return imgFrame;
+    }
+
+    private static void bindPosterFocus(LinearLayout card, FrameLayout imgFrame,
+                                         TextView titleView, JSONObject item,
+                                         RailCallback cb, Context ctx) {
+        card.setFocusable(true);
+        card.setClickable(true);
+        float rad = dp(ctx, 11);
+        card.setOnClickListener(v -> cb.onPosterClicked(item, v));
+        card.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                imgFrame.setBackground(GlassTheme.focusRounded(
+                    GlassTheme.SURFACE_ELEV, Color.WHITE, dp(ctx, 2.5f), rad));
+                imgFrame.setElevation(dp(ctx, 14));
+                if (titleView != null) titleView.setTextColor(Color.WHITE);
+                v.animate().scaleX(1.06f).scaleY(1.06f).setDuration(170).setInterpolator(GlassTheme.EASE).start();
+                if (cb != null) cb.onPosterFocused(item, v);
+                scrollToChild(v);
+            } else {
+                imgFrame.setBackground(GlassTheme.focusRounded(
+                    GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_LIGHT, dp(ctx, 1), rad));
+                imgFrame.setElevation(0);
+                if (titleView != null) titleView.setTextColor(GlassTheme.TEXT_PRIMARY);
+                v.animate().scaleX(1f).scaleY(1f).setDuration(170).setInterpolator(GlassTheme.EASE).start();
+            }
+        });
+        setupRailDpad(card, cb);
     }
 
     private static void addPlatformBadge(FrameLayout frame, Context ctx, JSONObject item) {
@@ -425,7 +468,7 @@ public final class RailBuilder {
         frame.addView(badge, lp);
     }
 
-    private static void addPosterInfo(LinearLayout card, Context ctx, JSONObject item) {
+    private static TextView addPosterInfo(LinearLayout card, Context ctx, JSONObject item) {
         TextView title = GlassTheme.makeText(ctx, item.optString("title", ""),
                                               11f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
         title.setPadding(dp(ctx, 2), dp(ctx, 5), dp(ctx, 2), 0);
@@ -437,6 +480,7 @@ public final class RailBuilder {
             tv.setPadding(dp(ctx, 2), 0, dp(ctx, 2), 0);
             card.addView(tv, GlassTheme.matchWrapParams());
         }
+        return title;
     }
 
     private static String buildPosterMetaText(JSONObject item) {

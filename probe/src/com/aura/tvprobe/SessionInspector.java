@@ -129,7 +129,7 @@ public class SessionInspector {
         android.database.sqlite.SQLiteDatabase wdb = db.getWritableDatabase();
         wdb.beginTransaction();
         try {
-            ingestRows(raw.optJSONArray("preview_programs"), chMap, "");
+            // Only ingest watch_next_program which carries verified last_engagement_time_utc_millis
             ingestRows(raw.optJSONArray("watch_next"), chMap, "Watch Next");
             wdb.setTransactionSuccessful();
         } finally {
@@ -139,19 +139,29 @@ public class SessionInspector {
 
     private void ingestRows(JSONArray rows, Map<Long, String> chMap, String defaultCh) {
         if (rows == null) return;
+        long nowSec = System.currentTimeMillis() / 1000L;
+        long maxAgeSec = 90L * 86400L; // Only shows engaged within the last 90 days
         for (int i = rows.length() - 1; i >= 0; i--) {
             JSONObject r = rows.optJSONObject(i);
             if (r == null) continue;
             String pkg = r.optString("package_name");
-            if (ctx.getPackageName().equals(pkg) || pkg.contains("youtube") || pkg.contains("smarttube")) continue;
-            String ch = defaultCh.isEmpty() ? chMap.getOrDefault(r.optLong("channel_id"), "") : defaultCh;
+            if (ctx.getPackageName().equals(pkg) || pkg.contains("youtube")
+                    || pkg.contains("smarttube") || pkg.contains("stremio")) {
+                continue;
+            }
             int posSec = (int) (r.optLong("last_playback_position_millis", 0) / 1000L);
+            int durSec = (int) (r.optLong("duration_millis", 0) / 1000L);
             if (posSec < 60) continue;
+            // Skip already completed movies/episodes (>= 95% watched)
+            if (durSec > 0 && posSec >= (durSec * 95) / 100) continue;
 
+            long engagedSec = r.optLong("last_engagement_time_utc_millis", 0L) / 1000L;
+            if (engagedSec <= 0 || (nowSec - engagedSec) > maxAgeSec) continue;
+
+            String ch = defaultCh.isEmpty() ? chMap.getOrDefault(r.optLong("channel_id"), "") : defaultCh;
             String title = r.optString("title", "Program");
             String epTitle = r.optString("episode_title", "");
             if (title.equalsIgnoreCase(friendlyApp(pkg))) continue;
-            int durSec = (int) (r.optLong("duration_millis", 0) / 1000L);
             JSONObject item = new JSONObject();
             try {
                 item.put("media_key", (pkg + ":" + title + ":" + epTitle).toLowerCase());
@@ -167,6 +177,7 @@ public class SessionInspector {
                 item.put("launch_uri", r.optString("intent_uri"));
                 item.put("position_sec", posSec);
                 item.put("duration_sec", durSec);
+                item.put("updated_at", engagedSec);
                 db.upsertWatchItem(item);
             } catch (Exception ignored) {}
         }

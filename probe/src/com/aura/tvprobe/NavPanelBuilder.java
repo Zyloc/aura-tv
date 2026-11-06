@@ -54,12 +54,17 @@ public final class NavPanelBuilder {
         st.callback = callback;
         wrapper.setTag(st);
 
-        TextView hamburger = buildHamburgerButton(wrapper, ctx);
         LinearLayout drawer = buildExpandedDrawer(wrapper, ctx, callback);
-
-        wrapper.addView(hamburger);
         wrapper.addView(drawer);
         return wrapper;
+    }
+
+    public static TextView createTopBarHamburger(FrameLayout wrapper, Context ctx) {
+        TextView btn = buildHamburgerButton(wrapper, ctx);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(ctx, 44), dp(ctx, 38));
+        lp.rightMargin = dp(ctx, 10);
+        btn.setLayoutParams(lp);
+        return btn;
     }
 
     public static void bindMainContentForAnimation(FrameLayout wrapper, View mainContent) {
@@ -71,12 +76,10 @@ public final class NavPanelBuilder {
         if (st.expanded == expanded) return;
         st.expanded = expanded;
 
-        View hamburger = findByTag(wrapper, TAG_HAMBURGER);
         LinearLayout drawer = findByTag(wrapper, TAG_DRAWER);
-        if (hamburger == null || drawer == null) return;
+        if (drawer == null) return;
 
         if (expanded) {
-            hamburger.setVisibility(View.GONE);
             drawer.setVisibility(View.VISIBLE);
             drawer.setTranslationX(-dp(ctx, GlassTheme.NAV_EXPANDED_W));
             drawer.setAlpha(0.2f);
@@ -96,10 +99,7 @@ public final class NavPanelBuilder {
                 .alpha(0f)
                 .setDuration(190)
                 .setInterpolator(GlassTheme.EASE)
-                .withEndAction(() -> {
-                    drawer.setVisibility(View.GONE);
-                    hamburger.setVisibility(View.VISIBLE);
-                })
+                .withEndAction(() -> drawer.setVisibility(View.GONE))
                 .start();
         }
     }

@@ -25,7 +25,7 @@ public final class GlassTheme {
     public static final int SURFACE_ELEV = 0xFF1C2331;
 
     // ── Frosted dark glass surfaces ──────────────────────────────────────
-    public static final int GLASS_PANEL  = Color.argb(242, 18, 23, 33);
+    public static final int GLASS_PANEL  = Color.argb(251, 15, 19, 28);
     public static final int GLASS_CARD   = Color.argb(230, 26, 32, 44);
     public static final int GLASS_SUBTLE = Color.argb(185, 22, 27, 38);
 

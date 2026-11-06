@@ -70,6 +70,11 @@ public final class DetailOverlay {
         bindContent(overlay, item, isWatched, userRating, ctx, cb);
         overlay.setVisibility(View.VISIBLE);
         animateIn(overlay, ctx);
+        LinearLayout actions = findTagged(overlay, TAG_ACTIONS);
+        if (actions != null && actions.getChildCount() > 0) {
+            View firstBtn = actions.getChildAt(0);
+            firstBtn.post(firstBtn::requestFocus);
+        }
     }
 
     public static void dismiss(FrameLayout overlay) {
@@ -412,12 +417,20 @@ public final class DetailOverlay {
 
     private static void styleSimilarCard(LinearLayout card, Context ctx) {
         int pad = dp(ctx, 12);
+        float r = dp(ctx, 10);
         card.setPadding(pad, dp(ctx, 10), pad, dp(ctx, 10));
         LinearLayout.LayoutParams lp = GlassTheme.matchWrapParams();
         lp.topMargin = dp(ctx, 6);
         card.setLayoutParams(lp);
         card.setFocusable(true);
-        applyFocusHighlight(card);
+        card.setOnFocusChangeListener((v, focused) -> {
+            if (focused) {
+                card.setBackground(GlassTheme.focusRounded(
+                    GlassTheme.SURFACE_ELEV, Color.WHITE, dp(ctx, 2), r));
+            } else {
+                card.setBackground(GlassTheme.glassCard(r));
+            }
+        });
     }
 
     private static void addSimilarText(LinearLayout card, JSONObject sim,
@@ -583,17 +596,7 @@ public final class DetailOverlay {
     // ── Platform colors ──────────────────────────────────────────────────
 
     private static int resolvePlatformColor(String app) {
-        if (app == null) return GlassTheme.ACCENT;
-        switch (app.toLowerCase()) {
-            case "netflix":  return GlassTheme.COLOR_NETFLIX;
-            case "prime":    return GlassTheme.COLOR_PRIME;
-            case "hotstar":  return GlassTheme.COLOR_HOTSTAR;
-            case "apple tv": return GlassTheme.COLOR_APPLE_TV;
-            case "youtube":  return GlassTheme.COLOR_YOUTUBE;
-            case "sonyliv":  return GlassTheme.COLOR_SONYLIV;
-            case "zee5":     return GlassTheme.COLOR_ZEE5;
-            default:         return GlassTheme.ACCENT;
-        }
+        return HeroSliderBuilder.getPlatformColor(app);
     }
 
     // ── Shorthand ────────────────────────────────────────────────────────

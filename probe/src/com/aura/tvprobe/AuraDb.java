@@ -45,9 +45,15 @@ public class AuraDb extends SQLiteOpenHelper {
     public void purgePromotionalNoiseFromHistory() {
         try {
             SQLiteDatabase db = getWritableDatabase();
-            db.execSQL("DELETE FROM watch_history WHERE app_pkg LIKE '%youtube%' OR app_pkg LIKE '%smarttube%'");
+            db.execSQL("DELETE FROM watch_history WHERE app_pkg LIKE '%youtube%' OR app_pkg LIKE '%smarttube%' OR app_pkg LIKE '%stremio%'");
             db.execSQL("DELETE FROM watch_history WHERE LOWER(title) = 'netflix' OR LOWER(title) = 'prime video'");
             db.execSQL("DELETE FROM watch_history WHERE position_sec < 60");
+            db.execSQL("DELETE FROM watch_history WHERE duration_sec > 0 AND position_sec >= (duration_sec * 95) / 100");
+            // One-time cleanup of rows that had synthetic updated_at timestamps from preview_programs
+            if (!"1".equals(getSetting("purged_stale_wn_v2", ""))) {
+                db.execSQL("DELETE FROM watch_history WHERE app_name LIKE '%·%'");
+                setSetting("purged_stale_wn_v2", "1");
+            }
         } catch (Exception ignored) {}
     }
 
