@@ -52,7 +52,7 @@ public class JustWatchGraph {
 
     private static final String SIMILAR_QUERY =
         "query GetSimilar($searchQuery: String!, $country: Country!, $language: Language!) {" +
-        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 4) {" +
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery }, first: 4) {" +
         "    edges { node { " +
         "      " + NODE_FIELDS +
         "      ... on MovieOrShow {" +
@@ -127,7 +127,7 @@ public class JustWatchGraph {
             JSONObject parsed = parseNode(edges.optJSONObject(i).optJSONObject("node"), lang);
             if (!isLookupEligible(parsed)) continue;
             if (matchesTargetTitleOrSlug(parsed, normTarget)) return parsed;
-            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, 2000, 6.5)) best = parsed;
+            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, 1990, 5.8)) best = parsed;
         }
         return best != null ? best : new JSONObject();
     }
@@ -203,6 +203,17 @@ public class JustWatchGraph {
 
     private static JSONObject buildDynamicTitleFilter(JSONObject spec) throws Exception {
         JSONObject filter = new JSONObject();
+        String sq = spec.optString("searchQuery", "").trim();
+        if (!sq.isEmpty()) {
+            filter.put("searchQuery", sq);
+            JSONArray objTypes = extractSpecObjectTypes(spec.optJSONArray("objectTypes"));
+            if (objTypes.length() > 0) filter.put("objectTypes", objTypes);
+            return filter;
+        }
+        return populatePureDiscoveryFilter(spec, filter);
+    }
+
+    private static JSONObject populatePureDiscoveryFilter(JSONObject spec, JSONObject filter) throws Exception {
         filter.put("packages", extractSpecPackages(spec.optJSONArray("packages")));
         filter.put("monetizationTypes", new JSONArray().put("FLATRATE").put("FREE").put("ADS"));
         int minYr = Math.max(1995, spec.optInt("minYear", getDefaultMinModernYear() - 2));
@@ -272,38 +283,69 @@ public class JustWatchGraph {
 
     private static void extractDynamicSpecNodes(JSONArray edges, JSONObject spec, String lang, JSONArray out) {
         if (edges == null) return;
-        int minYr = Math.max(1995, spec.optInt("minYear", 2008));
-        boolean hasSearchQuery = !spec.optString("searchQuery", "").trim().isEmpty();
-        String seedAnchor = hasSearchQuery ? spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim() : "";
+        String sq = spec.optString("searchQuery", "").trim();
+        int minYr = !sq.isEmpty() ? 1995 : Math.max(1995, spec.optInt("minYear", 2008));
+        String seedAnchor = !sq.isEmpty() ? spec.optString("seedAnchor", sq).trim() : "";
+        String specGenres = joinGenreArray(extractSpecGenres(spec.optJSONArray("genres")));
         JSONArray objTypes = extractSpecObjectTypes(spec.optJSONArray("objectTypes"));
         for (int i = 0; i < edges.length(); i++) {
             JSONObject node = edges.optJSONObject(i) != null ? edges.optJSONObject(i).optJSONObject("node") : null;
-            if (node != null) collectNodeAndSimilar(node, minYr, seedAnchor, objTypes, lang, out);
+            if (node != null) collectNodeAndSimilar(node, i, sq, specGenres, minYr, seedAnchor, objTypes, lang, out);
         }
+    }
+
+    private static String joinGenreArray(JSONArray arr) {
+        if (arr == null || arr.length() == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < arr.length(); i++) {
+            if (i > 0) sb.append(",");
+            sb.append(arr.optString(i, ""));
+        }
+        return sb.toString();
     }
 
     private static void collectNodeAndSimilar(
-            JSONObject node, int minYr, String seedAnchor, JSONArray objTypes, String lang, JSONArray out) {
+            JSONObject node, int edgeIdx, String sq, String specGenres,
+            int minYr, String seedAnchor, JSONArray objTypes, String lang, JSONArray out) {
         JSONObject primary = parseNode(node, lang);
-        if (matchesSpecObjectTypes(primary, objTypes) && CandidateValidator.isValidCoWatchCandidate(primary, minYr, 6.8)) {
+        if (!sq.isEmpty() && !matchesQueriedSeedNode(primary, edgeIdx, sq, specGenres)) return;
+        String refGenres = !specGenres.isEmpty() ? specGenres : primary.optString("genre_codes", "");
+        if (isCompatibleDynamicCandidate(primary, refGenres, objTypes, minYr)) {
             tagDynamicHit(primary, seedAnchor, false);
             out.put(primary);
         }
-        collectSimilarNodesForSpec(node.optJSONArray("similarTitles"), primary, minYr, seedAnchor, objTypes, lang, out);
+        collectSimilarNodesForSpec(node.optJSONArray("similarTitles"), primary, refGenres, minYr, seedAnchor, objTypes, lang, out);
+    }
+
+    private static boolean matchesQueriedSeedNode(JSONObject primary, int edgeIdx, String sq, String specGenres) {
+        String normSq = AuraDb.normalizeTitleKey(sq);
+        String key = AuraDb.normalizeTitleKey(primary.optString("title", ""));
+        if (isCloseSeedMatch(key, primary.optString("slug_key", ""), normSq)) return true;
+        return edgeIdx == 0 && (specGenres.isEmpty() || CandidateValidator.computeGenreJaccard(primary.optString("genre_codes", ""), specGenres) >= 0.15);
     }
 
     private static void collectSimilarNodesForSpec(
-            JSONArray sim, JSONObject primary, int minYr, String seedAnchor,
+            JSONArray sim, JSONObject primary, String refGenres, int minYr, String seedAnchor,
             JSONArray objTypes, String lang, JSONArray out) {
         if (sim == null) return;
         String anchor = !seedAnchor.isEmpty() ? seedAnchor : primary.optString("title", "");
         for (int j = 0; j < sim.length(); j++) {
             JSONObject sNode = parseNode(sim.optJSONObject(j), lang);
-            if (matchesSpecObjectTypes(sNode, objTypes) && CandidateValidator.isValidCoWatchCandidate(sNode, Math.min(minYr, 2008), 6.8)) {
+            if (isCompatibleDynamicCandidate(sNode, refGenres, objTypes, Math.min(minYr, 1995))) {
                 tagDynamicHit(sNode, anchor, true);
                 out.put(sNode);
             }
         }
+    }
+
+    private static boolean isCompatibleDynamicCandidate(
+            JSONObject cand, String refGenres, JSONArray objTypes, int minYr) {
+        if (!matchesSpecObjectTypes(cand, objTypes)) return false;
+        String candGenres = cand.optString("genre_codes", "");
+        if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, refGenres)) return false;
+        if (!refGenres.isEmpty() && CandidateValidator.computeGenreJaccard(candGenres, refGenres) < 0.15) return false;
+        double minImdb = (refGenres.contains("cmy") || refGenres.contains("hrr") || candGenres.contains("cmy")) ? 5.8 : 6.4;
+        return CandidateValidator.isValidCoWatchCandidate(cand, minYr, minImdb);
     }
 
     private static boolean matchesSpecObjectTypes(JSONObject parsed, JSONArray objTypes) {
@@ -512,7 +554,8 @@ public class JustWatchGraph {
     }
 
     private static boolean isEligibleDirectNeighbor(JSONObject parsed, String seedCoreGenres, int minYear) {
-        if (!CandidateValidator.isValidCoWatchCandidate(parsed, Math.min(minYear, 2008), 6.8)) return false;
+        double minImdb = (seedCoreGenres.contains("cmy") || seedCoreGenres.contains("hrr")) ? 5.8 : 6.4;
+        if (!CandidateValidator.isValidCoWatchCandidate(parsed, Math.min(minYear, 1995), minImdb)) return false;
         String candGenres = parsed.optString("genre_codes", "");
         if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, seedCoreGenres)) return false;
         return CandidateValidator.computeGenreJaccard(candGenres, seedCoreGenres) >= 0.15;

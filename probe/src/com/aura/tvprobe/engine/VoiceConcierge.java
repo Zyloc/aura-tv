@@ -204,7 +204,7 @@ public class VoiceConcierge {
     ) throws Exception {
         JSONObject out = parseGeminiTurnOrDefault(rawJson, userText, activeFilters, minModernYear, currentYear);
         JSONArray finalResults = out.getJSONArray("results");
-        if (finalResults.length() < 8) {
+        if (finalResults.length() < 4) {
             backfillWithDeterministicSearch(profileId, userText, contextualQuery, activeFilters, minModernYear, finalResults);
             if (rawJson == null) {
                 out.put("reply", "Ranked top matches for \"" + userText + "\" by taste similarity & Bayesian IMDb.");
@@ -231,7 +231,7 @@ public class VoiceConcierge {
         int minModernYear, int currentYear, JSONObject out
     ) throws Exception {
         out.put("reply", parsed.optString("reply", "Updated picks for your search."));
-        int minSearchYear = !AiRecommender.extractSimilaritySeed(userText).isEmpty() ? 2008 : (minModernYear - 2);
+        int minSearchYear = !AiRecommender.extractSimilaritySeed(userText).isEmpty() ? 1995 : (minModernYear - 4);
         JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minSearchYear, currentYear);
         out.put("results", applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters));
         JSONArray parsedFollowUps = parsed.optJSONArray("follow_ups");
@@ -359,6 +359,8 @@ public class VoiceConcierge {
     private static boolean matchesConversationalItem(JSONObject item, String combined) {
         if (!matchesFormatConstraint(item.optString("type", ""), combined)) return false;
         if (!matchesPlatformConstraint(item.optString("app", "").toLowerCase(), combined)) return false;
+        boolean allowAnim = combined.contains("anime") || combined.contains("animat") || combined.contains("kids");
+        if (!allowAnim && item.optString("genres", "").toLowerCase().contains("animation")) return false;
         boolean underTwoHours = combined.contains("under 2 hours") || combined.contains("shorter") || combined.contains("< 120");
         return !underTwoHours || item.optInt("runtime_min", 100) <= 125;
     }
@@ -440,7 +442,7 @@ public class VoiceConcierge {
             "- RECENCY WINDOW: Prioritize " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for franchise/similarity queries include iconic 2008\u2013" + currentYear + " peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +
             "1. 'reply': Short 1-sentence conversational summary explaining how you filtered and ranked the results.\n" +
-            "2. 'results': Array of 14 unwatched titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why its plot & genre fit their query).\n" +
+            "2. 'results': Array of 8 to 14 unwatched titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5') that strictly match the query's sub-genre, tone, and format (NEVER pad the list with unrelated genres), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why its plot & genre fit their query).\n" +
             "3. 'follow_ups': Array of 4 short conversational follow-up refinements (max 26 chars each, e.g. 'Only on Netflix & Prime', 'Shorter under 2 hours', 'Darker & grittier tone', 'More like <Top Result>').";
     }
 

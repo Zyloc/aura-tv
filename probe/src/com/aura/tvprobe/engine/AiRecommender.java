@@ -523,7 +523,7 @@ public class AiRecommender {
     private String buildPlannerTaskInstructions(int minModernYear, int currentYear) {
         return "Task:\n" +
             "1. Plan 'queries': 6 diverse JustWatch GraphQL query spec objects for parallel scatter-gather retrieval. " +
-            "If 'User Search Query' is non-empty, ALL 6 query specs MUST directly target the user's search query intent (its seed title, sibling franchise titles, exact objectTypes MOVIE vs SHOW, genres, and era) and MUST NOT mix in unrelated watch history. " +
+            "If 'User Search Query' is non-empty, ALL 6 query specs MUST set 'searchQuery' to a specific movie/show title (the queried title itself plus 5 iconic peer titles in that exact sub-genre and tone) with 'includeSimilar': true, exact 'objectTypes' ([\"MOVIE\"] vs [\"SHOW\"]), and matching 'genres'. " +
             "If 'User Search Query' is empty, generate the 6 query specs from the plot synopses, genres, countries, and types of the User's Watched & In-Progress Shows.\n" +
             "2. Plan 'primary_queries': 5 specific show/movie titles matching the request or watched history.\n" +
             "3. Plan 'watched_traversal_seeds': 3 seed titles for co-watch traversal.\n" +
@@ -750,7 +750,8 @@ public class AiRecommender {
         String title = p.optString("title").trim();
         if (title.isEmpty() || db.isTitleWatched(title)) return null;
         JSONObject meta = fetchOpenMetadata(title);
-        if (!JustWatchGraph.isValidDirectSimilarCandidate(meta, minAllowedYear, 6.8)) return null;
+        double minImdb = minAllowedYear <= 2000 ? 5.8 : 6.4;
+        if (!JustWatchGraph.isValidDirectSimilarCandidate(meta, minAllowedYear, minImdb)) return null;
         String verifiedApp = meta.optString("app", "");
         if (verifiedApp.isEmpty()) return null;
         return buildEnrichedCard(p, meta, title, verifiedApp, idx, maxAllowedYear);
