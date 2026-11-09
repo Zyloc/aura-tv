@@ -126,15 +126,23 @@ public class AuraActivity extends Activity implements
     }
 
     private void resetToHomeTop() {
+        lastFocusedView = null;
+        lastRailFocus = null;
+        lastScrollY = 0;
+        dismissAllActiveOverlays();
+        setBackgroundFocusBlocked(false);
+        if (mainScroll != null) mainScroll.scrollTo(0, 0);
+        HeroSliderBuilder.requestInitialFocus(heroSlider);
+    }
+
+    private void dismissAllActiveOverlays() {
         if (modalContainer != null && modalContainer.getVisibility() == View.VISIBLE) {
-            ModalOverlayBuilder.closeModal(modalContainer, this);
+            modalContainer.removeAllViews();
+            modalContainer.setVisibility(View.GONE);
         }
         if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
         if (SearchOverlay.isVisible(searchOverlay)) SearchOverlay.dismiss(searchOverlay);
         if (NavPanelBuilder.isExpanded(navPanel)) NavPanelBuilder.setExpanded(navPanel, false, this);
-        setBackgroundFocusBlocked(false);
-        if (mainScroll != null) mainScroll.scrollTo(0, 0);
-        HeroSliderBuilder.requestInitialFocus(heroSlider);
     }
 
     @Override

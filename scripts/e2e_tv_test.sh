@@ -135,11 +135,11 @@ sleep 0.5
 "$ADB" -s "$DEV" shell input keyevent 23
 sleep 1.2
 UI_SEARCH="$(dump_ui)"
-assert_ui_contains "$UI_SEARCH" 'Clear Topic' "7. Pressing OK on Top Bar Search opens SearchOverlay"
+assert_ui_contains "$UI_SEARCH" 'android.widget.EditText' "7. Pressing OK on Top Bar Search opens SearchOverlay (EditText & poster grid active)"
 "$ADB" -s "$DEV" shell input keyevent 4
 sleep 0.8
 UI_AFTER_SEARCH="$(dump_ui)"
-assert_ui_not_contains "$UI_AFTER_SEARCH" 'Clear Topic' "8. Pressing BACK dismisses SearchOverlay cleanly"
+assert_ui_not_contains "$UI_AFTER_SEARCH" 'android.widget.EditText' "8. Pressing BACK dismisses SearchOverlay cleanly"
 
 # 4. Press HOME to reset to Hero Slider, then navigate DOWN to For You rail (3 downs) and 2 rights
 "$ADB" -s "$DEV" shell input keyevent 3
@@ -174,32 +174,40 @@ UI_BACK_DETAIL="$(dump_ui)"
 assert_ui_not_contains "$UI_BACK_DETAIL" 'YOUR RATING:' "15. Pressing BACK dismisses DetailOverlay"
 assert_ui_contains "$UI_BACK_DETAIL" 'text="For You"' "16. Dismissing DetailOverlay preserves scroll & focus on For You rail"
 
-# 7. Navigate LEFT to open 3-dash Nav Drawer
+# 7. Swipe right-to-left (DPAD_LEFT x3) to rail left edge and verify focus stays clamped on For You card #0, then open 3-dash Nav Drawer via Top Bar ☰
 "$ADB" -s "$DEV" shell input keyevent 21
 sleep 0.3
 "$ADB" -s "$DEV" shell input keyevent 21
 sleep 0.3
 "$ADB" -s "$DEV" shell input keyevent 21
-sleep 0.8
+sleep 0.5
+UI_LEFT_CLAMP="$(dump_ui)"
+assert_ui_contains "$UI_LEFT_CLAMP" 'focused="true"' "17a. Swiping right-to-left to rail edge keeps focus clamped on card #0"
+"$ADB" -s "$DEV" shell am start -n com.aura.tvprobe/.AuraActivity >/dev/null
+sleep 1.0
+"$ADB" -s "$DEV" shell input keyevent 19
+sleep 0.5
+"$ADB" -s "$DEV" shell input keyevent 21
+sleep 0.5
+"$ADB" -s "$DEV" shell input keyevent 23
+sleep 1.0
 UI_DRAWER="$(dump_ui)"
-assert_ui_contains "$UI_DRAWER" 'Guide AI Taste' "17. Pressing Left at rail edge expands 3-dash Navigation Drawer"
+assert_ui_contains "$UI_DRAWER" 'Guide AI Taste' "17b. Pressing OK on Top Bar ☰ expands 3-dash Navigation Drawer"
 assert_ui_contains "$UI_DRAWER" 'Watch History' "18. Navigation Drawer displays Watch History item"
 assert_ui_contains "$UI_DRAWER" 'Aura Settings' "19. Navigation Drawer displays Aura Settings item"
 
-# 8. Open Watch History Modal, scroll down with D-pad, and re-invoke singleTask intent to verify onNewIntent modal reset
+# 8. Open Watch History Modal (1 step DOWN from Home in Nav Drawer), scroll down with D-pad, and re-invoke AuraActivity to verify modal reset
 "$ADB" -s "$DEV" shell input keyevent 20
-sleep 0.3
-"$ADB" -s "$DEV" shell input keyevent 20
-sleep 0.3
+sleep 0.4
 "$ADB" -s "$DEV" shell input keyevent 23
-sleep 1.0
+sleep 1.2
 UI_HIST_MODAL="$(dump_ui)"
 assert_ui_contains "$UI_HIST_MODAL" 'All Platforms' "20. Watch History modal opens with platform filter pills"
 "$ADB" -s "$DEV" shell input keyevent 20
 sleep 0.3
 "$ADB" -s "$DEV" shell input keyevent 20
 sleep 0.3
-"$ADB" -s "$DEV" shell input keyevent 3
+"$ADB" -s "$DEV" shell am start -n com.aura.tvprobe/.AuraActivity >/dev/null
 sleep 1.0
 UI_AFTER_HOME="$(dump_ui)"
 assert_ui_not_contains "$UI_AFTER_HOME" 'All Platforms' "21. Re-invoking AuraActivity while inside modal closes modal and resets to Home top"

@@ -122,7 +122,7 @@ public final class NavPanelBuilder {
         drawer.animate().cancel();
         animateMainContent(st.mainContentToAnimate, 0, 1.0f);
         drawer.animate().translationX(hiddenX).alpha(0f).setDuration(380).setInterpolator(SLIDE_EASE)
-            .withEndAction(() -> drawer.setVisibility(View.INVISIBLE)).start();
+            .withEndAction(() -> drawer.setVisibility(View.GONE)).start();
         if (notifyCollapse && st.callback != null) st.callback.onDrawerCollapsed();
     }
 
@@ -173,20 +173,19 @@ public final class NavPanelBuilder {
     }
 
     private static TextView buildHamburgerButton(FrameLayout wrapper, Context ctx) {
-        TextView btn = GlassTheme.makeText(ctx, "\u2630", 16f,
-            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        TextView btn = GlassTheme.makeText(ctx, "\u2630", 16f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
         btn.setGravity(Gravity.CENTER);
         btn.setTag(TAG_HAMBURGER);
         float r = dp(ctx, 18);
         btn.setBackground(GlassTheme.focusRounded(GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_STRONG, dp(ctx, 1), r));
         btn.setElevation(dp(ctx, 6));
-        btn.setFocusable(true);
-        btn.setClickable(true);
         bindHamburgerInteractions(wrapper, btn, ctx, r);
         return btn;
     }
 
     private static void bindHamburgerInteractions(FrameLayout wrapper, TextView btn, Context ctx, float r) {
+        btn.setFocusable(true);
+        btn.setClickable(true);
         btn.setOnClickListener(v -> setExpanded(wrapper, true, ctx));
         btn.setOnFocusChangeListener((v, focused) -> updateHamburgerFocus(ctx, btn, v, focused, r));
     }
@@ -217,7 +216,7 @@ public final class NavPanelBuilder {
         LinearLayout drawer = new LinearLayout(ctx);
         drawer.setOrientation(LinearLayout.VERTICAL);
         drawer.setTag(TAG_DRAWER);
-        drawer.setVisibility(View.INVISIBLE);
+        drawer.setVisibility(View.GONE);
         drawer.setTranslationX(-dp(ctx, DRAWER_WIDTH_DP + 28));
         drawer.setAlpha(0f);
         styleDrawerSurface(ctx, drawer);
@@ -305,12 +304,10 @@ public final class NavPanelBuilder {
         hdr.setOrientation(LinearLayout.HORIZONTAL);
         hdr.setGravity(Gravity.CENTER_VERTICAL);
         hdr.setPadding(dp(ctx, 6), 0, dp(ctx, 6), dp(ctx, 6));
-        TextView badge = GlassTheme.makeText(ctx, "\u2630  AURA TV", 12.5f,
-            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        hdr.addView(badge, GlassTheme.weightParams(1f));
-        TextView closeHint = GlassTheme.makeText(ctx, "\u2192 Close", 9.5f,
-            GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
-        hdr.addView(closeHint, GlassTheme.wrapParams());
+        hdr.addView(GlassTheme.makeText(ctx, "\u2630  AURA TV", 12.5f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1), GlassTheme.weightParams(1f));
+        hdr.addView(GlassTheme.makeText(ctx, "\u2192 Close", 9.5f,
+            GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1), GlassTheme.wrapParams());
         content.addView(hdr, GlassTheme.matchWrapParams());
     }
 
@@ -361,14 +358,17 @@ public final class NavPanelBuilder {
         String id = profile.optString("id", "");
         String name = profile.optString("name", "User");
         boolean active = id.equals(activeId);
-        LinearLayout row = createNavRowContainer(ctx);
-        TextView avatar = createAvatar(ctx, name, active);
-        row.addView(avatar);
-        TextView label = createProfileLabel(ctx, name, active);
-        row.addView(label, GlassTheme.wrapParams());
-        if (active) row.setBackground(GlassTheme.solidRounded(GlassTheme.SURFACE_ELEV, dp(ctx, 9)));
-        bindProfileRowEvents(wrapper, row, avatar, label, active, id, ctx, cb);
+        LinearLayout row = buildProfileRowViews(ctx, name, active);
+        bindProfileRowEvents(wrapper, row, (TextView) row.getChildAt(0), (TextView) row.getChildAt(1), active, id, ctx, cb);
         container.addView(row, itemParams(ctx));
+    }
+
+    private static LinearLayout buildProfileRowViews(Context ctx, String name, boolean active) {
+        LinearLayout row = createNavRowContainer(ctx);
+        row.addView(createAvatar(ctx, name, active));
+        row.addView(createProfileLabel(ctx, name, active), GlassTheme.wrapParams());
+        if (active) row.setBackground(GlassTheme.solidRounded(GlassTheme.SURFACE_ELEV, dp(ctx, 9)));
+        return row;
     }
 
     private static TextView createProfileLabel(Context ctx, String name, boolean active) {
@@ -420,9 +420,7 @@ public final class NavPanelBuilder {
             setExpanded(wrapper, false, ctx);
             return true;
         }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-            return true; // Stay strictly inside the left navigation drawer
-        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return true; // Stay strictly inside the left navigation drawer
         if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             return navigateDrawerVertically(wrapper, v, keyCode == KeyEvent.KEYCODE_DPAD_DOWN ? 1 : -1, ctx);
         }
@@ -435,13 +433,16 @@ public final class NavPanelBuilder {
         if (drawer == null) return true;
         List<View> rows = new ArrayList<>();
         collectFocusableRows(drawer, rows);
-        int nextIdx = rows.indexOf(v) + delta;
-        if (rows.indexOf(v) >= 0 && nextIdx >= 0 && nextIdx < rows.size()) {
+        focusAndScrollTargetRow(wrapper, rows, rows.indexOf(v), rows.indexOf(v) + delta, ctx);
+        return true;
+    }
+
+    private static void focusAndScrollTargetRow(FrameLayout wrapper, List<View> rows, int curIdx, int nextIdx, Context ctx) {
+        if (curIdx >= 0 && nextIdx >= 0 && nextIdx < rows.size()) {
             View target = rows.get(nextIdx);
             target.requestFocus();
             scrollDrawerToRow(wrapper, target, ctx);
         }
-        return true;
     }
 
     private static void updateDrawerRowFocus(LinearLayout row, TextView labelView,
@@ -459,13 +460,14 @@ public final class NavPanelBuilder {
         if (root == null || root.getVisibility() != View.VISIBLE) return;
         if (root.isFocusable() && root instanceof LinearLayout) {
             out.add(root);
-            return;
+        } else if (root instanceof ViewGroup) {
+            collectFocusableChildRows((ViewGroup) root, out);
         }
-        if (root instanceof ViewGroup) {
-            ViewGroup g = (ViewGroup) root;
-            for (int i = 0; i < g.getChildCount(); i++) {
-                collectFocusableRows(g.getChildAt(i), out);
-            }
+    }
+
+    private static void collectFocusableChildRows(ViewGroup g, List<View> out) {
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectFocusableRows(g.getChildAt(i), out);
         }
     }
 

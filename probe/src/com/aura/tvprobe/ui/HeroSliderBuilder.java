@@ -64,13 +64,17 @@ public final class HeroSliderBuilder {
         HeroState st = new HeroState();
         st.callback = callback;
         hero.setTag(st);
+        populateHeroLayers(hero, st, ctx);
+        bindHeroCardInteraction(hero, st, ctx);
+        return hero;
+    }
+
+    private static void populateHeroLayers(FrameLayout hero, HeroState st, Context ctx) {
         addBackgroundLayers(hero, st, ctx);
         addGradientOverlays(hero, ctx);
         addInfoOverlay(hero, st, ctx);
         addSlideDotsLayer(hero, st, ctx);
         addTopmostFocusBorderOverlay(hero, st, ctx);
-        bindHeroCardInteraction(hero, st, ctx);
-        return hero;
     }
 
     public static void requestInitialFocus(FrameLayout hero) {
@@ -217,6 +221,10 @@ public final class HeroSliderBuilder {
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
         if (code == KeyEvent.KEYCODE_DPAD_RIGHT) { nextSlide(hero); return true; }
         if (code == KeyEvent.KEYCODE_DPAD_LEFT) { prevSlide(hero); return true; }
+        return handleHeroVerticalKey(st, code);
+    }
+
+    private static boolean handleHeroVerticalKey(HeroState st, int code) {
         if (code == KeyEvent.KEYCODE_DPAD_UP) {
             if (st.callback != null) st.callback.onMoveUpToTopBar();
             return true;
@@ -313,13 +321,17 @@ public final class HeroSliderBuilder {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setVisibility(View.GONE);
-        st.tagView = GlassTheme.makeText(ctx, "STREAMING", 9.5f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
-        st.tagView.setVisibility(View.GONE);
+        st.tagView = createHiddenHeroLabel(ctx, "STREAMING", 9.5f, Color.WHITE);
+        st.metaView = createHiddenHeroLabel(ctx, "", 11.5f, GlassTheme.TEXT_SECONDARY);
         row.addView(st.tagView, GlassTheme.wrapParams());
-        st.metaView = GlassTheme.makeText(ctx, "", 11.5f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_BOLD, 1);
-        st.metaView.setVisibility(View.GONE);
         row.addView(st.metaView, GlassTheme.wrapParams());
         info.addView(row, GlassTheme.wrapParams());
+    }
+
+    private static TextView createHiddenHeroLabel(Context ctx, String text, float sizeSp, int color) {
+        TextView tv = GlassTheme.makeText(ctx, text, sizeSp, color, GlassTheme.FONT_BOLD, 1);
+        tv.setVisibility(View.GONE);
+        return tv;
     }
 
     private static void addSlideDotsLayer(FrameLayout hero, HeroState st, Context ctx) {

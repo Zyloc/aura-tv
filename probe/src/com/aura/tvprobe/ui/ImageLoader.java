@@ -88,7 +88,7 @@ public class ImageLoader {
         return urlStr.replace("/s718/", "/s592/");
     }
 
-    public static void applyRoundedCorners(ImageView iv, final float radiusPx) {
+    public static void applyRoundedCorners(View iv, final float radiusPx) {
         iv.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
@@ -210,13 +210,16 @@ public class ImageLoader {
             File dir = getOrCreateCacheDir(ctx);
             File f = new File(dir, "poster_uhd_" + Math.abs(urlStr.hashCode()) + ".jpg");
             Bitmap diskBmp = loadFromDiskIfValid(f, reqW, reqH);
-            if (diskBmp != null) return diskBmp;
-            if (!downloadToFile(urlStr, f)) return null;
-            evictOldCacheFiles(dir);
-            return decodeCrisp(f, reqW, reqH);
+            return diskBmp != null ? diskBmp : fetchAndDecode(dir, f, urlStr, reqW, reqH);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static Bitmap fetchAndDecode(File dir, File f, String urlStr, int reqW, int reqH) throws Exception {
+        if (!downloadToFile(urlStr, f)) return null;
+        evictOldCacheFiles(dir);
+        return decodeCrisp(f, reqW, reqH);
     }
 
     private static File getOrCreateCacheDir(Context ctx) {

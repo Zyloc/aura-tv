@@ -53,87 +53,33 @@ public final class ModalOverlayBuilder {
     public static void showWatchHistoryModal(
             FrameLayout hostContainer, Context ctx, AuraDb db,
             String activeProfile, ModalActions actions) {
-        hostContainer.removeAllViews();
-        hostContainer.setVisibility(View.VISIBLE);
-
-        LinearLayout panel = createFullGlassPanel(ctx);
+        LinearLayout panel = prepareModalPanel(hostContainer, ctx);
         LinearLayout gridRows = new LinearLayout(ctx);
         gridRows.setOrientation(LinearLayout.VERTICAL);
-
         final String[] currentFilter = {"ALL"};
         final List<JSONObject> allHistory = collectUnifiedDateSortedHistory(db, activeProfile);
+        Runnable renderList = () -> populateHistoryGrid(gridRows, allHistory, currentFilter[0], ctx, hostContainer, actions);
+        LinearLayout filterRow = addHistoryHeaderAndFilters(panel, ctx, allHistory.size(), currentFilter, renderList, hostContainer, actions);
+        panel.addView(wrapInVerticalScroll(ctx, gridRows), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        finishWatchHistoryModal(hostContainer, panel, filterRow, renderList);
+    }
 
-        // Header Row
-        LinearLayout hdr = new LinearLayout(ctx);
-        hdr.setOrientation(LinearLayout.HORIZONTAL);
-        hdr.setGravity(Gravity.CENTER_VERTICAL);
-        hdr.setPadding(0, 0, 0, dp(ctx, 10));
-
-        LinearLayout titleCol = new LinearLayout(ctx);
-        titleCol.setOrientation(LinearLayout.VERTICAL);
-        TextView title = GlassTheme.makeText(ctx, "Watch History", 18f,
-            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        TextView sub = GlassTheme.makeText(ctx,
-            "Sorted by recent activity across Netflix, Prime Video, Disney+ Hotstar & Apple TV+ (" + allHistory.size() + " titles)",
-            10.5f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
-        titleCol.addView(title);
-        titleCol.addView(sub);
-        hdr.addView(titleCol, GlassTheme.weightParams(1f));
-
-        TextView syncBtn = GlassTheme.makeGlassButton(ctx, "\u21BB Sync & Re-Rank");
-        syncBtn.setTextSize(10.5f);
-        syncBtn.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-        syncBtn.setOnClickListener(v -> {
-            closeModal(hostContainer, actions);
-            if (actions != null) actions.onRefreshRecommendations(true);
-        });
-        LinearLayout.LayoutParams sLp = GlassTheme.wrapParams();
-        sLp.rightMargin = dp(ctx, 8);
-        hdr.addView(syncBtn, sLp);
-
-        TextView closeBtn = GlassTheme.makeGlassButton(ctx, "\u2715 Close");
-        closeBtn.setTextSize(10.5f);
-        closeBtn.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-        closeBtn.setOnClickListener(v -> closeModal(hostContainer, actions));
-        bindBackKey(closeBtn, hostContainer, actions);
-        bindBackKey(syncBtn, hostContainer, actions);
-        hdr.addView(closeBtn, GlassTheme.wrapParams());
-        panel.addView(hdr);
-
-        // Platform Filter Bar
-        LinearLayout filterRow = new LinearLayout(ctx);
-        filterRow.setOrientation(LinearLayout.HORIZONTAL);
-        filterRow.setGravity(Gravity.CENTER_VERTICAL);
-        filterRow.setPadding(0, 0, 0, dp(ctx, 12));
-
-        String[] filters = {"All Platforms", "Netflix", "Prime Video", "Disney+ Hotstar", "Apple TV+"};
-        Runnable renderList = () -> populateHistoryGrid(
-            gridRows, allHistory, currentFilter[0], ctx, hostContainer, actions);
-
-        for (String f : filters) {
-            TextView pill = GlassTheme.makeGlassButton(ctx, f);
-            pill.setTextSize(10.5f);
-            pill.setPadding(dp(ctx, 12), dp(ctx, 5), dp(ctx, 12), dp(ctx, 5));
-            LinearLayout.LayoutParams pLp = GlassTheme.wrapParams();
-            pLp.rightMargin = dp(ctx, 8);
-            pill.setLayoutParams(pLp);
-            pill.setOnClickListener(v -> {
-                currentFilter[0] = "All Platforms".equals(f) ? "ALL" : f;
-                renderList.run();
-            });
-            bindBackKey(pill, hostContainer, actions);
-            filterRow.addView(pill);
-        }
+    private static LinearLayout addHistoryHeaderAndFilters(LinearLayout panel, Context ctx, int count, String[] currentFilter,
+                                                           Runnable renderList, FrameLayout hostContainer, ModalActions actions) {
+        panel.addView(buildHistoryHeader(ctx, count, hostContainer, actions));
+        LinearLayout filterRow = buildHistoryFilterRow(ctx, currentFilter, renderList, hostContainer, actions);
         panel.addView(filterRow);
+        return filterRow;
+    }
 
-        ScrollView sv = new ScrollView(ctx);
-        sv.setVerticalScrollBarEnabled(false);
-        sv.setSmoothScrollingEnabled(true);
-        sv.setFocusable(false);
-        sv.addView(gridRows, GlassTheme.matchWrapParams());
-        panel.addView(sv, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+    private static LinearLayout prepareModalPanel(FrameLayout hostContainer, Context ctx) {
+        hostContainer.removeAllViews();
+        hostContainer.setVisibility(View.VISIBLE);
+        return createFullGlassPanel(ctx);
+    }
 
+    private static void finishWatchHistoryModal(FrameLayout hostContainer, LinearLayout panel,
+                                                LinearLayout filterRow, Runnable renderList) {
         renderList.run();
         hostContainer.addView(panel);
         if (filterRow.getChildCount() > 0) {
@@ -142,89 +88,175 @@ public final class ModalOverlayBuilder {
         }
     }
 
+    // Header Row
+    private static LinearLayout buildHistoryHeader(Context ctx, int totalCount,
+                                                   FrameLayout hostContainer, ModalActions actions) {
+        LinearLayout hdr = createModalHeaderRow(ctx, 10);
+        hdr.addView(buildHistoryTitleColumn(ctx, totalCount), GlassTheme.weightParams(1f));
+        TextView syncBtn = createHeaderActionBtn(ctx, "\u21BB Sync & Re-Rank", v -> {
+            closeModal(hostContainer, actions);
+            if (actions != null) actions.onRefreshRecommendations(true);
+        }, hostContainer, actions);
+        hdr.addView(syncBtn, createRightMarginParams(ctx, 8));
+        hdr.addView(createCloseHeaderBtn(ctx, hostContainer, actions), GlassTheme.wrapParams());
+        return hdr;
+    }
+
+    private static LinearLayout buildHistoryTitleColumn(Context ctx, int totalCount) {
+        LinearLayout titleCol = new LinearLayout(ctx);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        titleCol.addView(GlassTheme.makeText(ctx, "Watch History", 18f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1));
+        titleCol.addView(GlassTheme.makeText(ctx,
+            "Sorted by recent activity across Netflix, Prime Video, Disney+ Hotstar & Apple TV+ (" + totalCount + " titles)",
+            10.5f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1));
+        return titleCol;
+    }
+
+    // Platform Filter Bar
+    private static LinearLayout buildHistoryFilterRow(Context ctx, String[] currentFilter, Runnable renderList,
+                                                      FrameLayout hostContainer, ModalActions actions) {
+        LinearLayout filterRow = new LinearLayout(ctx);
+        filterRow.setOrientation(LinearLayout.HORIZONTAL);
+        filterRow.setGravity(Gravity.CENTER_VERTICAL);
+        filterRow.setPadding(0, 0, 0, dp(ctx, 12));
+        String[] filters = {"All Platforms", "Netflix", "Prime Video", "Disney+ Hotstar", "Apple TV+"};
+        for (String f : filters) {
+            filterRow.addView(createFilterPill(ctx, f, currentFilter, renderList, hostContainer, actions));
+        }
+        return filterRow;
+    }
+
+    private static TextView createFilterPill(Context ctx, String f, String[] currentFilter,
+                                             Runnable renderList, FrameLayout hostContainer, ModalActions actions) {
+        TextView pill = GlassTheme.makeGlassButton(ctx, f);
+        pill.setTextSize(10.5f);
+        pill.setPadding(dp(ctx, 12), dp(ctx, 5), dp(ctx, 12), dp(ctx, 5));
+        pill.setLayoutParams(createRightMarginParams(ctx, 8));
+        pill.setOnClickListener(v -> {
+            currentFilter[0] = "All Platforms".equals(f) ? "ALL" : f;
+            renderList.run();
+        });
+        bindBackKey(pill, hostContainer, actions);
+        return pill;
+    }
+
+    private static ScrollView wrapInVerticalScroll(Context ctx, View child) {
+        ScrollView sv = new ScrollView(ctx);
+        sv.setVerticalScrollBarEnabled(false);
+        sv.setSmoothScrollingEnabled(true);
+        sv.setFocusable(false);
+        sv.addView(child, GlassTheme.matchWrapParams());
+        return sv;
+    }
+
     private static List<JSONObject> collectUnifiedDateSortedHistory(AuraDb db, String profileId) {
         List<JSONObject> combined = new ArrayList<>();
         Set<String> seenKeys = new HashSet<>();
+        appendOttHistoryItems(db, profileId, combined, seenKeys);
+        appendManuallyWatchedItems(db, combined, seenKeys);
+        combined.sort(ModalOverlayBuilder::compareHistoryEntries);
+        return combined;
+    }
 
+    private static int compareHistoryEntries(JSONObject a, JSONObject b) {
+        boolean aCont = "continue".equals(a.optString("history_kind"));
+        boolean bCont = "continue".equals(b.optString("history_kind"));
+        if (aCont != bCont) return aCont ? -1 : 1;
+        return Long.compare(b.optLong("updated_at", 0L), a.optLong("updated_at", 0L));
+    }
+
+    private static void appendOttHistoryItems(AuraDb db, String profileId,
+                                              List<JSONObject> combined, Set<String> seenKeys) {
         JSONArray ottHist = db.listHistory(profileId);
         for (int i = 0; i < ottHist.length(); i++) {
-            JSONObject o = ottHist.optJSONObject(i);
-            if (o == null) continue;
-            String series = o.optString("series_title", "");
-            String rawTitle = o.optString("title", "");
-            String mainTitle = !series.isEmpty() ? series : rawTitle;
-            String app = HeroSliderBuilder.cleanPlatformName(
-                o.optString("app_name", o.optString("app", "Streaming")));
-            String pkg = o.optString("app_pkg", "").toLowerCase();
-            if (mainTitle.isEmpty() || mainTitle.equalsIgnoreCase(app)
-                    || pkg.contains("youtube") || pkg.contains("smarttube") || pkg.contains("stremio")) {
-                continue;
-            }
-            String norm = AuraDb.normalizeTitleKey(mainTitle);
-            if (norm.isEmpty() || !seenKeys.add(norm)) continue;
-            try {
-                JSONObject copy = new JSONObject(o.toString());
-                copy.put("display_title", (!series.isEmpty() && !series.equalsIgnoreCase(rawTitle) && !rawTitle.isEmpty())
-                    ? (series + " \u00B7 " + rawTitle) : mainTitle);
-                copy.put("clean_app", app);
-                copy.put("history_kind", "continue");
-                if (copy.optString("poster_url").isEmpty()) {
-                    String cached = db.getCachedGti("jw_imdb_v6:" + mainTitle.toLowerCase());
-                    if (cached == null) cached = db.getCachedGti("jw_imdb_v5:" + mainTitle.toLowerCase());
-                    if (cached != null) {
-                        JSONObject cm = new JSONObject(cached);
-                        copy.put("poster_url", cm.optString("poster_url"));
-                    }
-                }
-                combined.add(copy);
-            } catch (Exception ignored) {}
+            JSONObject copy = buildOttHistoryEntry(db, ottHist.optJSONObject(i), seenKeys);
+            if (copy != null) combined.add(copy);
         }
+    }
 
+    private static JSONObject buildOttHistoryEntry(AuraDb db, JSONObject o, Set<String> seenKeys) {
+        if (o == null) return null;
+        String series = o.optString("series_title", "");
+        String rawTitle = o.optString("title", "");
+        String mainTitle = !series.isEmpty() ? series : rawTitle;
+        String app = HeroSliderBuilder.cleanPlatformName(o.optString("app_name", o.optString("app", "Streaming")));
+        if (isExcludedHistoryRow(mainTitle, app, o.optString("app_pkg", "").toLowerCase(), seenKeys)) return null;
+        String disp = (!series.isEmpty() && !series.equalsIgnoreCase(rawTitle) && !rawTitle.isEmpty())
+            ? (series + " \u00B7 " + rawTitle) : mainTitle;
+        return enrichHistoryJson(db, o, disp, mainTitle, app, "continue", -1L);
+    }
+
+    private static boolean isExcludedHistoryRow(String mainTitle, String app, String pkg, Set<String> seenKeys) {
+        if (mainTitle.isEmpty() || mainTitle.equalsIgnoreCase(app)
+                || pkg.contains("youtube") || pkg.contains("smarttube") || pkg.contains("stremio")) {
+            return true;
+        }
+        String norm = AuraDb.normalizeTitleKey(mainTitle);
+        return norm.isEmpty() || !seenKeys.add(norm);
+    }
+
+    private static void appendManuallyWatchedItems(AuraDb db, List<JSONObject> combined, Set<String> seenKeys) {
         JSONArray watched = db.listManuallyWatched();
         long fallbackTs = (System.currentTimeMillis() / 1000L) - (35L * 86400L);
         for (int i = 0; i < watched.length(); i++) {
-            JSONObject o = watched.optJSONObject(i);
-            if (o == null) continue;
-            String series = o.optString("series_title", "");
-            String rawTitle = o.optString("title", "");
-            String mainTitle = !series.isEmpty() ? series : rawTitle;
-            String app = HeroSliderBuilder.cleanPlatformName(
-                o.optString("app", o.optString("app_name", "Netflix")));
-            if ("TV".equalsIgnoreCase(app) || "Streaming".equalsIgnoreCase(app)) app = "Netflix";
-            String norm = AuraDb.normalizeTitleKey(mainTitle);
-            if (norm.isEmpty() || !seenKeys.add(norm)) continue;
-            try {
-                JSONObject copy = new JSONObject(o.toString());
-                copy.put("display_title", mainTitle);
-                copy.put("clean_app", app);
-                copy.put("history_kind", "watched");
-                long ts = fallbackTs - (i * 86400L);
-                copy.put("updated_at", ts);
-                if (copy.optString("poster_url").isEmpty()) {
-                    String cached = db.getCachedGti("jw_imdb_v6:" + mainTitle.toLowerCase());
-                    if (cached == null) cached = db.getCachedGti("jw_imdb_v5:" + mainTitle.toLowerCase());
-                    if (cached != null) {
-                        JSONObject cm = new JSONObject(cached);
-                        copy.put("poster_url", cm.optString("poster_url"));
-                    }
-                }
-                combined.add(copy);
-            } catch (Exception ignored) {}
+            JSONObject copy = buildWatchedHistoryEntry(db, watched.optJSONObject(i), fallbackTs - (i * 86400L), seenKeys);
+            if (copy != null) combined.add(copy);
         }
+    }
 
-        combined.sort((a, b) -> {
-            boolean aCont = "continue".equals(a.optString("history_kind"));
-            boolean bCont = "continue".equals(b.optString("history_kind"));
-            if (aCont != bCont) return aCont ? -1 : 1;
-            return Long.compare(b.optLong("updated_at", 0L), a.optLong("updated_at", 0L));
-        });
-        return combined;
+    private static JSONObject buildWatchedHistoryEntry(AuraDb db, JSONObject o, long ts, Set<String> seenKeys) {
+        if (o == null) return null;
+        String series = o.optString("series_title", "");
+        String mainTitle = !series.isEmpty() ? series : o.optString("title", "");
+        String app = HeroSliderBuilder.cleanPlatformName(o.optString("app", o.optString("app_name", "Netflix")));
+        if ("TV".equalsIgnoreCase(app) || "Streaming".equalsIgnoreCase(app)) app = "Netflix";
+        String norm = AuraDb.normalizeTitleKey(mainTitle);
+        if (norm.isEmpty() || !seenKeys.add(norm)) return null;
+        return enrichHistoryJson(db, o, mainTitle, mainTitle, app, "watched", ts);
+    }
+
+    private static JSONObject enrichHistoryJson(AuraDb db, JSONObject src, String dispTitle,
+                                                String mainTitle, String app, String kind, long overrideTs) {
+        try {
+            JSONObject copy = new JSONObject(src.toString());
+            populateEnrichedHistoryFields(copy, dispTitle, app, kind, overrideTs);
+            backfillCachedPosterUrl(db, copy, mainTitle);
+            return copy;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void populateEnrichedHistoryFields(JSONObject copy, String dispTitle, String app,
+                                                      String kind, long overrideTs) throws Exception {
+        copy.put("display_title", dispTitle);
+        copy.put("clean_app", app);
+        copy.put("history_kind", kind);
+        if (overrideTs > 0) copy.put("updated_at", overrideTs);
+    }
+
+    private static void backfillCachedPosterUrl(AuraDb db, JSONObject copy, String mainTitle) throws Exception {
+        if (!copy.optString("poster_url").isEmpty()) return;
+        String cached = db.getCachedGti("jw_imdb_v6:" + mainTitle.toLowerCase());
+        if (cached == null) cached = db.getCachedGti("jw_imdb_v5:" + mainTitle.toLowerCase());
+        if (cached != null) {
+            copy.put("poster_url", new JSONObject(cached).optString("poster_url"));
+        }
     }
 
     private static void populateHistoryGrid(
             LinearLayout gridRows, List<JSONObject> all, String platformFilter,
             Context ctx, FrameLayout hostContainer, ModalActions actions) {
         gridRows.removeAllViews();
+        List<JSONObject> filtered = filterHistoryByPlatform(all, platformFilter);
+        int rows = (filtered.size() + 1) / 2;
+        for (int r = 0; r < rows; r++) {
+            gridRows.addView(buildHistoryPairRow(filtered, r, ctx, hostContainer, actions));
+        }
+    }
+
+    private static List<JSONObject> filterHistoryByPlatform(List<JSONObject> all, String platformFilter) {
         List<JSONObject> filtered = new ArrayList<>();
         for (JSONObject item : all) {
             String app = item.optString("clean_app", "");
@@ -232,159 +264,174 @@ public final class ModalOverlayBuilder {
                 filtered.add(item);
             }
         }
-        int n = filtered.size();
-        int rows = (n + 1) / 2;
-        for (int r = 0; r < rows; r++) {
-            LinearLayout row = new LinearLayout(ctx);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rLp.bottomMargin = dp(ctx, 8);
-            row.setLayoutParams(rLp);
+        return filtered;
+    }
 
-            for (int c = 0; c < 2; c++) {
-                int idx = r * 2 + c;
-                if (idx < n) {
-                    View card = buildHistoryVisualCard(filtered.get(idx), ctx, hostContainer, actions);
-                    LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                    if (c == 0) cLp.rightMargin = dp(ctx, 10);
-                    card.setLayoutParams(cLp);
-                    row.addView(card);
-                } else {
-                    row.addView(new View(ctx), new LinearLayout.LayoutParams(0, 1, 1f));
-                }
-            }
-            gridRows.addView(row);
+    private static LinearLayout buildHistoryPairRow(List<JSONObject> filtered, int r, Context ctx,
+                                                    FrameLayout hostContainer, ModalActions actions) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rLp.bottomMargin = dp(ctx, 8);
+        row.setLayoutParams(rLp);
+        addHistoryCellToPairRow(row, filtered, r * 2, true, ctx, hostContainer, actions);
+        addHistoryCellToPairRow(row, filtered, r * 2 + 1, false, ctx, hostContainer, actions);
+        return row;
+    }
+
+    private static void addHistoryCellToPairRow(LinearLayout row, List<JSONObject> filtered, int idx,
+                                                boolean isLeftCol, Context ctx,
+                                                FrameLayout hostContainer, ModalActions actions) {
+        if (idx >= filtered.size()) {
+            row.addView(new View(ctx), new LinearLayout.LayoutParams(0, 1, 1f));
+            return;
         }
+        View card = buildHistoryVisualCard(filtered.get(idx), ctx, hostContainer, actions);
+        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        if (isLeftCol) cLp.rightMargin = dp(ctx, 10);
+        row.addView(card, cLp);
     }
 
     private static View buildHistoryVisualCard(
             JSONObject item, Context ctx, FrameLayout hostContainer, ModalActions actions) {
+        float rad = dp(ctx, 12);
+        LinearLayout card = createHistoryCardContainer(ctx, rad);
+        String dispTitle = item.optString("display_title", "Program");
+        String app = item.optString("clean_app", "Netflix");
+        card.addView(buildHistoryThumbBox(ctx, dispTitle, item.optString("poster_url", "")));
+        card.addView(buildHistoryCardInfo(ctx, item, dispTitle, app), GlassTheme.weightParams(1f));
+        bindHistoryCardEvents(card, item, rad, ctx, hostContainer, actions);
+        return card;
+    }
+
+    private static LinearLayout createHistoryCardContainer(Context ctx, float rad) {
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
-        float rad = dp(ctx, 12);
-        card.setBackground(GlassTheme.focusRounded(
-            GlassTheme.GLASS_CARD, GlassTheme.BORDER_LIGHT, dp(ctx, 1), rad));
+        card.setBackground(GlassTheme.focusRounded(GlassTheme.GLASS_CARD, GlassTheme.BORDER_LIGHT, dp(ctx, 1), rad));
         card.setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8));
         card.setFocusable(true);
         card.setClickable(true);
+        return card;
+    }
 
-        String dispTitle = item.optString("display_title", "Program");
-        String app = item.optString("clean_app", "Netflix");
-
+    private static FrameLayout buildHistoryThumbBox(Context ctx, String dispTitle, String url) {
         FrameLayout thumbBox = new FrameLayout(ctx);
         LinearLayout.LayoutParams tbLp = new LinearLayout.LayoutParams(dp(ctx, 56), dp(ctx, 78));
         tbLp.rightMargin = dp(ctx, 12);
         thumbBox.setLayoutParams(tbLp);
         thumbBox.setBackground(GlassTheme.solidRounded(GlassTheme.SURFACE_ELEV, dp(ctx, 7)));
+        addThumbMonogramAndImage(ctx, thumbBox, dispTitle, url);
+        return thumbBox;
+    }
 
+    private static void addThumbMonogramAndImage(Context ctx, FrameLayout thumbBox, String dispTitle, String url) {
         String mono = dispTitle.isEmpty() ? "\u25B6" : dispTitle.substring(0, 1).toUpperCase();
-        TextView monoTv = GlassTheme.makeText(ctx, mono, 18f,
-            GlassTheme.TEXT_MUTED, GlassTheme.FONT_BOLD, 1);
+        TextView monoTv = GlassTheme.makeText(ctx, mono, 18f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_BOLD, 1);
         monoTv.setGravity(Gravity.CENTER);
-        thumbBox.addView(monoTv, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams match = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        thumbBox.addView(monoTv, match);
+        thumbBox.addView(createThumbImageView(ctx, url), match);
+    }
 
+    private static ImageView createThumbImageView(Context ctx, String url) {
         ImageView iv = new ImageView(ctx);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         ImageLoader.applyRoundedCorners(iv, dp(ctx, 7));
-        String url = item.optString("poster_url", "");
-        if (!url.isEmpty()) {
-            ImageLoader.load(ctx, url, iv);
-        }
-        thumbBox.addView(iv, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        card.addView(thumbBox);
+        if (!url.isEmpty()) ImageLoader.load(ctx, url, iv);
+        return iv;
+    }
 
+    private static LinearLayout buildHistoryCardInfo(Context ctx, JSONObject item, String dispTitle, String app) {
         LinearLayout info = new LinearLayout(ctx);
         info.setOrientation(LinearLayout.VERTICAL);
-
-        // Top badge row: Platform + Formatted Date
-        LinearLayout metaRow = new LinearLayout(ctx);
-        metaRow.setOrientation(LinearLayout.HORIZONTAL);
-        metaRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView pill = GlassTheme.makeText(ctx, app.toUpperCase(), 7.5f,
-            Color.WHITE, GlassTheme.FONT_BOLD, 1);
-        pill.setBackground(GlassTheme.solidRounded(HeroSliderBuilder.getPlatformColor(app), dp(ctx, 4)));
-        pill.setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2));
-        metaRow.addView(pill, GlassTheme.wrapParams());
-
-        long tsSec = item.optLong("updated_at", 0L);
-        String dateStr = formatTimestampDate(tsSec);
-        TextView dateTv = GlassTheme.makeText(ctx, "   \u00B7   " + dateStr, 9.5f,
-            GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
-        metaRow.addView(dateTv, GlassTheme.wrapParams());
-        info.addView(metaRow);
-
-        // Title
-        TextView title = GlassTheme.makeText(ctx, dispTitle,
-            13f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        info.addView(buildHistoryBadgeDateRow(ctx, app, item.optLong("updated_at", 0L)));
+        TextView title = GlassTheme.makeText(ctx, dispTitle, 13f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setPadding(0, dp(ctx, 4), 0, dp(ctx, 3));
         info.addView(title);
+        addHistoryProgressSection(ctx, info, item);
+        return info;
+    }
 
-        // Status / Progress bar
+    // Top badge row: Platform + Formatted Date
+    private static LinearLayout buildHistoryBadgeDateRow(Context ctx, String app, long tsSec) {
+        LinearLayout metaRow = new LinearLayout(ctx);
+        metaRow.setOrientation(LinearLayout.HORIZONTAL);
+        metaRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView pill = GlassTheme.makeText(ctx, app.toUpperCase(), 7.5f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
+        pill.setBackground(GlassTheme.solidRounded(HeroSliderBuilder.getPlatformColor(app), dp(ctx, 4)));
+        pill.setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2));
+        metaRow.addView(pill, GlassTheme.wrapParams());
+        metaRow.addView(GlassTheme.makeText(ctx, "   \u00B7   " + formatTimestampDate(tsSec), 9.5f,
+            GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1), GlassTheme.wrapParams());
+        return metaRow;
+    }
+
+    // Status / Progress bar
+    private static void addHistoryProgressSection(Context ctx, LinearLayout info, JSONObject item) {
         int pos = item.optInt("position_sec", 0);
         int dur = item.optInt("duration_sec", 0);
-        int rating = item.optInt("user_rating", 0);
-        String statusText;
-        int pct = 100;
+        int pct = (pos > 0 && dur > 0) ? Math.min(95, Math.max(10, (pos * 100) / dur)) : 100;
+        String statusText = resolveHistoryStatusText(pos, dur, pct, item.optInt("user_rating", 0));
+        info.addView(GlassTheme.makeText(ctx, statusText, 10f, GlassTheme.GOLD_ACCENT, GlassTheme.FONT_MEDIUM, 1));
         if (pos > 0 && dur > 0) {
-            pct = Math.min(95, Math.max(10, (pos * 100) / dur));
-            statusText = "\u25B6 Resume \u00B7 " + pct + "% watched";
-        } else if (rating > 0) {
-            statusText = "Watched \u2713  \u00B7  Rated \u2605 " + rating + "/10";
-        } else {
-            statusText = "Watched \u2713  \u00B7  Used by AI Taste Graph";
+            info.addView(buildHistoryProgressTrack(ctx, pct));
         }
-        TextView stTv = GlassTheme.makeText(ctx, statusText, 10f,
-            GlassTheme.GOLD_ACCENT, GlassTheme.FONT_MEDIUM, 1);
-        info.addView(stTv);
+    }
 
-        if (pos > 0 && dur > 0) {
-            LinearLayout track = new LinearLayout(ctx);
-            track.setOrientation(LinearLayout.HORIZONTAL);
-            track.setBackground(GlassTheme.solidRounded(0x33FFFFFF, dp(ctx, 2)));
-            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 3.5f));
-            tLp.topMargin = dp(ctx, 5);
-            track.setLayoutParams(tLp);
-            View fill = new View(ctx);
-            fill.setBackground(GlassTheme.solidRounded(GlassTheme.GOLD_ACCENT, dp(ctx, 2)));
-            track.addView(fill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, pct));
-            track.addView(new View(ctx), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 100 - pct));
-            info.addView(track);
-        }
+    private static String resolveHistoryStatusText(int pos, int dur, int pct, int rating) {
+        if (pos > 0 && dur > 0) return "\u25B6 Resume \u00B7 " + pct + "% watched";
+        if (rating > 0) return "Watched \u2713  \u00B7  Rated \u2605 " + rating + "/10";
+        return "Watched \u2713  \u00B7  Used by AI Taste Graph";
+    }
 
-        card.addView(info, GlassTheme.weightParams(1f));
+    private static LinearLayout buildHistoryProgressTrack(Context ctx, int pct) {
+        LinearLayout track = createProgressTrackContainer(ctx);
+        View fill = new View(ctx);
+        fill.setBackground(GlassTheme.solidRounded(GlassTheme.GOLD_ACCENT, dp(ctx, 2)));
+        track.addView(fill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, pct));
+        track.addView(new View(ctx), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 100 - pct));
+        return track;
+    }
 
+    private static LinearLayout createProgressTrackContainer(Context ctx) {
+        LinearLayout track = new LinearLayout(ctx);
+        track.setOrientation(LinearLayout.HORIZONTAL);
+        track.setBackground(GlassTheme.solidRounded(0x33FFFFFF, dp(ctx, 2)));
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 3.5f));
+        tLp.topMargin = dp(ctx, 5);
+        track.setLayoutParams(tLp);
+        return track;
+    }
+
+    private static void bindHistoryCardEvents(LinearLayout card, JSONObject item, float rad,
+                                              Context ctx, FrameLayout hostContainer, ModalActions actions) {
         card.setOnClickListener(v -> {
             closeModal(hostContainer, actions);
             if (actions != null) actions.onLaunchMedia(item);
         });
-        card.setOnFocusChangeListener((v, focused) -> {
-            int bg = focused ? GlassTheme.SURFACE_ELEV : GlassTheme.GLASS_CARD;
-            int stroke = focused ? Color.WHITE : GlassTheme.BORDER_LIGHT;
-            int sw = focused ? dp(ctx, 2.5f) : dp(ctx, 1);
-            v.setBackground(GlassTheme.focusRounded(bg, stroke, sw, rad));
-        });
+        card.setOnFocusChangeListener((v, focused) -> v.setBackground(GlassTheme.focusRounded(
+            focused ? GlassTheme.SURFACE_ELEV : GlassTheme.GLASS_CARD,
+            focused ? Color.WHITE : GlassTheme.BORDER_LIGHT, dp(ctx, focused ? 2.5f : 1), rad)));
         bindBackKey(card, hostContainer, actions);
-        return card;
     }
 
     private static String formatTimestampDate(long tsSec) {
         if (tsSec <= 0L) return "Recent";
-        long nowSec = System.currentTimeMillis() / 1000L;
-        long diffHours = (nowSec - tsSec) / 3600L;
+        long diffHours = (System.currentTimeMillis() / 1000L - tsSec) / 3600L;
+        Date dt = new Date(tsSec * 1000L);
         if (diffHours >= 0 && diffHours < 20) {
-            return "Today \u00B7 " + new SimpleDateFormat("MMM d", Locale.US).format(new Date(tsSec * 1000L));
+            return "Today \u00B7 " + new SimpleDateFormat("MMM d", Locale.US).format(dt);
         }
         if (diffHours >= 20 && diffHours < 44) {
-            return "Yesterday \u00B7 " + new SimpleDateFormat("MMM d", Locale.US).format(new Date(tsSec * 1000L));
+            return "Yesterday \u00B7 " + new SimpleDateFormat("MMM d", Locale.US).format(dt);
         }
-        return new SimpleDateFormat("MMM d, yyyy", Locale.US).format(new Date(tsSec * 1000L));
+        return new SimpleDateFormat("MMM d, yyyy", Locale.US).format(dt);
     }
 
     // ── 2. Aura Settings Studio (Separated from Android TV Settings!) ────
@@ -392,116 +439,139 @@ public final class ModalOverlayBuilder {
     public static void showAuraSettingsModal(
             FrameLayout hostContainer, Context ctx, AuraDb db,
             String activeProfile, int remotePort, ModalActions actions) {
-        hostContainer.removeAllViews();
-        hostContainer.setVisibility(View.VISIBLE);
-
-        LinearLayout panel = createFullGlassPanel(ctx);
-
-        // Header
-        LinearLayout hdr = new LinearLayout(ctx);
-        hdr.setOrientation(LinearLayout.HORIZONTAL);
-        hdr.setGravity(Gravity.CENTER_VERTICAL);
-        hdr.setPadding(0, 0, 0, dp(ctx, 12));
-
-        TextView title = GlassTheme.makeText(ctx, "Aura Settings", 18f,
-            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        hdr.addView(title, GlassTheme.weightParams(1f));
-
-        TextView tvSettingsBtn = GlassTheme.makeGlassButton(ctx, "Open Android TV System Settings \u2197");
-        tvSettingsBtn.setTextSize(10.5f);
-        tvSettingsBtn.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-        tvSettingsBtn.setOnClickListener(v -> {
-            if (actions != null) actions.onOpenSystemTvSettings();
-        });
-        LinearLayout.LayoutParams tLp = GlassTheme.wrapParams();
-        tLp.rightMargin = dp(ctx, 8);
-        hdr.addView(tvSettingsBtn, tLp);
-
-        TextView closeBtn = GlassTheme.makeGlassButton(ctx, "\u2715 Close");
-        closeBtn.setTextSize(10.5f);
-        closeBtn.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-        closeBtn.setOnClickListener(v -> closeModal(hostContainer, actions));
-        bindBackKey(closeBtn, hostContainer, actions);
-        bindBackKey(tvSettingsBtn, hostContainer, actions);
-        hdr.addView(closeBtn, GlassTheme.wrapParams());
-        panel.addView(hdr);
-
-        ScrollView sv = new ScrollView(ctx);
-        sv.setVerticalScrollBarEnabled(false);
+        LinearLayout panel = prepareModalPanel(hostContainer, ctx);
+        panel.addView(buildSettingsHeader(ctx, hostContainer, actions));
         LinearLayout body = new LinearLayout(ctx);
         body.setOrientation(LinearLayout.VERTICAL);
+        View firstQualityBtn = populateSettingsBody(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
+        panel.addView(wrapInVerticalScroll(ctx, body), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        hostContainer.addView(panel);
+        if (firstQualityBtn != null) firstQualityBtn.post(firstQualityBtn::requestFocus);
+    }
 
-        // Section 1: Picture & Poster Resolution Quality
+    private static View populateSettingsBody(LinearLayout body, Context ctx, AuraDb db, String activeProfile,
+                                             int remotePort, FrameLayout hostContainer, ModalActions actions) {
+        View firstQualityBtn = addQualityAndRankingSections(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
+        addPreferredLanguagesSection(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
+        addAiEngineAndActionsSection(body, ctx, db, remotePort, hostContainer, actions);
+        return firstQualityBtn;
+    }
+
+    private static LinearLayout buildSettingsHeader(Context ctx, FrameLayout hostContainer, ModalActions actions) {
+        LinearLayout hdr = createModalHeaderRow(ctx, 12);
+        hdr.addView(GlassTheme.makeText(ctx, "Aura Settings", 18f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1), GlassTheme.weightParams(1f));
+        TextView tvSettingsBtn = createHeaderActionBtn(ctx, "Open Android TV System Settings \u2197",
+            v -> { if (actions != null) actions.onOpenSystemTvSettings(); }, hostContainer, actions);
+        hdr.addView(tvSettingsBtn, createRightMarginParams(ctx, 8));
+        hdr.addView(createCloseHeaderBtn(ctx, hostContainer, actions), GlassTheme.wrapParams());
+        return hdr;
+    }
+
+    // Section 1: Picture & Poster Resolution Quality & Section 2: Recommendation Ranking Algorithm
+    private static View addQualityAndRankingSections(LinearLayout body, Context ctx, AuraDb db,
+                                                     String activeProfile, int remotePort,
+                                                     FrameLayout hostContainer, ModalActions actions) {
         addSettingSectionHeader(body, ctx, "1. PICTURE & POSTER QUALITY",
             "Controls poster & Hero artwork decoding resolution and color depth (32-bit ARGB_8888 vs 16-bit).");
-        String curQuality = db.getSetting("image_quality", "ultra");
         String[][] qualityOpts = {
-            {"ultra", "Ultra HD (s592 \u00B7 32-bit Crisp)"},
-            {"balanced", "Balanced HD"},
-            {"saver", "Data & Memory Saver"}
+            {"ultra", "Ultra HD (s592 \u00B7 32-bit Crisp)"}, {"balanced", "Balanced HD"}, {"saver", "Data & Memory Saver"}
         };
-        View firstQualityBtn = addOptionSelectorRow(body, ctx, qualityOpts, curQuality, selectedKey -> {
-            db.setSetting("image_quality", selectedKey);
-            ImageLoader.setQualityMode(selectedKey);
-            showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
-        }, hostContainer, actions);
+        View firstBtn = addOptionSelectorRow(body, ctx, qualityOpts, db.getSetting("image_quality", "ultra"),
+            key -> applyImageQualitySetting(hostContainer, ctx, db, activeProfile, remotePort, actions, key),
+            hostContainer, actions);
+        addRankingAlgorithmSection(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
+        return firstBtn;
+    }
 
-        // Section 2: Recommendation Ranking Algorithm
+    private static void applyImageQualitySetting(FrameLayout hostContainer, Context ctx, AuraDb db,
+                                                 String activeProfile, int remotePort,
+                                                 ModalActions actions, String selectedKey) {
+        db.setSetting("image_quality", selectedKey);
+        ImageLoader.setQualityMode(selectedKey);
+        showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
+    }
+
+    private static final String[][] RANK_OPTS = {
+        {"prestige", "Prestige & High IMDb (7.5+)"},
+        {"fresh", "Fresh 2024\u20132026 Releases First"},
+        {"balanced", "Balanced Discovery"}
+    };
+
+    private static final String[] PREFERRED_LANGS = {
+        "English", "Hindi", "Tamil", "Telugu", "Malayalam", "Korean", "Japanese"
+    };
+
+    private static void addRankingAlgorithmSection(LinearLayout body, Context ctx, AuraDb db,
+                                                   String activeProfile, int remotePort,
+                                                   FrameLayout hostContainer, ModalActions actions) {
         addSettingSectionHeader(body, ctx, "2. AI RANKING ALGORITHM",
             "Adjust how Aura weighs IMDb prestige scores, 2024\u20132026 release recency, and platform affinity.");
-        String curRank = db.getSetting("ranking_mode", "prestige");
-        String[][] rankOpts = {
-            {"prestige", "Prestige & High IMDb (7.5+)"},
-            {"fresh", "Fresh 2024\u20132026 Releases First"},
-            {"balanced", "Balanced Discovery"}
-        };
-        addOptionSelectorRow(body, ctx, rankOpts, curRank, selectedKey -> {
+        addOptionSelectorRow(body, ctx, RANK_OPTS, db.getSetting("ranking_mode", "prestige"), selectedKey -> {
             db.setSetting("ranking_mode", selectedKey);
             showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
         }, hostContainer, actions);
+    }
 
-        // Section 3: Preferred Content & Search Languages
+    // Section 3: Preferred Content & Search Languages
+    private static void addPreferredLanguagesSection(LinearLayout body, Context ctx, AuraDb db,
+                                                     String activeProfile, int remotePort,
+                                                     FrameLayout hostContainer, ModalActions actions) {
         addSettingSectionHeader(body, ctx, "3. PREFERRED LANGUAGES (SEARCH IN ANY LANGUAGE)",
             "Select languages to prioritize across recommendations and multilingual voice/text search.");
         String curLangs = db.getSetting("preferred_langs", "English");
-        String[] langs = {"English", "Hindi", "Tamil", "Telugu", "Malayalam", "Korean", "Japanese"};
-        LinearLayout langRow = new LinearLayout(ctx);
-        langRow.setOrientation(LinearLayout.HORIZONTAL);
-        langRow.setPadding(0, dp(ctx, 4), 0, dp(ctx, 12));
-        for (String lang : langs) {
-            boolean active = curLangs.toLowerCase().contains(lang.toLowerCase());
-            String label = (active ? "\u2713 " : "") + lang;
-            TextView pill = active
-                ? GlassTheme.makePrimaryButton(ctx, label)
-                : GlassTheme.makeGlassButton(ctx, label);
-            pill.setTextSize(10.5f);
-            pill.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-            LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
-            lp.rightMargin = dp(ctx, 8);
-            pill.setLayoutParams(lp);
-            pill.setOnClickListener(v -> {
-                String updated = toggleCsvItem(curLangs, lang);
-                db.setSetting("preferred_langs", updated);
-                db.setProfileTaste(activeProfile, db.getProfileTaste(activeProfile));
-                showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
-            });
-            bindBackKey(pill, hostContainer, actions);
-            langRow.addView(pill);
+        LinearLayout langRow = createPaddedHorizontalRow(ctx, 4, 12);
+        for (String lang : PREFERRED_LANGS) {
+            langRow.addView(createLanguagePill(ctx, db, curLangs, lang, activeProfile, remotePort, hostContainer, actions));
         }
         body.addView(langRow);
+    }
 
-        // Section 4: AI Engine & Phone Web Config
+    private static TextView createLanguagePill(Context ctx, AuraDb db, String curLangs, String lang,
+                                               String activeProfile, int remotePort,
+                                               FrameLayout hostContainer, ModalActions actions) {
+        boolean active = curLangs.toLowerCase().contains(lang.toLowerCase());
+        String label = (active ? "\u2713 " : "") + lang;
+        TextView pill = active ? GlassTheme.makePrimaryButton(ctx, label) : GlassTheme.makeGlassButton(ctx, label);
+        pill.setTextSize(10.5f);
+        pill.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
+        pill.setLayoutParams(createRightMarginParams(ctx, 8));
+        pill.setOnClickListener(v -> toggleLanguageSetting(hostContainer, ctx, db, curLangs, lang, activeProfile, remotePort, actions));
+        bindBackKey(pill, hostContainer, actions);
+        return pill;
+    }
+
+    private static void toggleLanguageSetting(FrameLayout hostContainer, Context ctx, AuraDb db,
+                                              String curLangs, String lang, String activeProfile,
+                                              int remotePort, ModalActions actions) {
+        db.setSetting("preferred_langs", toggleCsvItem(curLangs, lang));
+        db.setProfileTaste(activeProfile, db.getProfileTaste(activeProfile));
+        showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
+    }
+
+    // Section 4: AI Engine & Phone Web Config
+    private static void addAiEngineAndActionsSection(LinearLayout body, Context ctx, AuraDb db,
+                                                     int remotePort, FrameLayout hostContainer, ModalActions actions) {
         String keyVal = db.getSetting("gemini_api_key", "");
         String keyStatus = keyVal.isEmpty() ? "Offline JustWatch Graph Mode" : "Aura Agentic Engine + JustWatch Graph Active \u2713";
         addSettingSectionHeader(body, ctx, "4. AI ENGINE & MOBILE REMOTE",
             "Status: " + keyStatus + "   \u00B7   Phone Remote URL: http://"
             + QrRemoteBuilder.getTvIpAddress(ctx) + ":" + remotePort);
+        body.addView(buildSettingsActionRow(ctx, hostContainer, actions));
+    }
 
+    private static LinearLayout buildSettingsActionRow(Context ctx, FrameLayout hostContainer, ModalActions actions) {
         LinearLayout actionRow = new LinearLayout(ctx);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.setGravity(Gravity.CENTER_VERTICAL);
         actionRow.setPadding(0, dp(ctx, 4), 0, dp(ctx, 8));
+        actionRow.addView(createRebuildSettingsBtn(ctx, hostContainer, actions), createRightMarginParams(ctx, 10));
+        actionRow.addView(createClearCacheSettingsBtn(ctx, hostContainer, actions), createRightMarginParams(ctx, 10));
+        actionRow.addView(createScreensaverSettingsBtn(ctx, hostContainer, actions), GlassTheme.wrapParams());
+        return actionRow;
+    }
 
+    private static TextView createRebuildSettingsBtn(Context ctx, FrameLayout hostContainer, ModalActions actions) {
         TextView rebuildBtn = GlassTheme.makePrimaryButton(ctx, "\u2726 Save & Rebuild Recommendations Now");
         rebuildBtn.setTextSize(11f);
         rebuildBtn.setPadding(dp(ctx, 14), dp(ctx, 7), dp(ctx, 14), dp(ctx, 7));
@@ -510,10 +580,10 @@ public final class ModalOverlayBuilder {
             if (actions != null) actions.onRefreshRecommendations(true);
         });
         bindBackKey(rebuildBtn, hostContainer, actions);
-        LinearLayout.LayoutParams rbLp = GlassTheme.wrapParams();
-        rbLp.rightMargin = dp(ctx, 10);
-        actionRow.addView(rebuildBtn, rbLp);
+        return rebuildBtn;
+    }
 
+    private static TextView createClearCacheSettingsBtn(Context ctx, FrameLayout hostContainer, ModalActions actions) {
         TextView clearCacheBtn = GlassTheme.makeGlassButton(ctx, "Clear Image Cache & Reload Ultra HD");
         clearCacheBtn.setTextSize(10.5f);
         clearCacheBtn.setPadding(dp(ctx, 12), dp(ctx, 7), dp(ctx, 12), dp(ctx, 7));
@@ -523,10 +593,10 @@ public final class ModalOverlayBuilder {
             if (actions != null) actions.onRefreshRecommendations(false);
         });
         bindBackKey(clearCacheBtn, hostContainer, actions);
-        LinearLayout.LayoutParams ccLp = GlassTheme.wrapParams();
-        ccLp.rightMargin = dp(ctx, 10);
-        actionRow.addView(clearCacheBtn, ccLp);
+        return clearCacheBtn;
+    }
 
+    private static TextView createScreensaverSettingsBtn(Context ctx, FrameLayout hostContainer, ModalActions actions) {
         TextView saverBtn = GlassTheme.makeGlassButton(ctx, "\u2726 Start Ambient Screensaver");
         saverBtn.setTextSize(10.5f);
         saverBtn.setPadding(dp(ctx, 12), dp(ctx, 7), dp(ctx, 12), dp(ctx, 7));
@@ -535,98 +605,79 @@ public final class ModalOverlayBuilder {
             if (actions != null) actions.onStartScreensaver();
         });
         bindBackKey(saverBtn, hostContainer, actions);
-        actionRow.addView(saverBtn, GlassTheme.wrapParams());
-
-        body.addView(actionRow);
-        sv.addView(body, GlassTheme.matchWrapParams());
-        panel.addView(sv, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        hostContainer.addView(panel);
-        if (firstQualityBtn != null) {
-            firstQualityBtn.post(firstQualityBtn::requestFocus);
-        }
+        return saverBtn;
     }
 
     // ── 3. Guide AI Taste Studio (No AlertDialog!) ───────────────────────
 
+    private static final String[] VIBE_PRESETS = {
+        "Mind-Bending Sci-Fi", "Gripping Crime Thrillers", "Dark Psychological", "High-Octane Action",
+        "Indian Prestige Series", "Slow-Burn Mystery", "IMDb 8.0+ Masterpieces", "Feel-Good & Witty"
+    };
+
     public static void showGuideAiModal(
             FrameLayout hostContainer, Context ctx, AuraDb db,
             String activeProfile, ModalActions actions) {
-        hostContainer.removeAllViews();
-        hostContainer.setVisibility(View.VISIBLE);
-
-        LinearLayout panel = createFullGlassPanel(ctx);
-
-        LinearLayout hdr = new LinearLayout(ctx);
-        hdr.setOrientation(LinearLayout.HORIZONTAL);
-        hdr.setGravity(Gravity.CENTER_VERTICAL);
-        hdr.setPadding(0, 0, 0, dp(ctx, 12));
-
-        String profName = db.getProfileLabel(activeProfile);
-        TextView title = GlassTheme.makeText(ctx, "Guide AI Taste  \u00B7  " + profName,
-            18f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        hdr.addView(title, GlassTheme.weightParams(1f));
-
-        TextView closeBtn = GlassTheme.makeGlassButton(ctx, "\u2715 Close");
-        closeBtn.setTextSize(10.5f);
-        closeBtn.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-        closeBtn.setOnClickListener(v -> closeModal(hostContainer, actions));
-        bindBackKey(closeBtn, hostContainer, actions);
-        hdr.addView(closeBtn, GlassTheme.wrapParams());
-        panel.addView(hdr);
-
+        LinearLayout panel = prepareModalPanel(hostContainer, ctx);
+        panel.addView(buildSimpleModalHeader(ctx, "Guide AI Taste  \u00B7  " + db.getProfileLabel(activeProfile),
+            12, hostContainer, actions));
         final String curTaste = db.getProfileTaste(activeProfile);
+        View firstPill = addVibePillRows(panel, ctx, db, activeProfile, curTaste, hostContainer, actions);
+        addCustomTasteSection(panel, ctx, db, activeProfile, curTaste, hostContainer, actions);
+        panel.addView(buildGuideAiBottomRow(ctx, db, activeProfile, hostContainer, actions));
+        hostContainer.addView(panel);
+        if (firstPill != null) firstPill.post(firstPill::requestFocus);
+    }
+
+    private static View addVibePillRows(LinearLayout panel, Context ctx, AuraDb db, String activeProfile,
+                                        String curTaste, FrameLayout hostContainer, ModalActions actions) {
         addSettingSectionHeader(panel, ctx, "SELECT YOUR VIBE PILLS (1-CLICK TOGGLE)",
             "Click any vibe below or type custom instructions in any language to steer Aura's ranking engine.");
-
-        String[] vibes = {
-            "Mind-Bending Sci-Fi",
-            "Gripping Crime Thrillers",
-            "Dark Psychological",
-            "High-Octane Action",
-            "Indian Prestige Series",
-            "Slow-Burn Mystery",
-            "IMDb 8.0+ Masterpieces",
-            "Feel-Good & Witty"
-        };
-
-        LinearLayout row1 = new LinearLayout(ctx);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        row1.setPadding(0, dp(ctx, 4), 0, dp(ctx, 8));
-        LinearLayout row2 = new LinearLayout(ctx);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.setPadding(0, 0, 0, dp(ctx, 14));
-
-        View firstPill = null;
-        for (int i = 0; i < vibes.length; i++) {
-            final String vibe = vibes[i];
-            boolean active = curTaste.toLowerCase().contains(vibe.toLowerCase());
-            String lbl = (active ? "\u2713 " : "+ ") + vibe;
-            TextView pill = active
-                ? GlassTheme.makePrimaryButton(ctx, lbl)
-                : GlassTheme.makeGlassButton(ctx, lbl);
-            pill.setTextSize(10.5f);
-            pill.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-            LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
-            lp.rightMargin = dp(ctx, 8);
-            pill.setLayoutParams(lp);
-            pill.setOnClickListener(v -> {
-                String updated = toggleCsvItem(curTaste, vibe);
-                db.setProfileTaste(activeProfile, updated);
-                showGuideAiModal(hostContainer, ctx, db, activeProfile, actions);
-            });
-            bindBackKey(pill, hostContainer, actions);
-            if (i < 4) row1.addView(pill);
-            else row2.addView(pill);
-            if (firstPill == null) firstPill = pill;
-        }
+        LinearLayout row1 = createPaddedHorizontalRow(ctx, 4, 8);
+        LinearLayout row2 = createPaddedHorizontalRow(ctx, 0, 14);
+        View firstPill = populateVibeRows(row1, row2, ctx, db, activeProfile, curTaste, hostContainer, actions);
         panel.addView(row1);
         panel.addView(row2);
+        return firstPill;
+    }
 
+    private static View populateVibeRows(LinearLayout row1, LinearLayout row2, Context ctx, AuraDb db,
+                                         String activeProfile, String curTaste,
+                                         FrameLayout hostContainer, ModalActions actions) {
+        View firstPill = null;
+        for (int i = 0; i < VIBE_PRESETS.length; i++) {
+            TextView pill = createVibePill(ctx, db, activeProfile, curTaste, VIBE_PRESETS[i], hostContainer, actions);
+            (i < 4 ? row1 : row2).addView(pill);
+            if (firstPill == null) firstPill = pill;
+        }
+        return firstPill;
+    }
+
+    private static TextView createVibePill(Context ctx, AuraDb db, String activeProfile, String curTaste,
+                                           String vibe, FrameLayout hostContainer, ModalActions actions) {
+        boolean active = curTaste.toLowerCase().contains(vibe.toLowerCase());
+        String lbl = (active ? "\u2713 " : "+ ") + vibe;
+        TextView pill = styleSelectablePill(ctx, active, lbl, 12, 6, 8);
+        pill.setOnClickListener(v -> {
+            db.setProfileTaste(activeProfile, toggleCsvItem(curTaste, vibe));
+            showGuideAiModal(hostContainer, ctx, db, activeProfile, actions);
+        });
+        bindBackKey(pill, hostContainer, actions);
+        return pill;
+    }
+
+    private static TextView styleSelectablePill(Context ctx, boolean active, String lbl, int padH, int padV, int rightMargin) {
+        TextView pill = active ? GlassTheme.makePrimaryButton(ctx, lbl) : GlassTheme.makeGlassButton(ctx, lbl);
+        pill.setTextSize(10.5f);
+        pill.setPadding(dp(ctx, padH), dp(ctx, padV), dp(ctx, padH), dp(ctx, padV));
+        pill.setLayoutParams(createRightMarginParams(ctx, rightMargin));
+        return pill;
+    }
+
+    private static void addCustomTasteSection(LinearLayout panel, Context ctx, AuraDb db, String activeProfile,
+                                              String curTaste, FrameLayout hostContainer, ModalActions actions) {
         addSettingSectionHeader(panel, ctx, "CUSTOM TASTE INSTRUCTIONS (OPTIONAL)",
             "Current profile taste: " + (curTaste.isEmpty() ? "Default Modern Prestige" : curTaste));
-
         LinearLayout inputBox = buildClickToEditBox(ctx, curTaste,
             "Press OK to type custom taste (e.g. 'Thrillers like Drishyam, no horror')\u2026",
             newText -> {
@@ -634,11 +685,17 @@ public final class ModalOverlayBuilder {
                 showGuideAiModal(hostContainer, ctx, db, activeProfile, actions);
             }, hostContainer, actions);
         panel.addView(inputBox);
+    }
 
-        LinearLayout bottomRow = new LinearLayout(ctx);
-        bottomRow.setOrientation(LinearLayout.HORIZONTAL);
-        bottomRow.setPadding(0, dp(ctx, 16), 0, 0);
+    private static LinearLayout buildGuideAiBottomRow(Context ctx, AuraDb db, String activeProfile,
+                                                      FrameLayout hostContainer, ModalActions actions) {
+        LinearLayout bottomRow = createPaddedHorizontalRow(ctx, 16, 0);
+        bottomRow.addView(createApplyTasteBtn(ctx, hostContainer, actions), createRightMarginParams(ctx, 10));
+        bottomRow.addView(createResetTasteBtn(ctx, db, activeProfile, hostContainer, actions), GlassTheme.wrapParams());
+        return bottomRow;
+    }
 
+    private static TextView createApplyTasteBtn(Context ctx, FrameLayout hostContainer, ModalActions actions) {
         TextView saveBtn = GlassTheme.makePrimaryButton(ctx, "\u2726 Apply Taste & Re-Rank Home");
         saveBtn.setTextSize(11f);
         saveBtn.setPadding(dp(ctx, 16), dp(ctx, 8), dp(ctx, 16), dp(ctx, 8));
@@ -647,10 +704,11 @@ public final class ModalOverlayBuilder {
             if (actions != null) actions.onRefreshRecommendations(true);
         });
         bindBackKey(saveBtn, hostContainer, actions);
-        LinearLayout.LayoutParams sLp = GlassTheme.wrapParams();
-        sLp.rightMargin = dp(ctx, 10);
-        bottomRow.addView(saveBtn, sLp);
+        return saveBtn;
+    }
 
+    private static TextView createResetTasteBtn(Context ctx, AuraDb db, String activeProfile,
+                                                FrameLayout hostContainer, ModalActions actions) {
         TextView resetBtn = GlassTheme.makeGlassButton(ctx, "Reset to Default");
         resetBtn.setTextSize(10.5f);
         resetBtn.setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8));
@@ -659,79 +717,64 @@ public final class ModalOverlayBuilder {
             showGuideAiModal(hostContainer, ctx, db, activeProfile, actions);
         });
         bindBackKey(resetBtn, hostContainer, actions);
-        bottomRow.addView(resetBtn, GlassTheme.wrapParams());
-
-        panel.addView(bottomRow);
-        hostContainer.addView(panel);
-        if (firstPill != null) firstPill.post(firstPill::requestFocus);
+        return resetBtn;
     }
 
     // ── 4. Add Profile Glass Modal (No AlertDialog!) ─────────────────────
 
     public static void showAddProfileModal(
             FrameLayout hostContainer, Context ctx, AuraDb db, ModalActions actions) {
-        hostContainer.removeAllViews();
-        hostContainer.setVisibility(View.VISIBLE);
-
-        LinearLayout panel = createFullGlassPanel(ctx);
-
-        LinearLayout hdr = new LinearLayout(ctx);
-        hdr.setOrientation(LinearLayout.HORIZONTAL);
-        hdr.setGravity(Gravity.CENTER_VERTICAL);
-        hdr.setPadding(0, 0, 0, dp(ctx, 14));
-
-        TextView title = GlassTheme.makeText(ctx, "Add New Profile", 18f,
-            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        hdr.addView(title, GlassTheme.weightParams(1f));
-
-        TextView closeBtn = GlassTheme.makeGlassButton(ctx, "\u2715 Close");
-        closeBtn.setTextSize(10.5f);
-        closeBtn.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
-        closeBtn.setOnClickListener(v -> closeModal(hostContainer, actions));
-        bindBackKey(closeBtn, hostContainer, actions);
-        hdr.addView(closeBtn, GlassTheme.wrapParams());
-        panel.addView(hdr);
-
+        LinearLayout panel = prepareModalPanel(hostContainer, ctx);
+        panel.addView(buildSimpleModalHeader(ctx, "Add New Profile", 14, hostContainer, actions));
         addSettingSectionHeader(panel, ctx, "1-CLICK PROFILE PRESETS",
             "Create a profile with one click or type a custom name below.");
+        View firstBtn = addProfilePresetRow(panel, ctx, db, hostContainer, actions);
+        addCustomProfileNameBox(panel, ctx, db, hostContainer, actions);
+        hostContainer.addView(panel);
+        if (firstBtn != null) firstBtn.post(firstBtn::requestFocus);
+    }
 
+    private static View addProfilePresetRow(LinearLayout panel, Context ctx, AuraDb db,
+                                            FrameLayout hostContainer, ModalActions actions) {
         String[] presets = {"Family", "Kids", "Partner", "Parents", "Guest"};
-        LinearLayout presetRow = new LinearLayout(ctx);
-        presetRow.setOrientation(LinearLayout.HORIZONTAL);
-        presetRow.setPadding(0, dp(ctx, 6), 0, dp(ctx, 16));
+        LinearLayout presetRow = createPaddedHorizontalRow(ctx, 6, 16);
         View firstBtn = null;
         for (String p : presets) {
-            TextView pill = GlassTheme.makeGlassButton(ctx, "+ " + p);
-            pill.setTextSize(11f);
-            pill.setPadding(dp(ctx, 14), dp(ctx, 7), dp(ctx, 14), dp(ctx, 7));
-            LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
-            lp.rightMargin = dp(ctx, 10);
-            pill.setLayoutParams(lp);
-            pill.setOnClickListener(v -> {
-                String id = db.addProfile(p, "");
-                closeModal(hostContainer, actions);
-                if (actions != null) actions.onProfileCreated(id);
-            });
-            bindBackKey(pill, hostContainer, actions);
+            TextView pill = createProfilePresetPill(ctx, db, p, hostContainer, actions);
             presetRow.addView(pill);
             if (firstBtn == null) firstBtn = pill;
         }
         panel.addView(presetRow);
+        return firstBtn;
+    }
 
+    private static TextView createProfilePresetPill(Context ctx, AuraDb db, String p,
+                                                    FrameLayout hostContainer, ModalActions actions) {
+        TextView pill = GlassTheme.makeGlassButton(ctx, "+ " + p);
+        pill.setTextSize(11f);
+        pill.setPadding(dp(ctx, 14), dp(ctx, 7), dp(ctx, 14), dp(ctx, 7));
+        pill.setLayoutParams(createRightMarginParams(ctx, 10));
+        pill.setOnClickListener(v -> createAndActivateProfile(db, p, hostContainer, actions));
+        bindBackKey(pill, hostContainer, actions);
+        return pill;
+    }
+
+    private static void addCustomProfileNameBox(LinearLayout panel, Context ctx, AuraDb db,
+                                                FrameLayout hostContainer, ModalActions actions) {
         addSettingSectionHeader(panel, ctx, "OR TYPE CUSTOM PROFILE NAME", "");
         LinearLayout customBox = buildClickToEditBox(ctx, "",
             "Press OK to type a custom profile name\u2026",
             name -> {
-                if (!name.trim().isEmpty()) {
-                    String id = db.addProfile(name.trim(), "");
-                    closeModal(hostContainer, actions);
-                    if (actions != null) actions.onProfileCreated(id);
-                }
+                if (!name.trim().isEmpty()) createAndActivateProfile(db, name.trim(), hostContainer, actions);
             }, hostContainer, actions);
         panel.addView(customBox);
+    }
 
-        hostContainer.addView(panel);
-        if (firstBtn != null) firstBtn.post(firstBtn::requestFocus);
+    private static void createAndActivateProfile(AuraDb db, String name,
+                                                 FrameLayout hostContainer, ModalActions actions) {
+        String id = db.addProfile(name, "");
+        closeModal(hostContainer, actions);
+        if (actions != null) actions.onProfileCreated(id);
     }
 
     // ── 5. Phone QR Remote Glass Modal (No AlertDialog!) ─────────────────
@@ -740,24 +783,37 @@ public final class ModalOverlayBuilder {
             FrameLayout hostContainer, Context ctx, String ip, int port, ModalActions actions) {
         hostContainer.removeAllViews();
         hostContainer.setVisibility(View.VISIBLE);
+        FrameLayout backdrop = createQrBackdrop(ctx);
+        LinearLayout wrapper = createQrModalWrapper(ctx, ip, port);
+        TextView closeBtn = createQrDoneButton(ctx, hostContainer, actions);
+        wrapper.addView(closeBtn);
+        backdrop.addView(wrapper);
+        hostContainer.addView(backdrop);
+        closeBtn.post(closeBtn::requestFocus);
+    }
 
+    private static LinearLayout createQrModalWrapper(Context ctx, String ip, int port) {
+        LinearLayout wrapper = new LinearLayout(ctx);
+        wrapper.setOrientation(LinearLayout.VERTICAL);
+        wrapper.setGravity(Gravity.CENTER_HORIZONTAL);
+        wrapper.setLayoutParams(new FrameLayout.LayoutParams(
+            dp(ctx, 420), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        View qrCard = QrRemoteBuilder.buildQrCard(ctx, ip, port);
+        qrCard.setFocusable(false);
+        wrapper.addView(qrCard, GlassTheme.matchWrapParams());
+        return wrapper;
+    }
+
+    private static FrameLayout createQrBackdrop(Context ctx) {
         FrameLayout backdrop = new FrameLayout(ctx);
         backdrop.setBackgroundColor(GlassTheme.BG_AMBIENT);
         backdrop.setClickable(true);
         backdrop.setLayoutParams(new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return backdrop;
+    }
 
-        LinearLayout wrapper = new LinearLayout(ctx);
-        wrapper.setOrientation(LinearLayout.VERTICAL);
-        wrapper.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams wLp = new FrameLayout.LayoutParams(
-            dp(ctx, 420), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
-        wrapper.setLayoutParams(wLp);
-
-        View qrCard = QrRemoteBuilder.buildQrCard(ctx, ip, port);
-        qrCard.setFocusable(false);
-        wrapper.addView(qrCard, GlassTheme.matchWrapParams());
-
+    private static TextView createQrDoneButton(Context ctx, FrameLayout hostContainer, ModalActions actions) {
         TextView closeBtn = GlassTheme.makePrimaryButton(ctx, "\u2713 Done");
         closeBtn.setTextSize(11.5f);
         closeBtn.setPadding(dp(ctx, 24), dp(ctx, 8), dp(ctx, 24), dp(ctx, 8));
@@ -766,11 +822,7 @@ public final class ModalOverlayBuilder {
         closeBtn.setLayoutParams(cLp);
         closeBtn.setOnClickListener(v -> closeModal(hostContainer, actions));
         bindBackKey(closeBtn, hostContainer, actions);
-        wrapper.addView(closeBtn);
-
-        backdrop.addView(wrapper);
-        hostContainer.addView(backdrop);
-        closeBtn.post(closeBtn::requestFocus);
+        return closeBtn;
     }
 
     // ── Shared Glass UI Helpers ──────────────────────────────────────────
@@ -781,6 +833,51 @@ public final class ModalOverlayBuilder {
 
     private interface TextSubmitCallback {
         void onSubmit(String text);
+    }
+
+    private static LinearLayout createModalHeaderRow(Context ctx, int bottomPadDp) {
+        LinearLayout hdr = new LinearLayout(ctx);
+        hdr.setOrientation(LinearLayout.HORIZONTAL);
+        hdr.setGravity(Gravity.CENTER_VERTICAL);
+        hdr.setPadding(0, 0, 0, dp(ctx, bottomPadDp));
+        return hdr;
+    }
+
+    private static LinearLayout buildSimpleModalHeader(Context ctx, String titleText, int bottomPadDp,
+                                                       FrameLayout hostContainer, ModalActions actions) {
+        LinearLayout hdr = createModalHeaderRow(ctx, bottomPadDp);
+        TextView title = GlassTheme.makeText(ctx, titleText, 18f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        hdr.addView(title, GlassTheme.weightParams(1f));
+        hdr.addView(createCloseHeaderBtn(ctx, hostContainer, actions), GlassTheme.wrapParams());
+        return hdr;
+    }
+
+    private static TextView createHeaderActionBtn(Context ctx, String label, View.OnClickListener click,
+                                                  FrameLayout hostContainer, ModalActions actions) {
+        TextView btn = GlassTheme.makeGlassButton(ctx, label);
+        btn.setTextSize(10.5f);
+        btn.setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6));
+        btn.setOnClickListener(click);
+        bindBackKey(btn, hostContainer, actions);
+        return btn;
+    }
+
+    private static TextView createCloseHeaderBtn(Context ctx, FrameLayout hostContainer, ModalActions actions) {
+        return createHeaderActionBtn(ctx, "\u2715 Close", v -> closeModal(hostContainer, actions), hostContainer, actions);
+    }
+
+    private static LinearLayout createPaddedHorizontalRow(Context ctx, int topDp, int bottomDp) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(ctx, topDp), 0, dp(ctx, bottomDp));
+        return row;
+    }
+
+    private static LinearLayout.LayoutParams createRightMarginParams(Context ctx, int rightDp) {
+        LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
+        lp.rightMargin = dp(ctx, rightDp);
+        return lp;
     }
 
     private static LinearLayout createFullGlassPanel(Context ctx) {
@@ -812,24 +909,10 @@ public final class ModalOverlayBuilder {
             LinearLayout parent, Context ctx, String[][] options,
             String activeKey, OptionSelectCallback cb,
             FrameLayout hostContainer, ModalActions actions) {
-        LinearLayout row = new LinearLayout(ctx);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(ctx, 4), 0, dp(ctx, 12));
+        LinearLayout row = createPaddedHorizontalRow(ctx, 4, 12);
         View first = null;
         for (String[] opt : options) {
-            final String key = opt[0];
-            boolean isSel = key.equalsIgnoreCase(activeKey);
-            String label = (isSel ? "\u25CF " : "\u25CB ") + opt[1];
-            TextView pill = isSel
-                ? GlassTheme.makePrimaryButton(ctx, label)
-                : GlassTheme.makeGlassButton(ctx, label);
-            pill.setTextSize(10.5f);
-            pill.setPadding(dp(ctx, 13), dp(ctx, 6), dp(ctx, 13), dp(ctx, 6));
-            LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
-            lp.rightMargin = dp(ctx, 8);
-            pill.setLayoutParams(lp);
-            pill.setOnClickListener(v -> cb.onSelect(key));
-            bindBackKey(pill, hostContainer, actions);
+            TextView pill = createOptionSelectorPill(ctx, opt[0], opt[1], activeKey, cb, hostContainer, actions);
             row.addView(pill);
             if (first == null) first = pill;
         }
@@ -837,74 +920,102 @@ public final class ModalOverlayBuilder {
         return first;
     }
 
+    private static TextView createOptionSelectorPill(Context ctx, String key, String text, String activeKey,
+                                                     OptionSelectCallback cb, FrameLayout hostContainer, ModalActions actions) {
+        boolean isSel = key.equalsIgnoreCase(activeKey);
+        String label = (isSel ? "\u25CF " : "\u25CB ") + text;
+        TextView pill = isSel ? GlassTheme.makePrimaryButton(ctx, label) : GlassTheme.makeGlassButton(ctx, label);
+        pill.setTextSize(10.5f);
+        pill.setPadding(dp(ctx, 13), dp(ctx, 6), dp(ctx, 13), dp(ctx, 6));
+        pill.setLayoutParams(createRightMarginParams(ctx, 8));
+        pill.setOnClickListener(v -> cb.onSelect(key));
+        bindBackKey(pill, hostContainer, actions);
+        return pill;
+    }
+
     private static LinearLayout buildClickToEditBox(
             Context ctx, String initialText, String hint,
             TextSubmitCallback onSubmit, FrameLayout hostContainer, ModalActions actions) {
+        float r = dp(ctx, 14);
+        LinearLayout box = createClickToEditContainer(ctx, r);
+        EditText et = createClickToEditInput(ctx, initialText, hint);
+        box.addView(et, GlassTheme.weightParams(1f));
+        bindClickToEditEvents(ctx, box, et, r, onSubmit, hostContainer, actions);
+        return box;
+    }
+
+    private static LinearLayout createClickToEditContainer(Context ctx, float r) {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.HORIZONTAL);
         box.setGravity(Gravity.CENTER_VERTICAL);
-        float r = dp(ctx, 14);
         box.setBackground(GlassTheme.focusRounded(
             GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_STRONG, dp(ctx, 1), r));
         box.setPadding(dp(ctx, 14), dp(ctx, 8), dp(ctx, 14), dp(ctx, 8));
         box.setFocusable(true);
         box.setClickable(true);
+        return box;
+    }
 
+    private static EditText createClickToEditInput(Context ctx, String initialText, String hint) {
         EditText et = new EditText(ctx);
         et.setText(initialText);
         et.setHint(hint);
         et.setHintTextColor(GlassTheme.TEXT_MUTED);
         et.setTextColor(GlassTheme.TEXT_PRIMARY);
         et.setTextSize(12f);
+        configureClickToEditInput(et);
+        return et;
+    }
+
+    private static void configureClickToEditInput(EditText et) {
         et.setSingleLine(true);
         et.setBackground(null);
         et.setInputType(InputType.TYPE_CLASS_TEXT);
         et.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         et.setFocusable(false);
         et.setFocusableInTouchMode(false);
-        box.addView(et, GlassTheme.weightParams(1f));
+    }
 
-        box.setOnClickListener(v -> {
-            et.setFocusableInTouchMode(true);
-            et.setFocusable(true);
-            et.requestFocus();
-            et.setSelection(et.getText().length());
-            try {
-                InputMethodManager imm = (InputMethodManager) ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
-                if (imm != null) imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT);
-            } catch (Exception ignored) {}
-        });
-
-        et.setOnEditorActionListener((v, actionId, ev) -> {
-            try {
-                InputMethodManager imm = (InputMethodManager) ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
-                if (imm != null) imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
-            } catch (Exception ignored) {}
-            et.setFocusable(false);
-            et.setFocusableInTouchMode(false);
-            onSubmit.onSubmit(et.getText().toString());
-            return true;
-        });
-
-        box.setOnFocusChangeListener((v, focused) -> {
-            int stroke = focused ? Color.WHITE : GlassTheme.BORDER_STRONG;
-            int sw = focused ? dp(ctx, 2.5f) : dp(ctx, 1);
-            v.setBackground(GlassTheme.focusRounded(GlassTheme.SURFACE_ELEV, stroke, sw, r));
-        });
+    private static void bindClickToEditEvents(Context ctx, LinearLayout box, EditText et, float r,
+                                              TextSubmitCallback onSubmit, FrameLayout hostContainer, ModalActions actions) {
+        box.setOnClickListener(v -> activateModalEditText(ctx, et));
+        et.setOnEditorActionListener((v, actionId, ev) -> submitModalEditText(ctx, et, onSubmit));
+        box.setOnFocusChangeListener((v, focused) -> v.setBackground(GlassTheme.focusRounded(
+            GlassTheme.SURFACE_ELEV, focused ? Color.WHITE : GlassTheme.BORDER_STRONG,
+            dp(ctx, focused ? 2.5f : 1), r)));
         bindBackKey(box, hostContainer, actions);
-        return box;
+    }
+
+    private static void activateModalEditText(Context ctx, EditText et) {
+        et.setFocusableInTouchMode(true);
+        et.setFocusable(true);
+        et.requestFocus();
+        et.setSelection(et.getText().length());
+        try {
+            InputMethodManager imm = (InputMethodManager) ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT);
+        } catch (Exception ignored) {}
+    }
+
+    private static boolean submitModalEditText(Context ctx, EditText et, TextSubmitCallback onSubmit) {
+        try {
+            InputMethodManager imm = (InputMethodManager) ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
+        } catch (Exception ignored) {}
+        et.setFocusable(false);
+        et.setFocusableInTouchMode(false);
+        onSubmit.onSubmit(et.getText().toString());
+        return true;
     }
 
     private static String toggleCsvItem(String csv, String item) {
         List<String> parts = new ArrayList<>();
         if (csv != null && !csv.trim().isEmpty()) {
             for (String s : csv.split(",")) {
-                String clean = s.trim();
-                if (!clean.isEmpty()) parts.add(clean);
+                if (!s.trim().isEmpty()) parts.add(s.trim());
             }
         }
-        boolean removed = parts.removeIf(p -> p.equalsIgnoreCase(item));
-        if (!removed) parts.add(item);
+        if (!parts.removeIf(p -> p.equalsIgnoreCase(item))) parts.add(item);
         return String.join(", ", parts);
     }
 

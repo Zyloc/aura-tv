@@ -272,15 +272,17 @@ public final class DetailOverlay {
     private static void addTitleAndSynopsisViews(Context ctx, LinearLayout col) {
         TextView titleTv = GlassTheme.makeText(ctx, "", 22f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 2);
         titleTv.setTag(TAG_TITLE);
-        LinearLayout.LayoutParams tLp = GlassTheme.matchWrapParams();
-        tLp.bottomMargin = dp(ctx, 6);
-        col.addView(titleTv, tLp);
+        col.addView(titleTv, createBottomMarginParams(ctx, 6));
         TextView synTv = GlassTheme.makeText(ctx, "", 11.5f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_REGULAR, 3);
         synTv.setLineSpacing(0f, 1.2f);
         synTv.setTag(TAG_SYNOPSIS);
-        LinearLayout.LayoutParams sLp = GlassTheme.matchWrapParams();
-        sLp.bottomMargin = dp(ctx, 8);
-        col.addView(synTv, sLp);
+        col.addView(synTv, createBottomMarginParams(ctx, 8));
+    }
+
+    private static LinearLayout.LayoutParams createBottomMarginParams(Context ctx, int bottomMarginDp) {
+        LinearLayout.LayoutParams lp = GlassTheme.matchWrapParams();
+        lp.bottomMargin = dp(ctx, bottomMarginDp);
+        return lp;
     }
 
     // 4. Compact 1-Line AI Recommendation Note
@@ -339,13 +341,17 @@ public final class DetailOverlay {
         hsv.setClipChildren(false);
         hsv.setClipToPadding(false);
         hsv.setFocusable(false);
+        hsv.addView(createSimilarRowContainer(ctx));
+        return hsv;
+    }
+
+    private static LinearLayout createSimilarRowContainer(Context ctx) {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setClipChildren(false);
         row.setClipToPadding(false);
         row.setTag(TAG_SIMILAR_ROW);
-        hsv.addView(row);
-        return hsv;
+        return row;
     }
 
     // ── Data Binding ─────────────────────────────────────────────────────
@@ -435,6 +441,10 @@ public final class DetailOverlay {
         LinearLayout simRow = findTagged(overlay, TAG_SIMILAR_ROW);
         if (simRow == null) return;
         simRow.removeAllViews();
+        simRow.addView(createSimilarLoadingBox(ctx));
+    }
+
+    private static LinearLayout createSimilarLoadingBox(Context ctx) {
         LinearLayout loadBox = new LinearLayout(ctx);
         loadBox.setOrientation(LinearLayout.HORIZONTAL);
         loadBox.setGravity(Gravity.CENTER_VERTICAL);
@@ -442,7 +452,7 @@ public final class DetailOverlay {
         loadBox.addView(createGoldSpinner(ctx));
         loadBox.addView(GlassTheme.makeText(ctx, "Finding similar shows & movies\u2026",
             11f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1));
-        simRow.addView(loadBox);
+        return loadBox;
     }
 
     private static ProgressBar createGoldSpinner(Context ctx) {
@@ -492,15 +502,17 @@ public final class DetailOverlay {
                                                  int code, KeyEvent ev, DetailCallback cb) {
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
         if (code == KeyEvent.KEYCODE_BACK) { dismiss(overlay); cb.onDismiss(); return true; }
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
-            if (idx > 0) row.getChildAt(idx - 1).requestFocus();
-            return true;
-        }
-        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            if (idx + 1 < row.getChildCount()) row.getChildAt(idx + 1).requestFocus();
-            return true;
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            return focusHorizontalChild(row, idx + (code == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1), 0);
         }
         return code == KeyEvent.KEYCODE_DPAD_DOWN && moveDownFromActions(overlay);
+    }
+
+    private static boolean focusHorizontalChild(LinearLayout row, int targetIdx, int minIdx) {
+        if (targetIdx >= minIdx && targetIdx < row.getChildCount()) {
+            row.getChildAt(targetIdx).requestFocus();
+        }
+        return true;
     }
 
     private static boolean moveDownFromActions(FrameLayout overlay) {
@@ -600,27 +612,23 @@ public final class DetailOverlay {
                                                int code, KeyEvent ev, DetailCallback cb) {
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
         if (code == KeyEvent.KEYCODE_BACK) { dismiss(overlay); cb.onDismiss(); return true; }
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
-            if (idx > 1) row.getChildAt(idx - 1).requestFocus();
-            return true;
-        }
-        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            if (idx + 1 < row.getChildCount()) row.getChildAt(idx + 1).requestFocus();
-            return true;
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            return focusHorizontalChild(row, idx + (code == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1), 1);
         }
         return handleRatingVerticalKey(overlay, code);
     }
 
     private static boolean handleRatingVerticalKey(FrameLayout overlay, int code) {
-        if (code == KeyEvent.KEYCODE_DPAD_UP) {
-            LinearLayout actions = findTagged(overlay, TAG_ACTIONS);
-            if (actions != null && actions.getChildCount() > 0) {
-                actions.getChildAt(0).requestFocus();
-                return true;
-            }
-        }
-        if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
-            return focusFirstSimilarIfAvailable(overlay);
+        if (code == KeyEvent.KEYCODE_DPAD_UP) return focusFirstActionIfPresent(overlay);
+        if (code == KeyEvent.KEYCODE_DPAD_DOWN) return focusFirstSimilarIfAvailable(overlay);
+        return false;
+    }
+
+    private static boolean focusFirstActionIfPresent(View root) {
+        LinearLayout actions = findTagged(root, TAG_ACTIONS);
+        if (actions != null && actions.getChildCount() > 0) {
+            actions.getChildAt(0).requestFocus();
+            return true;
         }
         return false;
     }
@@ -629,15 +637,19 @@ public final class DetailOverlay {
                                                Context ctx, DetailCallback cb) {
         row.removeAllViews();
         if (items == null || items.length() == 0) {
-            row.addView(GlassTheme.makeText(ctx,
-                "Press 'Explore Similar' above to discover related titles.", 10.5f,
-                GlassTheme.TEXT_MUTED, GlassTheme.FONT_REGULAR, 1));
+            addEmptySimilarHint(row, ctx);
             return;
         }
         int count = Math.min(items.length(), 8);
         for (int i = 0; i < count; i++) {
             addAnimatedSimilarCard(row, items.optJSONObject(i), i, count, ctx, cb);
         }
+    }
+
+    private static void addEmptySimilarHint(LinearLayout row, Context ctx) {
+        row.addView(GlassTheme.makeText(ctx,
+            "Press 'Explore Similar' above to discover related titles.", 10.5f,
+            GlassTheme.TEXT_MUTED, GlassTheme.FONT_REGULAR, 1));
     }
 
     private static void addAnimatedSimilarCard(LinearLayout row, JSONObject sim, int i, int count,
@@ -682,13 +694,17 @@ public final class DetailOverlay {
         frame.setLayoutParams(new LinearLayout.LayoutParams(w, h));
         frame.setBackground(GlassTheme.focusRounded(GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_LIGHT, dp(ctx, 1), r));
         applyRoundRectOutline(frame, r);
+        frame.addView(createSimilarImageView(ctx, sim), new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return frame;
+    }
+
+    private static ImageView createSimilarImageView(Context ctx, JSONObject sim) {
         ImageView img = new ImageView(ctx);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
         img.setBackgroundColor(GlassTheme.SURFACE_ELEV);
-        frame.addView(img, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         loadSimilarImage(ctx, sim, img);
-        return frame;
+        return img;
     }
 
     private static void loadSimilarImage(Context ctx, JSONObject sim, ImageView img) {
@@ -739,13 +755,8 @@ public final class DetailOverlay {
                                                 KeyEvent ev, DetailCallback cb) {
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
         if (code == KeyEvent.KEYCODE_BACK) { cb.onDismiss(); return true; }
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
-            if (idx > 0) parentRow.getChildAt(idx - 1).requestFocus();
-            return true;
-        }
-        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            if (idx + 1 < parentRow.getChildCount()) parentRow.getChildAt(idx + 1).requestFocus();
-            return true;
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            return focusHorizontalChild(parentRow, idx + (code == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1), 0);
         }
         return code == KeyEvent.KEYCODE_DPAD_UP && moveUpFromSimilar(parentRow.getRootView());
     }
@@ -756,12 +767,7 @@ public final class DetailOverlay {
             rateRow.getChildAt(1).requestFocus();
             return true;
         }
-        LinearLayout actions = findTagged(root, TAG_ACTIONS);
-        if (actions != null && actions.getChildCount() > 0) {
-            actions.getChildAt(0).requestFocus();
-            return true;
-        }
-        return false;
+        return focusFirstActionIfPresent(root);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

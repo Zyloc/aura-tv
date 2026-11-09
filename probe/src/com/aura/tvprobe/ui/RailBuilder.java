@@ -133,14 +133,18 @@ public final class RailBuilder {
         LinearLayout rail = createRailContainer(ctx);
         addRailHeader(rail, ctx, title, subtitle);
         LinearLayout row = createHorizontalRow(ctx);
+        populateContentRailRow(row, ctx, items, cb);
+        wrapInScrollView(rail, row, ctx);
+        rail.setTag(items);
+        return rail;
+    }
+
+    private static void populateContentRailRow(LinearLayout row, Context ctx, List<JSONObject> items, RailCallback cb) {
         int posterW = computeColumnWidth(ctx, 7);
         int posterH = Math.round(posterW * 1.44f);
         for (int i = 0; i < items.size(); i++) {
             addPosterCard(row, ctx, items.get(i), cb, posterW, posterH, i == items.size() - 1);
         }
-        wrapInScrollView(rail, row, ctx);
-        rail.setTag(items);
-        return rail;
     }
 
     public static boolean focusFirstItem(LinearLayout rail) {
@@ -190,17 +194,22 @@ public final class RailBuilder {
 
     private static void addRailHeader(LinearLayout rail, Context ctx,
                                       String title, String subtitle) {
+        LinearLayout header = createRailHeaderRow(ctx, title);
+        if (subtitle != null && subtitle.length() > 2) {
+            header.addView(GlassTheme.makeText(ctx, "   \u00B7   " + subtitle, 9.5f,
+                GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1), GlassTheme.wrapParams());
+        }
+        rail.addView(header, GlassTheme.wrapParams());
+    }
+
+    private static LinearLayout createRailHeaderRow(Context ctx, String title) {
         LinearLayout header = new LinearLayout(ctx);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(0, 0, 0, dp(ctx, 2));
         header.addView(GlassTheme.makeText(ctx, title, 11.5f, GlassTheme.TEXT_SECONDARY,
             GlassTheme.FONT_BOLD, 1), GlassTheme.wrapParams());
-        if (subtitle != null && subtitle.length() > 2) {
-            header.addView(GlassTheme.makeText(ctx, "   \u00B7   " + subtitle, 9.5f,
-                GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1), GlassTheme.wrapParams());
-        }
-        rail.addView(header, GlassTheme.wrapParams());
+        return header;
     }
 
     // ── Continue watching card (Responsive 5-Col Grid + Dark Glass) ──────
@@ -307,9 +316,8 @@ public final class RailBuilder {
                                    RailCallback cb, int appW, int appH, boolean isLast) {
         String name = app.optString("name", "App");
         String pkg = app.optString("package", "");
-        int color = parseColorSafe(app.optString("color", "#1E293B"));
         LinearLayout wrapper = createAppTileWrapper(ctx);
-        FrameLayout bannerBox = buildAppVisualBox(ctx, pkg, name, color);
+        FrameLayout bannerBox = buildAppVisualBox(ctx, pkg, name, parseColorSafe(app.optString("color", "#1E293B")));
         bannerBox.setTag(TAG_BANNER_BOX);
         wrapper.addView(bannerBox, new LinearLayout.LayoutParams(appW, appH));
         TextView label = createAppTileLabel(ctx, name);
@@ -349,14 +357,18 @@ public final class RailBuilder {
         box.setBackground(GlassTheme.focusRounded(
             GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_STRONG, dp(ctx, 1), rad));
         box.setElevation(dp(ctx, 4));
-        box.setOutlineProvider(new android.view.ViewOutlineProvider() {
+        applyViewRoundedCorners(box, rad);
+        return box;
+    }
+
+    private static void applyViewRoundedCorners(View v, float rad) {
+        v.setOutlineProvider(new android.view.ViewOutlineProvider() {
             @Override
             public void getOutline(View view, android.graphics.Outline outline) {
                 outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), rad);
             }
         });
-        box.setClipToOutline(true);
-        return box;
+        v.setClipToOutline(true);
     }
 
     private static boolean tryAddBannerImage(Context ctx, FrameLayout box, String pkg, float rad) {
@@ -366,12 +378,15 @@ public final class RailBuilder {
         iv.setImageDrawable(banner);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         ImageLoader.applyRoundedCorners(iv, rad - dp(ctx, 2));
-        int inset = dp(ctx, 2);
+        box.addView(iv, createInsetMatchParams(dp(ctx, 2)));
+        return true;
+    }
+
+    private static FrameLayout.LayoutParams createInsetMatchParams(int inset) {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         lp.setMargins(inset, inset, inset, inset);
-        box.addView(iv, lp);
-        return true;
+        return lp;
     }
 
     private static boolean tryAddIconImage(Context ctx, FrameLayout box, String pkg) {
@@ -480,11 +495,7 @@ public final class RailBuilder {
         imgFrame.setBackground(GlassTheme.focusRounded(
             GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_LIGHT, dp(ctx, 1), dp(ctx, 11)));
         ImageView iv = createPosterImageView(ctx, item.optString("poster_url", ""));
-        int inset = dp(ctx, 2);
-        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        ivLp.setMargins(inset, inset, inset, inset);
-        imgFrame.addView(iv, ivLp);
+        imgFrame.addView(iv, createInsetMatchParams(dp(ctx, 2)));
         card.addView(imgFrame, new LinearLayout.LayoutParams(w, h));
         return imgFrame;
     }
@@ -674,10 +685,7 @@ public final class RailBuilder {
         ViewGroup parent = (ViewGroup) current.getParent();
         int nextIdx = Math.max(0, Math.min(parent.getChildCount() - 1, parent.indexOfChild(current) + dir));
         View target = parent.getChildAt(nextIdx);
-        if (target != null && target != current) {
-            target.requestFocus();
-            return true;
-        }
+        if (target != null && target != current) return target.requestFocus() || true;
         if (!current.isFocused()) current.requestFocus();
         scrollToChild(current);
         return true;
@@ -688,11 +696,8 @@ public final class RailBuilder {
         if (rail == null || !(rail.getParent() instanceof LinearLayout)) return false;
         LinearLayout railsContainer = (LinearLayout) rail.getParent();
         int targetIdx = railsContainer.indexOfChild(rail) + railDir;
-        if (targetIdx < 0) {
-            if (cb != null) cb.onMoveUpFromTopRail();
-            return true;
-        }
-        if (targetIdx < railsContainer.getChildCount()) {
+        if (targetIdx < 0 && cb != null) cb.onMoveUpFromTopRail();
+        else if (targetIdx >= 0 && targetIdx < railsContainer.getChildCount()) {
             focusClosestInTargetRail(currentItem, railsContainer.getChildAt(targetIdx));
         }
         return true;

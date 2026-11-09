@@ -45,16 +45,24 @@ public class AuraDb extends SQLiteOpenHelper {
     public void purgePromotionalNoiseFromHistory() {
         try {
             SQLiteDatabase db = getWritableDatabase();
-            db.execSQL("DELETE FROM watch_history WHERE app_pkg LIKE '%youtube%' OR app_pkg LIKE '%smarttube%' OR app_pkg LIKE '%stremio%'");
-            db.execSQL("DELETE FROM watch_history WHERE LOWER(title) = 'netflix' OR LOWER(title) = 'prime video'");
-            db.execSQL("DELETE FROM watch_history WHERE position_sec < 60");
-            db.execSQL("DELETE FROM watch_history WHERE position_sec = 1350 AND duration_sec = 3000");
-            db.execSQL("DELETE FROM watch_history WHERE duration_sec > 0 AND position_sec >= (duration_sec * 95) / 100");
-            if (!"1".equals(getSetting("purged_stale_wn_v3", ""))) {
-                db.execSQL("DELETE FROM watch_history WHERE app_name LIKE '%Recommended%' OR app_name LIKE '%Netflix ·%'");
-                setSetting("purged_stale_wn_v3", "1");
-            }
+            deleteInvalidHistoryRows(db);
+            purgeStaleRecommendationsIfNeeded(db);
         } catch (Exception ignored) {}
+    }
+
+    private void deleteInvalidHistoryRows(SQLiteDatabase db) {
+        db.execSQL("DELETE FROM watch_history WHERE app_pkg LIKE '%youtube%' OR app_pkg LIKE '%smarttube%' OR app_pkg LIKE '%stremio%'");
+        db.execSQL("DELETE FROM watch_history WHERE LOWER(title) = 'netflix' OR LOWER(title) = 'prime video'");
+        db.execSQL("DELETE FROM watch_history WHERE position_sec < 60");
+        db.execSQL("DELETE FROM watch_history WHERE position_sec = 1350 AND duration_sec = 3000");
+        db.execSQL("DELETE FROM watch_history WHERE duration_sec > 0 AND position_sec >= (duration_sec * 95) / 100");
+    }
+
+    private void purgeStaleRecommendationsIfNeeded(SQLiteDatabase db) {
+        if (!"1".equals(getSetting("purged_stale_wn_v3", ""))) {
+            db.execSQL("DELETE FROM watch_history WHERE app_name LIKE '%Recommended%' OR app_name LIKE '%Netflix ·%'");
+            setSetting("purged_stale_wn_v3", "1");
+        }
     }
 
     @Override
@@ -68,23 +76,26 @@ public class AuraDb extends SQLiteOpenHelper {
 
     @Override
     public void onCreate(SQLiteDatabase db) {
+        createWatchHistoryTable(db);
+        createSupportTables(db);
+        seedDefaultSettings(db);
+    }
+
+    private void createWatchHistoryTable(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS watch_history (" +
             "media_key TEXT PRIMARY KEY, profile_id TEXT DEFAULT 'family', " +
             "app_pkg TEXT, app_name TEXT, title TEXT, series_title TEXT, " +
             "season INTEGER, episode INTEGER, synopsis TEXT, poster_url TEXT, " +
             "genres TEXT, runtime_min INTEGER DEFAULT 45, launch_uri TEXT, " +
             "position_sec INTEGER, duration_sec INTEGER, updated_at INTEGER)");
-        db.execSQL("CREATE TABLE IF NOT EXISTS gti_cache (" +
-            "gti TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
-        db.execSQL("CREATE TABLE IF NOT EXISTS profile_recos (" +
-            "profile_id TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
-        db.execSQL("CREATE TABLE IF NOT EXISTS watched_items (" +
-            "title_key TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
-        db.execSQL("CREATE TABLE IF NOT EXISTS kv_settings (" +
-            "k TEXT PRIMARY KEY, v TEXT)");
-        db.execSQL("CREATE TABLE IF NOT EXISTS user_profiles (" +
-            "profile_id TEXT PRIMARY KEY, name TEXT, interests TEXT, created_at INTEGER)");
-        seedDefaultSettings(db);
+    }
+
+    private void createSupportTables(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS gti_cache (gti TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS profile_recos (profile_id TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS watched_items (title_key TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS kv_settings (k TEXT PRIMARY KEY, v TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS user_profiles (profile_id TEXT PRIMARY KEY, name TEXT, interests TEXT, created_at INTEGER)");
     }
 
     private void seedDefaultSettings(SQLiteDatabase db) {
@@ -112,17 +123,17 @@ public class AuraDb extends SQLiteOpenHelper {
 
     private List<JSONObject> listProfilesRaw() {
         List<JSONObject> list = new ArrayList<>();
-        SQLiteDatabase db = getReadableDatabase();
-        try (Cursor c = db.rawQuery("SELECT profile_id, name, interests FROM user_profiles ORDER BY created_at ASC", null)) {
-            while (c.moveToNext()) {
-                JSONObject o = new JSONObject();
-                o.put("id", c.getString(0));
-                o.put("name", c.getString(1));
-                o.put("interests", c.isNull(2) ? "" : c.getString(2));
-                list.add(o);
-            }
+        String sql = "SELECT profile_id, name, interests FROM user_profiles ORDER BY created_at ASC";
+        try (Cursor c = getReadableDatabase().rawQuery(sql, null)) {
+            while (c.moveToNext()) list.add(parseProfileRow(c));
         } catch (Exception ignored) {}
         return list;
+    }
+
+    private JSONObject parseProfileRow(Cursor c) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("id", c.getString(0)).put("name", c.getString(1));
+        return o.put("interests", c.isNull(2) ? "" : c.getString(2));
     }
 
     public List<JSONObject> listProfiles() {
@@ -161,15 +172,17 @@ public class AuraDb extends SQLiteOpenHelper {
         db.delete("user_profiles", "profile_id = ?", new String[]{profileId});
         db.delete("profile_recos", "profile_id = ?", new String[]{profileId});
         List<JSONObject> rem = listProfilesRaw();
-        if (rem.isEmpty()) {
-            String fallbackId = "prof_" + (System.currentTimeMillis() % 1000000L);
-            saveProfileRecord(fallbackId, "Temp_User", "");
-            setSetting("active_profile", fallbackId);
-            return fallbackId;
-        }
+        if (rem.isEmpty()) return createFallbackProfile();
         String nextId = rem.get(0).optString("id", DEFAULT_PROFILE);
         setSetting("active_profile", nextId);
         return nextId;
+    }
+
+    private String createFallbackProfile() {
+        String fallbackId = "prof_" + (System.currentTimeMillis() % 1000000L);
+        saveProfileRecord(fallbackId, "Temp_User", "");
+        setSetting("active_profile", fallbackId);
+        return fallbackId;
     }
 
     private static boolean envLoadedThisProcess = false;
@@ -180,23 +193,31 @@ public class AuraDb extends SQLiteOpenHelper {
         try (InputStream is = appCtx.getAssets().open("aura.env");
              BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = br.readLine()) != null) {
-                String t = line.trim();
-                if (t.isEmpty() || t.startsWith("#") || !t.contains("=")) continue;
-                int eq = t.indexOf('=');
-                String k = t.substring(0, eq).trim();
-                String v = t.substring(eq + 1).trim();
-                if (v.isEmpty()) continue;
-                if ("GEMINI_API_KEY".equals(k)) setSetting("gemini_api_key", v);
-                else if ("AURA_HOST_URL".equals(k)) setSetting("mac_host", v);
-                else if ("AURA_PHONE_URL".equals(k)) setSetting("phone_host", v);
-                else if ("AURA_MEMBER1_NAME".equals(k)) setSetting("profile_name_member1", v);
-                else if ("AURA_PARTNER_NAME".equals(k)) setSetting("profile_name_partner", v);
-                else if ("AURA_MEMBER3_NAME".equals(k)) setSetting("profile_name_member3", v);
-                else if ("AURA_KIDS_NAME".equals(k)) setSetting("profile_name_kids", v);
-                else if ("AURA_FAMILY_NAME".equals(k)) setSetting("profile_name_family", v);
-            }
+            while ((line = br.readLine()) != null) applySingleEnvLine(line.trim());
         } catch (Exception ignored) {}
+    }
+
+    private void applySingleEnvLine(String t) {
+        if (t.isEmpty() || t.startsWith("#") || !t.contains("=")) return;
+        int eq = t.indexOf('=');
+        String k = t.substring(0, eq).trim();
+        String v = t.substring(eq + 1).trim();
+        if (!v.isEmpty()) applyEnvKeyValue(k, v);
+    }
+
+    private void applyEnvKeyValue(String k, String v) {
+        if ("GEMINI_API_KEY".equals(k)) setSetting("gemini_api_key", v);
+        else if ("AURA_HOST_URL".equals(k)) setSetting("mac_host", v);
+        else if ("AURA_PHONE_URL".equals(k)) setSetting("phone_host", v);
+        else applyEnvProfileName(k, v);
+    }
+
+    private void applyEnvProfileName(String k, String v) {
+        if ("AURA_MEMBER1_NAME".equals(k)) setSetting("profile_name_member1", v);
+        else if ("AURA_PARTNER_NAME".equals(k)) setSetting("profile_name_partner", v);
+        else if ("AURA_MEMBER3_NAME".equals(k)) setSetting("profile_name_member3", v);
+        else if ("AURA_KIDS_NAME".equals(k)) setSetting("profile_name_kids", v);
+        else if ("AURA_FAMILY_NAME".equals(k)) setSetting("profile_name_family", v);
     }
 
     public String getProfileLabel(String profileId) {
@@ -279,16 +300,15 @@ public class AuraDb extends SQLiteOpenHelper {
         if (cur.contains(filterId)) {
             cur.remove(filterId);
         } else {
-            if ("movies".equals(filterId)) cur.remove("series");
-            if ("series".equals(filterId)) cur.remove("movies");
-            cur.add(filterId);
+            addMutuallyExclusiveFilter(cur, filterId);
         }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < cur.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append(cur.get(i));
-        }
-        setSetting("filters_" + profileId, sb.toString());
+        setSetting("filters_" + profileId, String.join(",", cur));
+    }
+
+    private void addMutuallyExclusiveFilter(List<String> cur, String filterId) {
+        if ("movies".equals(filterId)) cur.remove("series");
+        if ("series".equals(filterId)) cur.remove("movies");
+        cur.add(filterId);
     }
 
     public void clearFilters(String profileId) {
@@ -324,29 +344,32 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     public List<String> getTraversalChips(String profileId) {
-        List<String> out = new ArrayList<>();
-        String raw = getSetting("traversal_chips_" + profileId, "");
-        if (!raw.isEmpty()) {
-            try {
-                JSONArray arr = new JSONArray(raw);
-                for (int i = 0; i < arr.length() && out.size() < 4; i++) {
-                    String s = arr.optString(i).trim();
-                    if (!s.isEmpty()) out.add(s);
-                }
-            } catch (Exception ignored) {}
-        }
+        List<String> out = parseStoredTraversalChips(getSetting("traversal_chips_" + profileId, ""));
         if (out.isEmpty()) {
-            int curYear = JustWatchGraph.getCurrentYear();
-            List<String> anchors = getDynamicTasteAnchors(profileId);
-            if (!anchors.isEmpty()) {
-                out.add("Similar to " + anchors.get(0));
-            } else {
-                out.add((curYear - 2) + "–" + curYear + " Prestige Series");
-            }
-            out.add("Mind-Bending Sci-Fi");
-            out.add("Gripping Crime Thrillers");
+            populateDefaultTraversalChips(profileId, out);
         }
         return out;
+    }
+
+    private List<String> parseStoredTraversalChips(String raw) {
+        List<String> out = new ArrayList<>();
+        if (raw.isEmpty()) return out;
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length() && out.size() < 4; i++) {
+                String s = arr.optString(i).trim();
+                if (!s.isEmpty()) out.add(s);
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private void populateDefaultTraversalChips(String profileId, List<String> out) {
+        int curYear = JustWatchGraph.getCurrentYear();
+        List<String> anchors = getDynamicTasteAnchors(profileId);
+        out.add(!anchors.isEmpty() ? ("Similar to " + anchors.get(0)) : ((curYear - 2) + "–" + curYear + " Prestige Series"));
+        out.add("Mind-Bending Sci-Fi");
+        out.add("Gripping Crime Thrillers");
     }
 
     public void saveTraversalChips(String profileId, JSONArray chips) {
@@ -358,45 +381,52 @@ public class AuraDb extends SQLiteOpenHelper {
     public void purgeUnreleasedFromRecos() {
         try {
             SQLiteDatabase db = getWritableDatabase();
-            if (!"sota_v13".equals(getSetting("reco_engine_version", ""))) {
-                db.delete("profile_recos", null, null);
-                db.delete("gti_cache", "gti LIKE 'jw_imdb_%'", null);
-                setSetting("voice_session_default", "");
-                setSetting("reco_engine_version", "sota_v13");
-                return;
-            }
-            int maxYear = JustWatchGraph.getCurrentYear();
-            int minModernYear = JustWatchGraph.getDefaultMinModernYear();
-            Set<String> watchedKeys = getWatchedTitleKeys();
-            List<String> toDeleteProfiles = new ArrayList<>();
-            try (Cursor c = db.rawQuery("SELECT profile_id, payload_json FROM profile_recos", null)) {
-                while (c.moveToNext()) {
-                    String pid = c.getString(0);
-                    JSONArray arr = new JSONArray(c.getString(1));
-                    boolean hasStaleOrOld = false;
-                    for (int i = 0; i < arr.length(); i++) {
-                        JSONObject o = arr.optJSONObject(i);
-                        if (o == null) continue;
-                        int y = o.optInt("year", maxYear);
-                        String app = o.optString("app", "");
-                        int votes = o.optInt("imdb_votes", 0);
-                        String normKey = normalizeTitleKey(o.optString("title", ""));
-                        if (y > maxYear || y < minModernYear || app.contains("Store")
-                                || votes < 900 || watchedKeys.contains(normKey)
-                                || (i < 6 && o.optString("backdrop_url", "").isEmpty())) {
-                            hasStaleOrOld = true;
-                            break;
-                        }
-                    }
-                    if (hasStaleOrOld) {
-                        toDeleteProfiles.add(pid);
-                    }
-                }
-            }
-            for (String pid : toDeleteProfiles) {
+            if (resetRecosIfEngineUpgraded(db)) return;
+            List<String> toDelete = findProfilesWithStaleRecos(db);
+            for (String pid : toDelete) {
                 db.delete("profile_recos", "profile_id = ?", new String[]{pid});
             }
         } catch (Exception ignored) {}
+    }
+
+    private boolean resetRecosIfEngineUpgraded(SQLiteDatabase db) {
+        if ("sota_v13".equals(getSetting("reco_engine_version", ""))) return false;
+        db.delete("profile_recos", null, null);
+        db.delete("gti_cache", "gti LIKE 'jw_imdb_%'", null);
+        setSetting("voice_session_default", "");
+        setSetting("reco_engine_version", "sota_v13");
+        return true;
+    }
+
+    private List<String> findProfilesWithStaleRecos(SQLiteDatabase db) throws Exception {
+        List<String> toDelete = new ArrayList<>();
+        Set<String> watchedKeys = getWatchedTitleKeys();
+        try (Cursor c = db.rawQuery("SELECT profile_id, payload_json FROM profile_recos", null)) {
+            while (c.moveToNext()) {
+                if (hasStaleOrWatchedReco(new JSONArray(c.getString(1)), watchedKeys)) {
+                    toDelete.add(c.getString(0));
+                }
+            }
+        }
+        return toDelete;
+    }
+
+    private boolean hasStaleOrWatchedReco(JSONArray arr, Set<String> watchedKeys) {
+        int maxYear = JustWatchGraph.getCurrentYear();
+        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null && isSingleRecoStale(o, i, minModernYear, maxYear, watchedKeys)) return true;
+        }
+        return false;
+    }
+
+    private boolean isSingleRecoStale(JSONObject o, int idx, int minModernYear, int maxYear, Set<String> watchedKeys) {
+        int y = o.optInt("year", maxYear);
+        String normKey = normalizeTitleKey(o.optString("title", ""));
+        if (y > maxYear || y < minModernYear || o.optString("app", "").contains("Store")) return true;
+        if (o.optInt("imdb_votes", 0) < 900 || watchedKeys.contains(normKey)) return true;
+        return idx < 6 && o.optString("backdrop_url", "").isEmpty();
     }
 
     /**
@@ -431,26 +461,44 @@ public class AuraDb extends SQLiteOpenHelper {
         JSONArray hist = listHistory(profileId);
         long nowSec = System.currentTimeMillis() / 1000L;
         for (int i = 0; i < hist.length(); i++) {
-            JSONObject h = hist.optJSONObject(i);
-            if (h == null || isIgnoredHistoryApp(h)) continue;
-            int pos = h.optInt("position_sec", 0);
-            int dur = Math.max(1800, h.optInt("duration_sec", 2700));
-            if (pos < 240 || (pos == 1350 && dur == 3000) || ((double) pos / dur) < 0.25) continue;
-            long updatedSec = h.optLong("updated_at", nowSec);
-            if (updatedSec > 10_000_000_000L) updatedSec /= 1000L;
-            double hoursAgo = Math.max(0.0, (nowSec - updatedSec) / 3600.0);
-            if (hoursAgo > 72.0) continue; // 72-hour TTL for unprogressed watch_history anchors
-            String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
-            if (t.isEmpty() || t.equalsIgnoreCase("Netflix") || t.equalsIgnoreCase("Prime Video")) continue;
-            try {
-                JSONObject copy = new JSONObject(h.toString());
-                copy.put("clean_anchor_title", t);
-                copy.put("engagement_weight", ((double) pos / dur) * Math.exp(-0.693 * hoursAgo / 24.0));
-                validHistory.add(copy);
-            } catch (Exception ignored) {}
+            JSONObject candidate = tryBuildActiveHistoryAnchor(hist.optJSONObject(i), nowSec);
+            if (candidate != null) validHistory.add(candidate);
         }
         validHistory.sort((a, b) -> Double.compare(b.optDouble("engagement_weight", 0.0), a.optDouble("engagement_weight", 0.0)));
         return validHistory;
+    }
+
+    private JSONObject tryBuildActiveHistoryAnchor(JSONObject h, long nowSec) {
+        if (h == null || isIgnoredHistoryApp(h) || !hasEligibleAnchorProgress(h)) return null;
+        double hoursAgo = computeHistoryHoursAgo(h, nowSec);
+        if (hoursAgo > 72.0) return null; // 72-hour TTL for unprogressed watch_history anchors
+        String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
+        if (t.isEmpty() || t.equalsIgnoreCase("Netflix") || t.equalsIgnoreCase("Prime Video")) return null;
+        return cloneWithEngagementWeight(h, t, hoursAgo);
+    }
+
+    private boolean hasEligibleAnchorProgress(JSONObject h) {
+        int pos = h.optInt("position_sec", 0);
+        int dur = Math.max(1800, h.optInt("duration_sec", 2700));
+        return pos >= 240 && !(pos == 1350 && dur == 3000) && ((double) pos / dur) >= 0.25;
+    }
+
+    private double computeHistoryHoursAgo(JSONObject h, long nowSec) {
+        long updatedSec = h.optLong("updated_at", nowSec);
+        if (updatedSec > 10_000_000_000L) updatedSec /= 1000L;
+        return Math.max(0.0, (nowSec - updatedSec) / 3600.0);
+    }
+
+    private JSONObject cloneWithEngagementWeight(JSONObject h, String title, double hoursAgo) {
+        try {
+            int pos = h.optInt("position_sec", 0);
+            int dur = Math.max(1800, h.optInt("duration_sec", 2700));
+            JSONObject copy = new JSONObject(h.toString());
+            copy.put("clean_anchor_title", title);
+            return copy.put("engagement_weight", ((double) pos / dur) * Math.exp(-0.693 * hoursAgo / 24.0));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private boolean isIgnoredHistoryApp(JSONObject h) {
@@ -461,23 +509,24 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private void appendRotatingLibrarySeeds(List<String> anchors, int epoch, int targetTotal) {
-        JSONArray watched = listManuallyWatched();
-        if (watched.length() == 0) return;
-        List<String> pool = new ArrayList<>();
-        for (int i = 0; i < watched.length(); i++) {
-            JSONObject w = watched.optJSONObject(i);
-            if (w == null || w.optInt("user_rating", 8) < 6) continue;
-            String t = w.optString("series_title").isEmpty() ? w.optString("title") : w.optString("series_title");
-            if (t != null && t.trim().length() >= 2 && !pool.contains(t.trim())) {
-                pool.add(t.trim());
-            }
-        }
+        List<String> pool = collectHighRatedLibrarySeeds(listManuallyWatched());
         if (pool.isEmpty()) return;
         int startIdx = (Math.max(0, epoch) * 3) % pool.size();
         for (int k = 0; k < pool.size() && anchors.size() < targetTotal; k++) {
             String candidate = pool.get((startIdx + k) % pool.size());
             if (!anchors.contains(candidate)) anchors.add(candidate);
         }
+    }
+
+    private List<String> collectHighRatedLibrarySeeds(JSONArray watched) {
+        List<String> pool = new ArrayList<>();
+        for (int i = 0; i < watched.length(); i++) {
+            JSONObject w = watched.optJSONObject(i);
+            if (w == null || w.optInt("user_rating", 8) < 6) continue;
+            String t = w.optString("series_title").isEmpty() ? w.optString("title") : w.optString("series_title");
+            if (t != null && t.trim().length() >= 2 && !pool.contains(t.trim())) pool.add(t.trim());
+        }
+        return pool;
     }
 
     public void rateTitle(JSONObject item, int ratingOutOf10) {
@@ -490,52 +539,53 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public java.util.Map<String, Integer> getUserRatingsMap() {
         java.util.Map<String, Integer> map = new java.util.HashMap<>();
-        SQLiteDatabase db = getReadableDatabase();
-        try (Cursor c = db.rawQuery("SELECT title_key, payload_json FROM watched_items", null)) {
-            while (c.moveToNext()) {
-                String k = c.getString(0);
-                JSONObject o = new JSONObject(c.getString(1));
-                int r = o.optInt("user_rating", 0);
-                if (r > 0) map.put(k, r);
-            }
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT title_key, payload_json FROM watched_items", null)) {
+            while (c.moveToNext()) putRatingIfPresent(c, map);
         } catch (Exception ignored) {}
         return map;
+    }
+
+    private void putRatingIfPresent(Cursor c, java.util.Map<String, Integer> map) throws Exception {
+        int r = new JSONObject(c.getString(1)).optInt("user_rating", 0);
+        if (r > 0) map.put(c.getString(0), r);
     }
 
     public String getRatingFeedbackSummary() {
         List<String> loved = new ArrayList<>();
         List<String> disliked = new ArrayList<>();
-        JSONArray watched = listManuallyWatched();
-        for (int i = 0; i < watched.length(); i++) {
-            JSONObject o = watched.optJSONObject(i);
-            if (o == null) continue;
-            int r = o.optInt("user_rating", 0);
-            if (r <= 0) continue;
-            String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
-            if (r >= 7) loved.add(t + " (" + r + "/10)");
-            else if (r <= 5) disliked.add(t + " (" + r + "/10)");
-        }
+        partitionRatedLibrary(listManuallyWatched(), loved, disliked);
         StringBuilder sb = new StringBuilder();
         if (!loved.isEmpty()) sb.append("Highly Rated by User (recommend more like these): ").append(loved.toString()).append(". ");
         if (!disliked.isEmpty()) sb.append("Low Rated by User (avoid similar tone/style): ").append(disliked.toString()).append(".");
         return sb.toString();
     }
 
+    private void partitionRatedLibrary(JSONArray watched, List<String> loved, List<String> disliked) {
+        for (int i = 0; i < watched.length(); i++) {
+            JSONObject o = watched.optJSONObject(i);
+            int r = o != null ? o.optInt("user_rating", 0) : 0;
+            if (r <= 0) continue;
+            String t = o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title");
+            if (r >= 7) loved.add(t + " (" + r + "/10)");
+            else if (r <= 5) disliked.add(t + " (" + r + "/10)");
+        }
+    }
+
     public void markTitleWatched(JSONObject item, boolean watched) {
-        String rawTitle = item.optString("series_title").isEmpty()
-            ? item.optString("title")
-            : item.optString("series_title");
+        String rawTitle = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
         String key = normalizeTitleKey(rawTitle);
         if (key.isEmpty()) return;
         SQLiteDatabase db = getWritableDatabase();
         if (!watched) {
             db.delete("watched_items", "title_key = ?", new String[]{key});
-            return;
+        } else {
+            insertWatchedItemRecord(db, key, item);
         }
+    }
+
+    private void insertWatchedItemRecord(SQLiteDatabase db, String key, JSONObject item) {
         try {
-            JSONObject copy = new JSONObject(item.toString());
-            copy.put("watched", true);
-            copy.put("state", "WATCHED ✓");
+            JSONObject copy = new JSONObject(item.toString()).put("watched", true).put("state", "WATCHED ✓");
             ContentValues cv = new ContentValues();
             cv.put("title_key", key);
             cv.put("payload_json", copy.toString());
@@ -551,17 +601,17 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public Set<String> getWatchedTitleKeys() {
         Set<String> keys = new HashSet<>();
-        SQLiteDatabase db = getReadableDatabase();
-        try (Cursor c = db.rawQuery("SELECT title_key FROM watched_items", null)) {
-            while (c.moveToNext()) {
-                String k = c.getString(0);
-                keys.add(k);
-                if (k.matches(".*(chapter|part|vol)\\d+$")) {
-                    keys.add(k.replaceAll("\\d+$", ""));
-                }
-            }
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT title_key FROM watched_items", null)) {
+            while (c.moveToNext()) addWatchedKeyWithBaseVariant(c.getString(0), keys);
         } catch (Exception ignored) {}
         return keys;
+    }
+
+    private void addWatchedKeyWithBaseVariant(String k, Set<String> keys) {
+        keys.add(k);
+        if (k.matches(".*(chapter|part|vol)\\d+$")) {
+            keys.add(k.replaceAll("\\d+$", ""));
+        }
     }
 
     public Set<String> getHistoryTitleKeys(String profileId) {
@@ -579,17 +629,17 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public JSONArray listManuallyWatched() {
         JSONArray arr = new JSONArray();
-        SQLiteDatabase db = getReadableDatabase();
-        try (Cursor c = db.rawQuery("SELECT payload_json, updated_at FROM watched_items ORDER BY updated_at DESC", null)) {
-            while (c.moveToNext()) {
-                JSONObject obj = new JSONObject(c.getString(0));
-                if (!c.isNull(1) && c.getLong(1) > 0) {
-                    obj.put("updated_at", c.getLong(1));
-                }
-                arr.put(obj);
-            }
+        String sql = "SELECT payload_json, updated_at FROM watched_items ORDER BY updated_at DESC";
+        try (Cursor c = getReadableDatabase().rawQuery(sql, null)) {
+            while (c.moveToNext()) arr.put(parseWatchedCursorRow(c));
         } catch (Exception ignored) {}
         return arr;
+    }
+
+    private JSONObject parseWatchedCursorRow(Cursor c) throws Exception {
+        JSONObject obj = new JSONObject(c.getString(0));
+        if (!c.isNull(1) && c.getLong(1) > 0) obj.put("updated_at", c.getLong(1));
+        return obj;
     }
 
     public JSONArray filterOutWatched(JSONArray raw) {
@@ -598,14 +648,14 @@ public class AuraDb extends SQLiteOpenHelper {
         Set<String> watchedKeys = getWatchedTitleKeys();
         for (int i = 0; i < raw.length(); i++) {
             JSONObject item = raw.optJSONObject(i);
-            if (item == null) continue;
-            String rawTitle = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
-            String key = normalizeTitleKey(rawTitle);
-            if (!watchedKeys.contains(key) && !item.optBoolean("watched", false)) {
-                filtered.put(item);
-            }
+            if (item != null && isUnwatchedItem(item, watchedKeys)) filtered.put(item);
         }
         return filtered;
+    }
+
+    private boolean isUnwatchedItem(JSONObject item, Set<String> watchedKeys) {
+        String rawTitle = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
+        return !watchedKeys.contains(normalizeTitleKey(rawTitle)) && !item.optBoolean("watched", false);
     }
 
     private void setKvInternal(SQLiteDatabase db, String k, String v) {
@@ -633,12 +683,16 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public void upsertWatchItem(JSONObject item) {
         String rawKey = item.optString("media_key").trim().toLowerCase();
-        if (rawKey.isEmpty()) return;
         int newPos = item.optInt("position_sec", 0);
         int newDur = item.optInt("duration_sec", 0);
-        if (newPos == 1350 && newDur == 3000) return;
+        if (rawKey.isEmpty() || (newPos == 1350 && newDur == 3000)) return;
         SQLiteDatabase db = getWritableDatabase();
         long updatedAt = resolveWatchItemTimestamp(db, rawKey, newPos, item.optLong("updated_at", System.currentTimeMillis() / 1000L));
+        ContentValues cv = buildWatchItemValues(item, rawKey, newPos, newDur, updatedAt);
+        db.insertWithOnConflict("watch_history", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    private ContentValues buildWatchItemValues(JSONObject item, String rawKey, int newPos, int newDur, long updatedAt) {
         ContentValues cv = new ContentValues();
         cv.put("media_key", rawKey);
         cv.put("profile_id", item.optString("profile_id", getSetting("active_profile", DEFAULT_PROFILE)));
@@ -646,6 +700,11 @@ public class AuraDb extends SQLiteOpenHelper {
         cv.put("app_name", item.optString("app_name"));
         cv.put("title", item.optString("title"));
         cv.put("series_title", item.optString("series_title"));
+        populateWatchItemDetailValues(cv, item, newPos, newDur, updatedAt);
+        return cv;
+    }
+
+    private void populateWatchItemDetailValues(ContentValues cv, JSONObject item, int newPos, int newDur, long updatedAt) {
         cv.put("season", item.optInt("season", 0));
         cv.put("episode", item.optInt("episode", 0));
         cv.put("synopsis", item.optString("synopsis"));
@@ -656,7 +715,6 @@ public class AuraDb extends SQLiteOpenHelper {
         cv.put("position_sec", newPos);
         cv.put("duration_sec", newDur);
         cv.put("updated_at", updatedAt);
-        db.insertWithOnConflict("watch_history", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     private long resolveWatchItemTimestamp(SQLiteDatabase db, String mediaKey, int newPos, long fallbackTs) {
@@ -686,42 +744,32 @@ public class AuraDb extends SQLiteOpenHelper {
     public JSONArray listHistory(String profileId) {
         JSONArray arr = new JSONArray();
         Set<String> watchedKeys = getWatchedTitleKeys();
-        SQLiteDatabase db = getReadableDatabase();
         boolean hasProf = profileId != null && !profileId.isEmpty();
-        String sql = hasProf
-            ? "SELECT * FROM watch_history WHERE profile_id = ? ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY
-            : "SELECT * FROM watch_history ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY;
-        String[] args = hasProf ? new String[]{profileId} : null;
-        try (Cursor c = db.rawQuery(sql, args)) {
-            while (c.moveToNext()) {
-                JSONObject o = cursorToWatchJson(c);
-                String tKey = normalizeTitleKey(o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title"));
-                if (watchedKeys.contains(tKey)) o.put("watched", true);
-                arr.put(o);
-            }
+        String sql = "SELECT * FROM watch_history " + (hasProf ? "WHERE profile_id = ? " : "")
+            + "ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY;
+        try (Cursor c = getReadableDatabase().rawQuery(sql, hasProf ? new String[]{profileId} : null)) {
+            while (c.moveToNext()) arr.put(parseHistoryRowWithWatchedFlag(c, watchedKeys));
         } catch (Exception ignored) {}
         return arr;
     }
 
+    private JSONObject parseHistoryRowWithWatchedFlag(Cursor c, Set<String> watchedKeys) throws Exception {
+        JSONObject o = cursorToWatchJson(c);
+        String tKey = normalizeTitleKey(o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title"));
+        if (watchedKeys.contains(tKey)) o.put("watched", true);
+        return o;
+    }
+
     private JSONObject cursorToWatchJson(Cursor c) throws Exception {
         JSONObject o = new JSONObject();
-        o.put("media_key", getStr(c, "media_key"));
-        o.put("profile_id", getStr(c, "profile_id"));
-        o.put("app_pkg", getStr(c, "app_pkg"));
-        o.put("app_name", getStr(c, "app_name"));
-        o.put("title", getStr(c, "title"));
-        o.put("series_title", getStr(c, "series_title"));
-        o.put("season", getInt(c, "season"));
-        o.put("episode", getInt(c, "episode"));
-        o.put("synopsis", getStr(c, "synopsis"));
-        o.put("poster_url", getStr(c, "poster_url"));
-        o.put("genres", getStr(c, "genres"));
-        o.put("runtime_min", getInt(c, "runtime_min"));
-        o.put("launch_uri", getStr(c, "launch_uri"));
-        o.put("position_sec", getInt(c, "position_sec"));
-        o.put("duration_sec", getInt(c, "duration_sec"));
-        o.put("updated_at", getLong(c, "updated_at"));
-        return o;
+        o.put("media_key", getStr(c, "media_key")).put("profile_id", getStr(c, "profile_id"));
+        o.put("app_pkg", getStr(c, "app_pkg")).put("app_name", getStr(c, "app_name"));
+        o.put("title", getStr(c, "title")).put("series_title", getStr(c, "series_title"));
+        o.put("season", getInt(c, "season")).put("episode", getInt(c, "episode"));
+        o.put("synopsis", getStr(c, "synopsis")).put("poster_url", getStr(c, "poster_url"));
+        o.put("genres", getStr(c, "genres")).put("runtime_min", getInt(c, "runtime_min"));
+        o.put("launch_uri", getStr(c, "launch_uri")).put("position_sec", getInt(c, "position_sec"));
+        return o.put("duration_sec", getInt(c, "duration_sec")).put("updated_at", getLong(c, "updated_at"));
     }
 
     private String getStr(Cursor c, String col) {
@@ -803,30 +851,37 @@ public class AuraDb extends SQLiteOpenHelper {
     public JSONObject getVoiceSession(String profileId) {
         String s = getSetting("voice_session_" + profileId, "");
         if (!s.isEmpty()) {
-            try {
-                JSONObject o = new JSONObject(s);
-                if (o.has("results")) {
-                    o.put("results", filterOutWatched(o.optJSONArray("results")));
-                }
-                return o;
-            } catch (Exception ignored) {}
+            JSONObject parsed = tryParseVoiceSession(s);
+            if (parsed != null) return parsed;
         }
         return defaultVoiceSession();
+    }
+
+    private JSONObject tryParseVoiceSession(String raw) {
+        try {
+            JSONObject o = new JSONObject(raw);
+            if (o.has("results")) o.put("results", filterOutWatched(o.optJSONArray("results")));
+            return o;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private JSONObject defaultVoiceSession() {
         JSONObject o = new JSONObject();
         try {
             o.put("reply", "Ready. Type or speak a request, or toggle persistent filters below.");
-            o.put("turns", new JSONArray());
-            o.put("results", new JSONArray());
-            JSONArray chips = new JSONArray();
-            chips.put("Sci-Fi movie (no Marvel/DC)");
-            chips.put("Terrifying horror under 2h");
-            chips.put("Mind-bending thriller");
-            chips.put("Feel-good comedy");
-            o.put("follow_ups", chips);
+            o.put("turns", new JSONArray()).put("results", new JSONArray());
+            o.put("follow_ups", defaultVoiceChips());
         } catch (Exception ignored) {}
         return o;
+    }
+
+    private JSONArray defaultVoiceChips() {
+        return new JSONArray()
+            .put("Sci-Fi movie (no Marvel/DC)")
+            .put("Terrifying horror under 2h")
+            .put("Mind-bending thriller")
+            .put("Feel-good comedy");
     }
 }

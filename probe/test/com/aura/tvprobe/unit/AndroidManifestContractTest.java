@@ -41,6 +41,16 @@ public class AndroidManifestContractTest {
             script.contains("cmd package set-home-activity com.aura.tvprobe/.AuraActivity"));
     }
 
+    @Test
+    public void testSearchOverlayKeyedViewTagHasValidAppResourcePrefix() throws Exception {
+        File searchFile = resolveFile(
+            "probe/src/com/aura/tvprobe/ui/SearchOverlay.java",
+            "src/com/aura/tvprobe/ui/SearchOverlay.java");
+        String src = new String(Files.readAllBytes(searchFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue("TAG_HINT_IDX must use 0x7F prefix for 2-arg View.setTag(int, Object)",
+            src.contains("TAG_HINT_IDX  = 0x7F0B_000B"));
+    }
+
     private static File resolveFile(String rootRelative, String probeRelative) {
         File f1 = new File(rootRelative);
         return f1.exists() ? f1 : new File(probeRelative);

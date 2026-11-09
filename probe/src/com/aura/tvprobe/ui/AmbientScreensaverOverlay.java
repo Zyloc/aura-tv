@@ -242,14 +242,16 @@ public final class AmbientScreensaverOverlay {
     private static void applyBackdropCrossfadeAndZoom(ImageView incoming, ImageView outgoing, boolean crossfade) {
         incoming.setScaleX(1.0f);
         incoming.setScaleY(1.0f);
-        if (!crossfade) {
-            incoming.setAlpha(1f);
-            outgoing.setAlpha(0f);
-        } else {
-            incoming.setAlpha(0f);
+        updateBackdropAlphas(incoming, outgoing, crossfade);
+        incoming.animate().scaleX(1.075f).scaleY(1.075f).setDuration(SLIDE_INTERVAL_MS + 800L).start();
+    }
+
+    private static void updateBackdropAlphas(ImageView incoming, ImageView outgoing, boolean crossfade) {
+        incoming.setAlpha(crossfade ? 0f : 1f);
+        if (!crossfade) outgoing.setAlpha(0f);
+        else {
             incoming.animate().alpha(1f).setDuration(1100).start();
             outgoing.animate().alpha(0f).setDuration(1100).start();
         }
-        incoming.animate().scaleX(1.075f).scaleY(1.075f).setDuration(SLIDE_INTERVAL_MS + 800L).start();
     }
 }

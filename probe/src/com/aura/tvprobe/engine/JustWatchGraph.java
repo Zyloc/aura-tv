@@ -669,9 +669,7 @@ public class JustWatchGraph {
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
-        }
+        try (OutputStream os = conn.getOutputStream()) { os.write(payload.toString().getBytes(StandardCharsets.UTF_8)); }
         return conn;
     }
 }

@@ -29,6 +29,13 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe GET_USAGE_STATS allow || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe SYSTEM_ALERT_WINDOW allow || true
 "$ADB" -s "$TV_IP:5555" shell settings put global wifi_score_params "rssi2=-95:-92:-85:-70,rssi5=-95:-92:-88:-78,pps=0:1:100,horizon=15,nud=8,expid=0" || true
+"$ADB" -s "$TV_IP:5555" shell settings put global wifi_scan_always_enabled 0 || true
+"$ADB" -s "$TV_IP:5555" shell settings put global ble_scan_always_enabled 0 || true
+"$ADB" -s "$TV_IP:5555" shell settings put global wifi_wakeup_enabled 0 || true
+"$ADB" -s "$TV_IP:5555" shell settings put global wifi_suspend_optimizations_enabled 0 || true
+"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.gms WIFI_SCAN ignore || true
+"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.katniss WIFI_SCAN ignore || true
+"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.apps.nbu.smartconnect.tv WIFI_SCAN ignore || true
 "$ADB" -s "$TV_IP:5555" shell cmd package set-home-activity com.aura.tvprobe/.AuraActivity || true
 
 "$ADB" -s "$TV_IP:5555" shell am start -n com.aura.tvprobe/.AuraActivity

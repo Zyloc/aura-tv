@@ -286,16 +286,19 @@ public class AiRecommender {
     public JSONObject buildFastSeedPlan(String profileId, String userQuery) {
         JSONObject plan = new JSONObject();
         try {
-            JSONArray pq = new JSONArray();
-            JSONArray seeds = new JSONArray();
+            JSONArray pq = new JSONArray(), seeds = new JSONArray();
             addQueryToSeedPlan(userQuery, pq, seeds);
-            for (String a : db.getDynamicTasteAnchors(profileId)) {
-                if (seeds.length() < 5) seeds.put(a);
-                if (pq.length() < 5) pq.put(a);
-            }
+            appendProfileAnchorsToSeedPlan(profileId, pq, seeds);
             plan.put("primary_queries", pq).put("watched_traversal_seeds", seeds);
         } catch (Exception ignored) {}
         return plan;
+    }
+
+    private void appendProfileAnchorsToSeedPlan(String profileId, JSONArray pq, JSONArray seeds) {
+        for (String a : db.getDynamicTasteAnchors(profileId)) {
+            if (seeds.length() < 5) seeds.put(a);
+            if (pq.length() < 5) pq.put(a);
+        }
     }
 
     private void addQueryToSeedPlan(String userQuery, JSONArray pq, JSONArray seeds) {
@@ -464,13 +467,10 @@ public class AiRecommender {
         List<String> activeFilters = db.getActiveFilters(profileId);
         String cur = np != null ? (np.optString("series_title").isEmpty() ? np.optString("title") : np.optString("series_title")) : "";
         return "You are Aura's SOTA Ranking & Reasoning Agent for Android TV in India.\n" +
-            "Current TV System Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
-            "Active Profile: '" + profileName + "'.\n" +
+            "Current TV System Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'.\n" +
             "1. PERSONAL GUIDE AI: " + (personalGuide.isEmpty() ? "(Use Default Guide AI and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
-            "2. DEFAULT GUIDE AI: \"" + db.getDefaultTasteGuide() + "\"\n" +
-            "3. USER RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
-            "4. ACTIVE FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
-            "5. RECENTLY WATCHED ANCHORS: " + tasteAnchors.toString() + " (Latest: '" + cur + "').\n";
+            "2. DEFAULT GUIDE AI: \"" + db.getDefaultTasteGuide() + "\"\n3. USER RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
+            "4. ACTIVE FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n5. RECENTLY WATCHED ANCHORS: " + tasteAnchors.toString() + " (Latest: '" + cur + "').\n";
     }
 
     private String buildRankingPromptBody(
