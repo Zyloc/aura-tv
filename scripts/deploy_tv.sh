@@ -3,10 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [[ -f "$ROOT_DIR/.env" ]]; then
-  set -a
-  source "$ROOT_DIR/.env"
-  set +a
+if [[ -z "${AURA_TV_IP:-}" && -f "$ROOT_DIR/.env" ]]; then
+  AURA_TV_IP="$(grep -E '^AURA_TV_IP=' "$ROOT_DIR/.env" | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs || true)"
 fi
 
 TV_IP="${AURA_TV_IP:-}"
@@ -30,6 +28,7 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" -s "$TV_IP:5555" shell cmd notification allow_listener com.aura.tvprobe/com.aura.tvprobe.MediaProbeService || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe GET_USAGE_STATS allow || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe SYSTEM_ALERT_WINDOW allow || true
+"$ADB" -s "$TV_IP:5555" shell settings put global wifi_score_params "rssi2=-90:-88:-75:-60,rssi5=-90:-88:-84:-72,pps=0:1:100,horizon=15,nud=8,expid=0" || true
 
 "$ADB" -s "$TV_IP:5555" shell am start -n com.aura.tvprobe/.AuraActivity
 echo "Deployed and launched Aura TV on $TV_IP"

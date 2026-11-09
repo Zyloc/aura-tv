@@ -1,0 +1,1035 @@
+package com.aura.tvprobe;
+
+import android.animation.ObjectAnimator;
+import android.app.Activity;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.graphics.Color;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
+import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * Main Launcher Activity for Aura TV.
+ * Smoked Obsidian & Slate Glass theme, 3-dash (☰) animated navigation drawer,
+ * focus-locked Agentic Search overlay, and 90-day recency-verified Continue Watching.
+ */
+public class AuraActivity extends Activity implements
+        NavPanelBuilder.NavCallback,
+        HeroSliderBuilder.HeroCallback,
+        RailBuilder.RailCallback,
+        SearchOverlay.SearchCallback,
+        DetailOverlay.DetailCallback,
+        ModalOverlayBuilder.ModalActions {
+
+    private static final int REMOTE_PORT = 8765;
+    private static final long SCREENSAVER_IDLE_MS = 120_000L; // 2 minutes idle -> Ambient Screensaver
+    private static final int TAG_GLOBAL_LOADER_TEXT = 0xAA_0101;
+    private static final int TAG_GLOBAL_LOADER_SUB  = 0xAA_0102;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final ExecutorService bgPool = Executors.newFixedThreadPool(3);
+    private final Runnable idleScreensaverTask = this::activateScreensaver;
+
+    private AuraDb db;
+    private AiRecommender ai;
+    private SyncManager sync;
+    private VoiceConcierge voice;
+    private SessionInspector inspector;
+    private String activeProfile = AuraDb.DEFAULT_PROFILE;
+    private boolean initialFocusSet = false;
+    private String lastSearchQuery = "";
+    private int homeHintIndex = 0;
+
+    private FrameLayout rootLayout;
+    private ScrollView mainScroll;
+    private FrameLayout navPanel;
+    private FrameLayout heroSlider;
+    private LinearLayout railsContainer;
+    private LinearLayout chipsRow;
+    private LinearLayout searchBox;
+    private TextView searchLabel;
+    private TextView statusBanner;
+    private TextView profileClockLabel;
+    private FrameLayout searchOverlay;
+    private FrameLayout detailOverlay;
+    private FrameLayout modalContainer;
+    private FrameLayout loadingOverlay;
+    private FrameLayout screensaverOverlay;
+    private TextView globalLoaderText;
+    private View lastFocusedView;
+    private int[] lastRailFocus;
+    private int lastScrollY;
+    private boolean watchedChangedWhileInDetail = false;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        initServices();
+        buildUi();
+        setupGlobalFocusRouting();
+        startHomeSearchHintAnimation();
+        resetIdleTimer();
+        refreshAllData(false);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        HeroSliderBuilder.startAutoRotate(heroSlider, ui);
+        updateNavMetadata();
+        resetIdleTimer();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        ui.removeCallbacks(idleScreensaverTask);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        ImageLoader.trimMemory();
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        ImageLoader.trimMemory();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        resetIdleTimer();
+        if (AmbientScreensaverOverlay.isVisible(screensaverOverlay)) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                AmbientScreensaverOverlay.dismiss(screensaverOverlay);
+                HeroSliderBuilder.startAutoRotate(heroSlider, ui);
+                HeroSliderBuilder.requestInitialFocus(heroSlider);
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    private void resetIdleTimer() {
+        ui.removeCallbacks(idleScreensaverTask);
+        ui.postDelayed(idleScreensaverTask, SCREENSAVER_IDLE_MS);
+    }
+
+    private void activateScreensaver() {
+        if (screensaverOverlay == null || AmbientScreensaverOverlay.isVisible(screensaverOverlay)) return;
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        AmbientScreensaverOverlay.show(screensaverOverlay, this);
+    }
+
+    private void initServices() {
+        db = AuraDb.getInstance(this);
+        db.purgePromotionalNoiseFromHistory();
+        ImageLoader.setQualityMode(db.getSetting("image_quality", "ultra"));
+        ai = new AiRecommender(db);
+        sync = new SyncManager(db);
+        voice = new VoiceConcierge(db, ai, sync);
+        inspector = new SessionInspector(this, new ComponentName(this, MediaProbeService.class), db, ai);
+        activeProfile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        try {
+            startService(new Intent(this, MediaProbeService.class));
+        } catch (Throwable ignored) {}
+    }
+
+    private void buildUi() {
+        rootLayout = new FrameLayout(this);
+        rootLayout.setBackgroundColor(GlassTheme.BG_AMBIENT);
+        rootLayout.setKeepScreenOn(true);
+        navPanel = NavPanelBuilder.build(this, this);
+        rootLayout.addView(buildMainScrollArea());
+        NavPanelBuilder.bindMainContentForAnimation(navPanel, mainScroll);
+        rootLayout.addView(navPanel);
+        addOverlays();
+        setContentView(rootLayout);
+    }
+
+    private ScrollView buildMainScrollArea() {
+        mainScroll = new RailBuilder.SmoothVerticalScrollView(this);
+        mainScroll.setVerticalScrollBarEnabled(false);
+        mainScroll.setFillViewport(true);
+        mainScroll.setFocusable(false);
+        mainScroll.setClipChildren(false);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        mainScroll.setLayoutParams(lp);
+        mainScroll.addView(buildMainColumn());
+        return mainScroll;
+    }
+
+    private LinearLayout buildMainColumn() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setClipChildren(false);
+        col.setClipToPadding(false);
+        heroSlider = HeroSliderBuilder.build(this, this);
+        chipsRow = new LinearLayout(this);
+        TopBarBuilder.TopBarViews topBar = TopBarBuilder.build(
+            this, navPanel, heroSlider,
+            SearchOverlay.getHintsForProfile(db, activeProfile),
+            this::openAgenticSearchStudio);
+        searchBox = topBar.searchBox;
+        searchLabel = topBar.searchLabel;
+        profileClockLabel = topBar.clockLabel;
+        col.addView(topBar.bar);
+        col.addView(heroSlider);
+        col.addView(buildStatusBannerView());
+        col.addView(buildRailsContainerView(), GlassTheme.matchWrapParams());
+        return col;
+    }
+
+    private TextView buildStatusBannerView() {
+        statusBanner = GlassTheme.makeText(this, "", 11f, GlassTheme.GOLD_ACCENT, GlassTheme.FONT_BOLD, 1);
+        statusBanner.setPadding(dp(20), dp(2), dp(20), dp(2));
+        statusBanner.setVisibility(View.GONE);
+        return statusBanner;
+    }
+
+    private LinearLayout buildRailsContainerView() {
+        railsContainer = new LinearLayout(this);
+        railsContainer.setOrientation(LinearLayout.VERTICAL);
+        railsContainer.setClipChildren(false);
+        railsContainer.setClipToPadding(false);
+        railsContainer.setPadding(dp(20), 0, dp(20), dp(28));
+        return railsContainer;
+    }
+
+    private void startHomeSearchHintAnimation() {
+        ui.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (searchLabel != null && lastSearchQuery.isEmpty() && !SearchOverlay.isVisible(searchOverlay)) {
+                    List<String> hints = SearchOverlay.getHintsForProfile(db, activeProfile);
+                    homeHintIndex = (homeHintIndex + 1) % hints.size();
+                    final String nextHint = hints.get(homeHintIndex);
+                    searchLabel.animate().alpha(0.15f).translationY(-dp(3)).setDuration(220).withEndAction(() -> {
+                        searchLabel.setText(nextHint);
+                        searchLabel.setTranslationY(dp(3));
+                        searchLabel.animate().alpha(1f).translationY(0f).setDuration(260).start();
+                    }).start();
+                }
+                ui.postDelayed(this, 3800);
+            }
+        }, 3800);
+    }
+
+    private void openAgenticSearchStudio() {
+        saveFocusBeforeOverlay();
+        hideKeyboard(rootLayout);
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        JSONObject session = db.getVoiceSession(activeProfile);
+        JSONArray turns = session != null ? session.optJSONArray("turns") : null;
+        JSONArray results = session != null ? session.optJSONArray("results") : null;
+        if (results == null || results.length() == 0) {
+            results = db.getProfileRecommendations(activeProfile);
+        }
+        SearchOverlay.setConversationTurns(searchOverlay, turns, this);
+        String reply = session != null ? session.optString("reply", "") : "";
+        if (!reply.isEmpty()) {
+            SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
+        } else {
+            SearchOverlay.addMessage(searchOverlay, "assistant",
+                "Ask any question or click a follow-up chip below to refine your recommendations across your streaming apps.", this);
+        }
+        SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
+        SearchOverlay.setResults(searchOverlay, results, this, this);
+        SearchOverlay.show(searchOverlay, this, true);
+    }
+
+    private void hideKeyboard(View v) {
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null && v != null) {
+                imm.hideSoftInputFromWindow(v.getWindowToken(), 0);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private HorizontalScrollView buildChipsScroll() {
+        HorizontalScrollView hsv = new HorizontalScrollView(this);
+        hsv.setHorizontalScrollBarEnabled(false);
+        hsv.setFocusable(false);
+        hsv.setClipChildren(true);
+        hsv.setClipToPadding(true);
+        hsv.setPadding(dp(4), dp(2), dp(4), dp(2));
+        chipsRow = new LinearLayout(this);
+        chipsRow.setOrientation(LinearLayout.HORIZONTAL);
+        chipsRow.setGravity(Gravity.CENTER_VERTICAL);
+        chipsRow.setClipChildren(false);
+        hsv.addView(chipsRow);
+        return hsv;
+    }
+
+    private void addOverlays() {
+        searchOverlay = SearchOverlay.build(this, this);
+        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        searchOverlay.setLayoutParams(slp);
+        rootLayout.addView(searchOverlay);
+        detailOverlay = DetailOverlay.build(this, this);
+        rootLayout.addView(detailOverlay, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        modalContainer = new FrameLayout(this);
+        modalContainer.setVisibility(View.GONE);
+        rootLayout.addView(modalContainer, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        loadingOverlay = buildGlobalLoadingOverlay();
+        rootLayout.addView(loadingOverlay, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        screensaverOverlay = AmbientScreensaverOverlay.build(this, () -> {
+            HeroSliderBuilder.startAutoRotate(heroSlider, ui);
+            HeroSliderBuilder.requestInitialFocus(heroSlider);
+            resetIdleTimer();
+        });
+        rootLayout.addView(screensaverOverlay, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private FrameLayout buildGlobalLoadingOverlay() {
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setVisibility(View.GONE);
+        wrap.setAlpha(0f);
+        wrap.setBackgroundColor(Color.argb(246, 8, 11, 18));
+        wrap.setClickable(true);
+        wrap.setFocusable(false);
+
+        LinearLayout col = AgenticOrbView.buildFloatingLoaderColumn(
+            this, TAG_GLOBAL_LOADER_TEXT, TAG_GLOBAL_LOADER_SUB);
+        globalLoaderText = col.findViewWithTag(TAG_GLOBAL_LOADER_TEXT);
+        wrap.addView(col);
+        return wrap;
+    }
+
+    private void setBackgroundFocusBlocked(boolean blocked) {
+        int mode = blocked
+            ? ViewGroup.FOCUS_BLOCK_DESCENDANTS
+            : ViewGroup.FOCUS_AFTER_DESCENDANTS;
+        if (mainScroll != null) mainScroll.setDescendantFocusability(mode);
+        if (navPanel != null) navPanel.setDescendantFocusability(mode);
+    }
+
+    private void setupGlobalFocusRouting() {
+        rootLayout.getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
+            if (newF == null) return;
+            boolean inNav = isDescendantOf(newF, navPanel);
+            if (!inNav && NavPanelBuilder.isExpanded(navPanel)) {
+                NavPanelBuilder.setExpanded(navPanel, false, this);
+            }
+        });
+    }
+
+    private boolean isDescendantOf(View view, ViewGroup container) {
+        View cur = view;
+        while (cur != null) {
+            if (cur == container) return true;
+            cur = cur.getParent() instanceof View ? (View) cur.getParent() : null;
+        }
+        return false;
+    }
+
+    // ── Data Loading & Rendering ─────────────────────────────────────────
+
+    private void refreshAllData(boolean forceRefresh) {
+        db.purgePromotionalNoiseFromHistory();
+        db.purgeUnreleasedFromRecos();
+        updateNavMetadata();
+        populateTraversalChips();
+        JSONArray cached = db.getProfileRecommendations(activeProfile);
+        boolean hadUsable = cached.length() >= 8;
+        boolean hadFresh = cached.length() >= 12 && db.isRecoCacheFresh(activeProfile);
+        renderHomeContent(cached.length() > 0 ? cached : ai.getBuiltInSotaSeedCatalog(activeProfile));
+        submitBackgroundRefresh(forceRefresh, hadUsable, hadFresh);
+    }
+
+    private void submitBackgroundRefresh(boolean forceRefresh, boolean hadUsable, boolean hadFresh) {
+        bgPool.submit(() -> {
+            JSONObject np = syncNowPlayingSafe();
+            if (!forceRefresh && hadFresh) return;
+            JSONArray history = db.listHistory(activeProfile);
+            if (np == null && history.length() > 0) np = history.optJSONObject(0);
+            JSONArray fresh = ai.getOrRefreshForProfile(activeProfile, np, history, forceRefresh, null);
+            ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, hadUsable));
+        });
+    }
+
+    private JSONObject syncNowPlayingSafe() {
+        try { return inspector.syncProvidersAndNowPlaying(activeProfile); } catch (Exception e) { return null; }
+    }
+
+    private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh, boolean hadUsable) {
+        setBannerText("", false);
+        if (fresh != null && fresh.length() > 0 && (forceRefresh || !hadUsable)) {
+            renderHomeContent(fresh);
+        }
+    }
+
+    private void updateNavMetadata() {
+        NavPanelBuilder.updateProfiles(navPanel, db.listProfiles(), activeProfile, this);
+        long freeMb = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
+        String mode = db.getSetting("gemini_api_key", "").isEmpty() ? "JustWatch Graph" : "Aura Agent + JW";
+        NavPanelBuilder.updateStatus(navPanel, mode, freeMb + " MB", String.valueOf(REMOTE_PORT));
+        String clock = new SimpleDateFormat("h:mm a", Locale.US).format(new Date());
+        profileClockLabel.setText(clock);
+    }
+
+    private void populateTraversalChips() {
+        chipsRow.removeAllViews();
+        for (String chip : db.getTraversalChips(activeProfile)) {
+            TextView btn = GlassTheme.makeGlassButton(this, "\u2726 " + chip);
+            btn.setTextSize(10.5f);
+            btn.setPadding(dp(10), dp(5), dp(10), dp(5));
+            LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
+            lp.rightMargin = dp(6);
+            btn.setLayoutParams(lp);
+            btn.setOnClickListener(v -> runSearchQuery(chip));
+            chipsRow.addView(btn);
+        }
+    }
+
+    private void renderHomeContent(JSONArray recos) {
+        final int savedScrollY = mainScroll != null ? mainScroll.getScrollY() : 0;
+        final int[] savedRailFocus = findFocusedRailAndCard();
+        List<JSONObject> all = toJsonList(recos);
+        AmbientScreensaverOverlay.setItems(screensaverOverlay, all);
+        HeroSliderBuilder.setItems(heroSlider, all.subList(0, Math.min(6, all.size())), this, this);
+        HeroSliderBuilder.startAutoRotate(heroSlider, ui);
+        rebuildHomeRails(all);
+        animateHomeRailsEntrance();
+        restoreOrInitFocus(savedRailFocus, savedScrollY);
+    }
+
+    private void rebuildHomeRails(List<JSONObject> all) {
+        railsContainer.removeAllViews();
+        railsContainer.addView(RailBuilder.buildAppsDock(this, discoverTvApps(), this));
+        addContinueWatchingIfPresent();
+        addCategorizedRails(all);
+    }
+
+    private void animateHomeRailsEntrance() {
+        for (int i = 0; i < railsContainer.getChildCount(); i++) {
+            View rail = railsContainer.getChildAt(i);
+            rail.setAlpha(0f);
+            rail.setTranslationY(dp(14));
+            rail.animate().alpha(1f).translationY(0f)
+                .setStartDelay(i * 50L).setDuration(260)
+                .setInterpolator(GlassTheme.EASE).start();
+        }
+    }
+
+    private void restoreOrInitFocus(int[] savedRailFocus, int savedScrollY) {
+        if (DetailOverlay.isVisible(detailOverlay) || SearchOverlay.isVisible(searchOverlay)) return;
+        initialFocusSet = true;
+        ui.post(() -> {
+            if (savedRailFocus != null && savedRailFocus[0] >= 0
+                    && savedRailFocus[0] < railsContainer.getChildCount()) {
+                if (mainScroll != null) mainScroll.scrollTo(0, savedScrollY);
+                View railView = railsContainer.getChildAt(savedRailFocus[0]);
+                if (railView instanceof LinearLayout) {
+                    RailBuilder.focusItemAt((LinearLayout) railView, savedRailFocus[1]);
+                }
+            } else {
+                if (mainScroll != null) mainScroll.scrollTo(0, 0);
+                HeroSliderBuilder.requestInitialFocus(heroSlider);
+            }
+        });
+    }
+
+    private int[] findFocusedRailAndCard() {
+        if (railsContainer == null) return null;
+        View focused = getCurrentFocus();
+        if (focused == null || !isDescendantOf(focused, railsContainer)) return null;
+        for (int r = 0; r < railsContainer.getChildCount(); r++) {
+            View rail = railsContainer.getChildAt(r);
+            if (rail instanceof ViewGroup && isDescendantOf(focused, (ViewGroup) rail)) {
+                if (focused.getParent() instanceof ViewGroup) {
+                    ViewGroup row = (ViewGroup) focused.getParent();
+                    int c = row.indexOfChild(focused);
+                    if (c >= 0) return new int[]{r, c};
+                }
+                return new int[]{r, 0};
+            }
+        }
+        return null;
+    }
+
+    private void addContinueWatchingIfPresent() {
+        List<JSONObject> rawHistory = toJsonList(db.listHistory(activeProfile));
+        List<JSONObject> diversified = ContinueWatchingSelector.selectDiversified(rawHistory, 8);
+        if (!diversified.isEmpty()) {
+            railsContainer.addView(RailBuilder.buildContinueWatching(this, diversified, this));
+        }
+    }
+
+    private void addCategorizedRails(List<JSONObject> all) {
+        for (DynamicRailClusterer.RailGroup rail : DynamicRailClusterer.buildRails(all)) {
+            railsContainer.addView(RailBuilder.buildContentRail(this, rail.title, "", rail.items, this));
+        }
+    }
+
+    private List<JSONObject> discoverTvApps() {
+        return AppCatalogProvider.discoverTvApps(this);
+    }
+
+    // ── Callbacks: NavPanelBuilder & ModalOverlayBuilder ─────────────────
+
+    @Override
+    public void onProfileSelected(String profileId) {
+        activeProfile = profileId;
+        db.setSetting("active_profile", profileId);
+        refreshAllData(false);
+    }
+
+    @Override
+    public void onAddProfile() {
+        saveFocusBeforeOverlay();
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        ModalOverlayBuilder.showAddProfileModal(modalContainer, this, db, this);
+    }
+
+    @Override
+    public void onNavigate(String destination) {
+        if ("home".equals(destination)) refreshAllData(false);
+        else if ("guide_ai".equals(destination)) showGuideAiDialog();
+        else if ("watched".equals(destination)) showWatchHistoryDialog();
+        else if (destination.startsWith("sys_")) openSystemSetting(destination);
+    }
+
+    @Override
+    public void onWatchHistoryOpen() {
+        showWatchHistoryDialog();
+    }
+
+    @Override
+    public void onHdmiSelect(int port) {
+        MediaDeepLinkLauncher.openHdmiInput(this, port);
+    }
+
+    @Override
+    public void onSettingsOpen() {
+        showSettingsDialog();
+    }
+
+    @Override
+    public void onQrOpen() {
+        saveFocusBeforeOverlay();
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        String ip = QrRemoteBuilder.getTvIpAddress(this);
+        ModalOverlayBuilder.showQrRemoteModal(modalContainer, this, ip, REMOTE_PORT, this);
+    }
+
+    @Override
+    public void onRefreshRecommendations(boolean forceRefresh) {
+        refreshAllData(forceRefresh);
+    }
+
+    @Override
+    public void onLaunchMedia(JSONObject item) {
+        launchMediaItem(item);
+    }
+
+    @Override
+    public void onOpenSystemTvSettings() {
+        openSystemSetting("sys_tv_settings");
+    }
+
+    @Override
+    public void onProfileCreated(String newProfileId) {
+        activeProfile = newProfileId;
+        db.setSetting("active_profile", newProfileId);
+        refreshAllData(true);
+    }
+
+    @Override
+    public void onModalClosed() {
+        setBackgroundFocusBlocked(false);
+        restoreFocusAfterOverlay();
+    }
+
+    @Override
+    public void onStartScreensaver() {
+        activateScreensaver();
+    }
+
+    @Override
+    public void onDrawerCollapsed() {
+        if (!DetailOverlay.isVisible(detailOverlay)
+                && !SearchOverlay.isVisible(searchOverlay)
+                && (modalContainer == null || modalContainer.getVisibility() != View.VISIBLE)) {
+            setBackgroundFocusBlocked(false);
+            restoreFocusAfterOverlay();
+        }
+    }
+
+    // ── Callbacks: HeroSliderBuilder & RailBuilder ───────────────────────
+
+    @Override
+    public void onMoveUpToTopBar() {
+        if (mainScroll != null && mainScroll.getScrollY() > 0) {
+            ObjectAnimator.ofInt(mainScroll, "scrollY", mainScroll.getScrollY(), 0)
+                .setDuration(220).start();
+        }
+        if (searchBox != null) searchBox.requestFocus();
+    }
+
+    @Override
+    public void onMoveDownToFirstRail() {
+        if (railsContainer != null && railsContainer.getChildCount() > 0
+                && railsContainer.getChildAt(0) instanceof LinearLayout) {
+            RailBuilder.focusFirstItem((LinearLayout) railsContainer.getChildAt(0));
+        }
+    }
+
+    @Override
+    public void onWatchClicked(JSONObject item) {
+        launchMediaItem(item);
+    }
+
+    @Override
+    public void onWatchedClicked(JSONObject item) {
+        db.markTitleWatched(item, true);
+        Toast.makeText(this, "Marked watched: " + item.optString("title"), Toast.LENGTH_SHORT).show();
+        refreshAllData(false);
+    }
+
+    @Override
+    public void onSimilarClicked(JSONObject item) {
+        String seed = item.optString("title", "this title");
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        setBannerText("Analyzing your watch history & taste vector for " + seed + "\u2026", true);
+        scheduleSimilarProgressUpdate(seed);
+        final long startMs = System.currentTimeMillis();
+        bgPool.submit(() -> executeSimilarTraversal(seed, startMs));
+    }
+
+    private void scheduleSimilarProgressUpdate(String seed) {
+        ui.postDelayed(() -> {
+            if (loadingOverlay != null && loadingOverlay.getVisibility() == View.VISIBLE) {
+                setBannerText("Scanning streaming catalogs & ranking matches similar to " + seed + "\u2026", true);
+            }
+        }, 720);
+    }
+
+    private void executeSimilarTraversal(String seed, long startMs) {
+        JSONArray sim = ai.traverseSimilarToWatched(activeProfile, seed,
+            msg -> ui.post(() -> setBannerText(msg, true)));
+        enforceMinLoadingDuration(startMs, 1750L);
+        persistSimilarVoiceSession(seed, sim);
+        ui.post(() -> presentSimilarResults(sim));
+    }
+
+    private void enforceMinLoadingDuration(long startMs, long minMs) {
+        long elapsed = System.currentTimeMillis() - startMs;
+        if (elapsed < minMs) {
+            try { Thread.sleep(minMs - elapsed); } catch (InterruptedException ignored) {}
+        }
+    }
+
+    private void persistSimilarVoiceSession(String seed, JSONArray sim) {
+        try {
+            JSONObject session = new JSONObject();
+            JSONArray turns = new JSONArray();
+            turns.put(new JSONObject().put("role", "user").put("text", "Similar to " + seed));
+            turns.put(new JSONObject().put("role", "assistant")
+                .put("text", "Showing modern titles similar to " + seed + "."));
+            session.put("turns", turns);
+            session.put("reply", "Showing modern titles similar to " + seed + ".");
+            session.put("results", sim != null ? sim : new JSONArray());
+            db.saveVoiceSession(activeProfile, session);
+        } catch (Exception ignored) {}
+    }
+
+    private void presentSimilarResults(JSONArray sim) {
+        setBannerText("", false);
+        if (sim != null && sim.length() > 0) renderHomeContent(sim);
+        JSONObject saved = db.getVoiceSession(activeProfile);
+        SearchOverlay.setConversationTurns(searchOverlay,
+            saved != null ? saved.optJSONArray("turns") : new JSONArray(), this);
+        List<String> chips = java.util.Arrays.asList("Only on Netflix", "Shorter under 2h", "Darker & grittier");
+        SearchOverlay.setFollowUps(searchOverlay, chips, this, this);
+        SearchOverlay.setResults(searchOverlay, sim != null ? sim : new JSONArray(), this, this);
+        SearchOverlay.show(searchOverlay, this, false);
+    }
+
+    @Override
+    public void onMoreClicked(JSONObject item) {
+        openDetailDrawer(item);
+    }
+
+    @Override
+    public void onSlideChanged(int index) {}
+
+    @Override
+    public void onPosterClicked(JSONObject item, View posterView) {
+        openDetailDrawer(item);
+    }
+
+    @Override
+    public void onPosterFocused(JSONObject item, View posterView) {
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        lastFocusedView = posterView;
+        lastRailFocus = findFocusedRailAndCard();
+        lastScrollY = mainScroll != null ? mainScroll.getScrollY() : 0;
+    }
+
+    @Override
+    public void onAppClicked(String packageName) {
+        launchPackage(packageName);
+    }
+
+    @Override
+    public void onContinueWatchingClicked(JSONObject item) {
+        launchMediaItem(item);
+    }
+
+    @Override
+    public void onMoveUpFromTopRail() {
+        if (mainScroll != null) {
+            ObjectAnimator anim = ObjectAnimator.ofInt(mainScroll, "scrollY", mainScroll.getScrollY(), 0);
+            anim.setDuration(240);
+            anim.setInterpolator(GlassTheme.EASE);
+            anim.start();
+        }
+        HeroSliderBuilder.requestInitialFocus(heroSlider);
+    }
+
+    @Override
+    public void onMoveLeftToNav() {
+        if (navPanel != null) {
+            NavPanelBuilder.focusHamburgerOrExpand(navPanel, this);
+        }
+    }
+
+    // ── Callbacks: SearchOverlay & DetailOverlay ─────────────────────────
+
+    public void runSearchQuery(String query) {
+        String q = query != null ? query.trim() : "";
+        if (q.isEmpty()) return;
+        lastSearchQuery = q;
+        if (searchLabel != null) {
+            searchLabel.setText(q);
+            searchLabel.setTextColor(GlassTheme.TEXT_PRIMARY);
+        }
+        hideKeyboard(rootLayout);
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        if (!SearchOverlay.isVisible(searchOverlay)) {
+            SearchOverlay.show(searchOverlay, this, false);
+        }
+        SearchOverlay.setLoading(searchOverlay, true,
+            "Analyzing query & watch history across your streaming apps\u2026");
+        final long startMs = System.currentTimeMillis();
+        bgPool.submit(() -> {
+            JSONObject res = voice.handleTurn(activeProfile, q, false,
+                msg -> ui.post(() -> {
+                    if (SearchOverlay.isVisible(searchOverlay)) {
+                        SearchOverlay.setLoading(searchOverlay, true, msg);
+                    }
+                }));
+            long elapsed = System.currentTimeMillis() - startMs;
+            if (elapsed < 1600L) {
+                try { Thread.sleep(1600L - elapsed); } catch (InterruptedException ignored) {}
+            }
+            ui.post(() -> displaySearchResults(res));
+        });
+    }
+
+    private void displaySearchResults(JSONObject res) {
+        if (!SearchOverlay.isVisible(searchOverlay)) return;
+        SearchOverlay.setLoading(searchOverlay, false, "");
+        if (res == null) return;
+        SearchOverlay.setConversationTurns(searchOverlay, res.optJSONArray("turns"), this);
+        String reply = res.optString("reply", "");
+        if (!reply.isEmpty()) SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
+        List<String> chips = new ArrayList<>();
+        JSONArray arr = res.optJSONArray("follow_ups");
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) chips.add(arr.optString(i));
+        }
+        SearchOverlay.setFollowUps(searchOverlay, chips, this, this);
+        SearchOverlay.setResults(searchOverlay, res.optJSONArray("results"), this, this);
+        populateTraversalChips();
+    }
+
+    @Override
+    public void onResultClicked(JSONObject item) {
+        SearchOverlay.dismiss(searchOverlay);
+        openDetailDrawer(item);
+    }
+
+    @Override
+    public void onFollowUpClicked(String query) {
+        runSearchQuery(query);
+    }
+
+    @Override
+    public void onResetConversation() {
+        lastSearchQuery = "";
+        if (searchLabel != null) {
+            searchLabel.setText(SearchOverlay.MULTILINGUAL_HINTS[0]);
+            searchLabel.setTextColor(GlassTheme.TEXT_SECONDARY);
+        }
+        bgPool.submit(() -> {
+            voice.handleTurn(activeProfile, "", true);
+            ui.post(() -> {
+                SearchOverlay.setConversationTurns(searchOverlay, new JSONArray(), this);
+                SearchOverlay.addMessage(searchOverlay, "assistant",
+                    "Started a fresh conversation topic. Type a query above or pick a chip below.", this);
+                SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
+                SearchOverlay.setResults(searchOverlay, db.getProfileRecommendations(activeProfile), this, this);
+            });
+        });
+    }
+
+    private void saveFocusBeforeOverlay() {
+        if (DetailOverlay.isVisible(detailOverlay) || SearchOverlay.isVisible(searchOverlay)
+                || (modalContainer != null && modalContainer.getVisibility() == View.VISIBLE)) {
+            return;
+        }
+        View cur = getCurrentFocus();
+        if (cur != null && !isDescendantOf(cur, navPanel)) {
+            lastFocusedView = cur;
+            lastRailFocus = findFocusedRailAndCard();
+            lastScrollY = mainScroll != null ? mainScroll.getScrollY() : 0;
+        }
+    }
+
+    private void restoreFocusAfterOverlay() {
+        if (lastFocusedView != null && lastFocusedView.isShown()) {
+            if (mainScroll != null) mainScroll.scrollTo(0, lastScrollY);
+            lastFocusedView.requestFocus();
+            return;
+        }
+        restoreOrInitFocus(lastRailFocus, lastScrollY);
+    }
+
+    @Override
+    public void onDismiss() {
+        if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
+        if (SearchOverlay.isVisible(searchOverlay)) SearchOverlay.dismiss(searchOverlay);
+        setBackgroundFocusBlocked(false);
+        if (watchedChangedWhileInDetail) {
+            watchedChangedWhileInDetail = false;
+            refreshAllData(false);
+            return;
+        }
+        restoreFocusAfterOverlay();
+    }
+
+    private void openDetailDrawer(JSONObject item) {
+        if (item == null) return;
+        saveFocusBeforeOverlay();
+        setBackgroundFocusBlocked(true);
+        String title = item.optString("title");
+        boolean watched = db.isTitleWatched(title);
+        int rating = db.getUserRatingsMap().getOrDefault(AuraDb.normalizeTitleKey(title), 0);
+        DetailOverlay.showItem(detailOverlay, item, watched, rating, this, this);
+        bgPool.submit(() -> enrichDetailDrawerAsync(item, title));
+    }
+
+    private void enrichDetailDrawerAsync(JSONObject item, String title) {
+        String curPoster = item.optString("poster_url", "");
+        if (curPoster.isEmpty() || !curPoster.contains("/s718/")) {
+            JSONObject enriched = JustWatchGraph.lookupTitleInIndia(title);
+            String freshPoster = enriched.optString("poster_url", "");
+            if (!freshPoster.isEmpty()) {
+                try { item.put("poster_url", freshPoster); } catch (Exception ignored) {}
+                ui.post(() -> {
+                    if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+                        DetailOverlay.updatePosterUrl(detailOverlay, freshPoster, this);
+                    }
+                });
+            }
+        }
+        JSONArray sim = db.filterOutWatched(JustWatchGraph.fetchCollaborativeSimilar(title));
+        ui.post(() -> {
+            if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+                DetailOverlay.setSimilarItems(detailOverlay, sim, this, this);
+            }
+        });
+    }
+
+    @Override
+    public void onWatchedToggle(JSONObject item) {
+        String title = item.optString("title");
+        boolean nowWatched = !db.isTitleWatched(title);
+        db.markTitleWatched(item, nowWatched);
+        watchedChangedWhileInDetail = true;
+        int rating = db.getUserRatingsMap().getOrDefault(AuraDb.normalizeTitleKey(title), 0);
+        DetailOverlay.updateUserFeedback(detailOverlay, item, nowWatched, rating, this, this);
+    }
+
+    @Override
+    public void onRated(JSONObject item, int score) {
+        String title = item.optString("title");
+        db.rateTitle(item, score);
+        Toast.makeText(this, "Rated " + score + "/10", Toast.LENGTH_SHORT).show();
+        boolean watched = db.isTitleWatched(title);
+        DetailOverlay.updateUserFeedback(detailOverlay, item, watched, score, this, this);
+    }
+
+    @Override
+    public void onTraversalClicked(JSONObject similarItem) {
+        openDetailDrawer(similarItem);
+    }
+
+    // ── Glass Modals: Guide AI, Aura Settings & Visual Watch History ─────
+
+    private void showGuideAiDialog() {
+        saveFocusBeforeOverlay();
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        ModalOverlayBuilder.showGuideAiModal(modalContainer, this, db, activeProfile, this);
+    }
+
+    private void showSettingsDialog() {
+        saveFocusBeforeOverlay();
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        ModalOverlayBuilder.showAuraSettingsModal(
+            modalContainer, this, db, activeProfile, REMOTE_PORT, this);
+    }
+
+    private void showWatchHistoryDialog() {
+        saveFocusBeforeOverlay();
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        ModalOverlayBuilder.showWatchHistoryModal(
+            modalContainer, this, db, activeProfile, this);
+    }
+
+    private void openSystemSetting(String dest) {
+        MediaDeepLinkLauncher.openSystemSetting(this, dest);
+    }
+
+    private void launchMediaItem(JSONObject item) {
+        MediaDeepLinkLauncher.launchMediaItem(this, db, item);
+    }
+
+    private void launchPackage(String pkg) {
+        MediaDeepLinkLauncher.launchPackage(this, pkg);
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            handleBackKeyPress();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    private void handleBackKeyPress() {
+        if (loadingOverlay != null && loadingOverlay.getVisibility() == View.VISIBLE) {
+            setBannerText("", false);
+        } else if (modalContainer != null && modalContainer.getVisibility() == View.VISIBLE) {
+            ModalOverlayBuilder.closeModal(modalContainer, this);
+        } else if (DetailOverlay.isVisible(detailOverlay) || SearchOverlay.isVisible(searchOverlay)) {
+            onDismiss();
+        } else if (NavPanelBuilder.isExpanded(navPanel)) {
+            NavPanelBuilder.setExpanded(navPanel, false, this);
+            HeroSliderBuilder.requestInitialFocus(heroSlider);
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        // Home launcher never finishes on Back press
+    }
+
+    private final Runnable hideLoaderSafetyTask = () -> setBannerText("", false);
+
+    private void setBannerText(String msg, boolean visible) {
+        ui.removeCallbacks(hideLoaderSafetyTask);
+        statusBanner.setText(msg);
+        statusBanner.setVisibility(View.GONE);
+        if (loadingOverlay == null) return;
+        if (visible) showGlobalLoadingOverlay(msg);
+        else hideGlobalLoadingOverlay();
+    }
+
+    private void showGlobalLoadingOverlay(String msg) {
+        String clean = (msg != null && msg.startsWith("\u2726")) ? msg.substring(1).trim() : msg;
+        ui.postDelayed(hideLoaderSafetyTask, 6000);
+        if (globalLoaderText != null && clean != null && !clean.isEmpty()) {
+            globalLoaderText.setText(clean);
+        }
+        if (mainScroll != null) mainScroll.animate().alpha(0.08f).setDuration(180).start();
+        if (loadingOverlay.getVisibility() != View.VISIBLE) {
+            loadingOverlay.animate().cancel();
+            loadingOverlay.setAlpha(0f);
+            loadingOverlay.setVisibility(View.VISIBLE);
+            loadingOverlay.animate().alpha(1f).setDuration(180).setInterpolator(GlassTheme.EASE).start();
+        }
+    }
+
+    private void hideGlobalLoadingOverlay() {
+        if (mainScroll != null) mainScroll.animate().alpha(1f).setDuration(180).start();
+        if (loadingOverlay.getVisibility() == View.VISIBLE) {
+            loadingOverlay.animate().cancel();
+            loadingOverlay.animate().alpha(0f).setDuration(160)
+                .setInterpolator(GlassTheme.EASE)
+                .withEndAction(() -> loadingOverlay.setVisibility(View.GONE))
+                .start();
+        }
+    }
+
+    private List<JSONObject> toJsonList(JSONArray arr) {
+        List<JSONObject> list = new ArrayList<>();
+        if (arr == null) return list;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null) list.add(o);
+        }
+        return list;
+    }
+
+    private int dp(float v) {
+        return GlassTheme.dp(this, v);
+    }
+}

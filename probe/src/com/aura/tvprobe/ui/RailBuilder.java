@@ -29,12 +29,15 @@ public final class RailBuilder {
 
     private static final String TAG_SCROLL = "rail_scroll";
     private static final String TAG_BANNER_BOX = "app_banner_box";
-    private static final int CARD_GAP = 12;
-    private static final int APP_W = 114;
-    private static final int APP_H = 62;
-    private static final int APP_RADIUS = 12;
-    private static final int PROGRESS_H = 4;
-    private static final int MAX_CONTINUE = 8;
+    private static final int TAG_TARGET_SCROLL_X    = 0x7F0B0001;
+    private static final int TAG_SCROLL_ANIM        = 0x7F0B0002;
+    private static final int TAG_LAST_FOCUSED_INDEX = 0x7F0B0003;
+    private static final int CARD_GAP = 10;
+    private static final int APP_W = 104;
+    private static final int APP_H = 56;
+    private static final int APP_RADIUS = 11;
+    private static final int PROGRESS_H = 3;
+    private static final int MAX_CONTINUE = 5;
 
     public interface RailCallback {
         void onPosterClicked(JSONObject item, View posterView);
@@ -47,7 +50,8 @@ public final class RailBuilder {
 
     /**
      * Custom ScrollView that suppresses Android's instant synchronous focus jump
-     * so all vertical rail transitions animate smoothly with ObjectAnimator.
+     * and internal FocusFinder arrowScroll so all vertical rail transitions stay
+     * strictly under deterministic D-pad control.
      */
     public static final class SmoothVerticalScrollView extends ScrollView {
         public SmoothVerticalScrollView(Context context) {
@@ -58,11 +62,16 @@ public final class RailBuilder {
         protected int computeScrollDeltaToGetChildRectOnScreen(Rect rect) {
             return 0;
         }
+
+        @Override
+        public boolean executeKeyEvent(KeyEvent event) {
+            return false;
+        }
     }
 
     /**
      * Custom HorizontalScrollView that suppresses instant synchronous focus jump
-     * so horizontal card traversal glides smoothly.
+     * and internal arrowScroll so horizontal card traversal never leaks focus.
      */
     private static final class SmoothHorizontalScrollView extends HorizontalScrollView {
         SmoothHorizontalScrollView(Context context) {
@@ -73,6 +82,16 @@ public final class RailBuilder {
         protected int computeScrollDeltaToGetChildRectOnScreen(Rect rect) {
             return 0;
         }
+
+        @Override
+        public boolean executeKeyEvent(KeyEvent event) {
+            return false;
+        }
+    }
+
+    private static int getAvailableWidth(Context ctx) {
+        int screenW = ctx.getResources().getDisplayMetrics().widthPixels;
+        return Math.max(dp(ctx, 600), screenW - dp(ctx, 40));
     }
 
     public static LinearLayout buildContinueWatching(Context ctx, List<JSONObject> items,
@@ -81,8 +100,12 @@ public final class RailBuilder {
         addRailHeader(rail, ctx, "Continue Watching", null);
         LinearLayout row = createHorizontalRow(ctx);
         int count = Math.min(items.size(), MAX_CONTINUE);
+        int availW = getAvailableWidth(ctx);
+        int gap = dp(ctx, CARD_GAP);
+        int cols = 5;
+        int cardW = (availW - gap * (cols - 1)) / cols;
         for (int i = 0; i < count; i++) {
-            addContinueCard(row, ctx, items.get(i), cb);
+            addContinueCard(row, ctx, items.get(i), cb, cardW, i == count - 1);
         }
         wrapInScrollView(rail, row, ctx);
         return rail;
@@ -93,8 +116,14 @@ public final class RailBuilder {
         LinearLayout rail = createRailContainer(ctx);
         addRailHeader(rail, ctx, "Apps", null);
         LinearLayout row = createHorizontalRow(ctx);
-        for (JSONObject app : installedApps) {
-            addAppTile(row, ctx, app, cb);
+        int availW = getAvailableWidth(ctx);
+        int gap = dp(ctx, CARD_GAP);
+        int cols = 8;
+        int count = installedApps.size();
+        int appW = (availW - gap * (cols - 1)) / cols;
+        int appH = Math.max(dp(ctx, 46), Math.round(appW * 0.49f));
+        for (int i = 0; i < count; i++) {
+            addAppTile(row, ctx, installedApps.get(i), cb, appW, appH, i == count - 1);
         }
         wrapInScrollView(rail, row, ctx);
         return rail;
@@ -105,8 +134,13 @@ public final class RailBuilder {
         LinearLayout rail = createRailContainer(ctx);
         addRailHeader(rail, ctx, title, subtitle);
         LinearLayout row = createHorizontalRow(ctx);
-        for (JSONObject item : items) {
-            addPosterCard(row, ctx, item, cb);
+        int availW = getAvailableWidth(ctx);
+        int gap = dp(ctx, CARD_GAP);
+        int cols = 7;
+        int posterW = (availW - gap * (cols - 1)) / cols;
+        int posterH = Math.round(posterW * 1.44f);
+        for (int i = 0; i < items.size(); i++) {
+            addPosterCard(row, ctx, items.get(i), cb, posterW, posterH, i == items.size() - 1);
         }
         wrapInScrollView(rail, row, ctx);
         rail.setTag(items);
@@ -114,9 +148,14 @@ public final class RailBuilder {
     }
 
     public static boolean focusFirstItem(LinearLayout rail) {
+        return focusItemAt(rail, 0);
+    }
+
+    public static boolean focusItemAt(LinearLayout rail, int cardIndex) {
         LinearLayout row = findScrollContent(rail);
         if (row != null && row.getChildCount() > 0) {
-            return row.getChildAt(0).requestFocus();
+            int idx = Math.max(0, Math.min(cardIndex, row.getChildCount() - 1));
+            return row.getChildAt(idx).requestFocus();
         }
         return false;
     }
@@ -126,7 +165,7 @@ public final class RailBuilder {
         rail.setOrientation(LinearLayout.VERTICAL);
         rail.setClipChildren(false);
         rail.setClipToPadding(false);
-        rail.setPadding(dp(ctx, 6), dp(ctx, 5), dp(ctx, 6), dp(ctx, 5));
+        rail.setPadding(0, dp(ctx, 3), 0, dp(ctx, 4));
         return rail;
     }
 
@@ -136,7 +175,7 @@ public final class RailBuilder {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setClipChildren(false);
         row.setClipToPadding(false);
-        row.setPadding(dp(ctx, 6), dp(ctx, 6), dp(ctx, 16), dp(ctx, 8));
+        row.setPadding(0, dp(ctx, 4), 0, dp(ctx, 6));
         return row;
     }
 
@@ -158,35 +197,36 @@ public final class RailBuilder {
         LinearLayout header = new LinearLayout(ctx);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(ctx, 8), 0, 0, dp(ctx, 2));
-        TextView tv = GlassTheme.makeText(ctx, title, 14f, GlassTheme.TEXT_PRIMARY,
+        header.setPadding(0, 0, 0, dp(ctx, 2));
+        TextView tv = GlassTheme.makeText(ctx, title, 11.5f, GlassTheme.TEXT_SECONDARY,
                                            GlassTheme.FONT_BOLD, 1);
         header.addView(tv, GlassTheme.wrapParams());
         if (subtitle != null && !subtitle.isEmpty() && subtitle.length() > 2) {
-            TextView sub = GlassTheme.makeText(ctx, "   \u00B7   " + subtitle, 10.5f,
+            TextView sub = GlassTheme.makeText(ctx, "   \u00B7   " + subtitle, 9.5f,
                 GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
             header.addView(sub, GlassTheme.wrapParams());
         }
         rail.addView(header, GlassTheme.wrapParams());
     }
 
-    // ── Continue watching card (Diverse OTTs + Progress % + Dark Glass) ──
+    // ── Continue watching card (Responsive 5-Col Grid + Dark Glass) ──────
 
     private static void addContinueCard(LinearLayout row, Context ctx,
-                                         JSONObject item, RailCallback cb) {
+                                         JSONObject item, RailCallback cb,
+                                         int cardW, boolean isLast) {
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
-        float r = dp(ctx, 12);
+        float r = dp(ctx, 10);
         card.setBackground(GlassTheme.focusRounded(
             GlassTheme.GLASS_CARD, GlassTheme.BORDER_STRONG, dp(ctx, 1), r));
         card.setElevation(dp(ctx, 4));
-        int padH = dp(ctx, 12), padV = dp(ctx, 9);
+        int padH = dp(ctx, 9), padV = dp(ctx, 6);
         card.setPadding(padH, padV, padH, padV);
         addContinueTopBadge(card, ctx, item);
         addContinueTitle(card, ctx, item);
         addProgressBar(card, ctx, item);
         bindCardFocus(card, item, cb, true, r, ctx);
-        addCardToRow(row, card, ctx, dp(ctx, 204), ViewGroup.LayoutParams.WRAP_CONTENT);
+        addCardToRow(row, card, ctx, cardW, ViewGroup.LayoutParams.WRAP_CONTENT, isLast);
     }
 
     private static void addContinueTopBadge(LinearLayout card, Context ctx, JSONObject item) {
@@ -196,16 +236,16 @@ public final class RailBuilder {
         String rawApp = item.optString("app_name", item.optString("app", "Resume"));
         String app = HeroSliderBuilder.cleanPlatformName(rawApp);
         int color = HeroSliderBuilder.getPlatformColor(app);
-        TextView pill = GlassTheme.makeText(ctx, "\u25B6 " + app.toUpperCase(), 8.5f,
+        TextView pill = GlassTheme.makeText(ctx, "\u25B6 " + app.toUpperCase(), 7.5f,
             Color.WHITE, GlassTheme.FONT_BOLD, 1);
-        pill.setBackground(GlassTheme.solidRounded(color, dp(ctx, 4)));
-        pill.setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2));
+        pill.setBackground(GlassTheme.solidRounded(color, dp(ctx, 3)));
+        pill.setPadding(dp(ctx, 5), dp(ctx, 1.5f), dp(ctx, 5), dp(ctx, 1.5f));
         top.addView(pill, GlassTheme.wrapParams());
 
         int pct = computeProgressPct(item);
         String ep = formatSeasonEp(item);
-        String rightText = !ep.isEmpty() ? (ep + " \u00B7 " + pct + "%") : (pct + "% watched");
-        TextView epTv = GlassTheme.makeText(ctx, "  " + rightText, 9.5f,
+        String rightText = !ep.isEmpty() ? (ep + " \u00B7 " + pct + "%") : (pct + "%");
+        TextView epTv = GlassTheme.makeText(ctx, "  " + rightText, 8.5f,
             GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
         top.addView(epTv, GlassTheme.wrapParams());
         card.addView(top, GlassTheme.wrapParams());
@@ -214,9 +254,9 @@ public final class RailBuilder {
     private static void addContinueTitle(LinearLayout card, Context ctx, JSONObject item) {
         String series = item.optString("series_title", "");
         String rawTitle = !series.isEmpty() ? series : item.optString("title", "Continue Watching");
-        TextView title = GlassTheme.makeText(ctx, rawTitle, 12.5f,
+        TextView title = GlassTheme.makeText(ctx, rawTitle, 10.5f,
             GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        title.setPadding(0, dp(ctx, 6), 0, dp(ctx, 6));
+        title.setPadding(0, dp(ctx, 4), 0, dp(ctx, 5));
         card.addView(title, GlassTheme.matchWrapParams());
     }
 
@@ -254,9 +294,10 @@ public final class RailBuilder {
         return 35;
     }
 
-    // ── Apps dock (Clean Smoked-Slate Tiles + Crisp White Focus Border) ─
+    // ── Apps dock (Responsive 8-Col Tiles + Crisp White Focus Border) ─
 
-    private static void addAppTile(LinearLayout row, Context ctx, JSONObject app, RailCallback cb) {
+    private static void addAppTile(LinearLayout row, Context ctx, JSONObject app,
+                                    RailCallback cb, int appW, int appH, boolean isLast) {
         String name = app.optString("name", "App");
         String pkg = app.optString("package", "");
         int color = parseColorSafe(app.optString("color", "#1E293B"));
@@ -264,20 +305,20 @@ public final class RailBuilder {
         wrapper.setOrientation(LinearLayout.VERTICAL);
         wrapper.setGravity(Gravity.CENTER_HORIZONTAL);
         wrapper.setClipChildren(false);
-        wrapper.setPadding(dp(ctx, 2), dp(ctx, 2), dp(ctx, 2), dp(ctx, 2));
+        wrapper.setPadding(0, dp(ctx, 1), 0, dp(ctx, 1));
 
         FrameLayout bannerBox = buildAppVisualBox(ctx, pkg, name, color);
         bannerBox.setTag(TAG_BANNER_BOX);
-        wrapper.addView(bannerBox, new LinearLayout.LayoutParams(dp(ctx, APP_W), dp(ctx, APP_H)));
+        wrapper.addView(bannerBox, new LinearLayout.LayoutParams(appW, appH));
 
-        TextView label = GlassTheme.makeText(ctx, name, 10.5f,
+        TextView label = GlassTheme.makeText(ctx, name, 9f,
             GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1);
         label.setGravity(Gravity.CENTER);
-        label.setPadding(0, dp(ctx, 5), 0, 0);
+        label.setPadding(0, dp(ctx, 3), 0, 0);
         wrapper.addView(label, GlassTheme.wrapParams());
 
         bindAppTileFocus(wrapper, bannerBox, label, pkg, cb, ctx);
-        addCardToRow(row, wrapper, ctx, dp(ctx, APP_W + 6), ViewGroup.LayoutParams.WRAP_CONTENT);
+        addCardToRow(row, wrapper, ctx, appW, ViewGroup.LayoutParams.WRAP_CONTENT, isLast);
     }
 
     private static FrameLayout buildAppVisualBox(Context ctx, String pkg, String name, int color) {
@@ -330,7 +371,24 @@ public final class RailBuilder {
             Drawable b = pm.getApplicationBanner(pkg);
             if (b != null) return b;
             ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return pm.getApplicationBanner(ai);
+            b = pm.getApplicationBanner(ai);
+            if (b != null) return b;
+            android.content.Intent leanback = pm.getLeanbackLaunchIntentForPackage(pkg);
+            if (leanback != null && leanback.getComponent() != null) {
+                b = pm.getActivityBanner(leanback.getComponent());
+                if (b != null) return b;
+            }
+            android.content.Intent main = new android.content.Intent(android.content.Intent.ACTION_MAIN).setPackage(pkg);
+            List<android.content.pm.ResolveInfo> ris = pm.queryIntentActivities(main, 0);
+            if (ris != null) {
+                for (android.content.pm.ResolveInfo ri : ris) {
+                    if (ri.activityInfo != null) {
+                        b = ri.activityInfo.loadBanner(pm);
+                        if (b != null) return b;
+                    }
+                }
+            }
+            return null;
         } catch (Exception e) {
             return null;
         }
@@ -371,27 +429,25 @@ public final class RailBuilder {
         setupRailDpad(wrapper, cb);
     }
 
-    // ── Content rail poster card (Focus ring hugs poster artwork cleanly) ──
+    // ── Content rail poster card (Responsive 7-Col Grid + Focus Ring) ────
 
     private static void addPosterCard(LinearLayout row, Context ctx,
-                                       JSONObject item, RailCallback cb) {
+                                       JSONObject item, RailCallback cb,
+                                       int posterW, int posterH, boolean isLast) {
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setClipChildren(false);
         card.setClipToPadding(false);
-        int p = dp(ctx, 2);
-        card.setPadding(p, p, p, p);
-        FrameLayout imgFrame = addPosterImage(card, ctx, item);
+        card.setPadding(0, dp(ctx, 1), 0, dp(ctx, 1));
+        FrameLayout imgFrame = addPosterImage(card, ctx, item, posterW, posterH);
         TextView titleView = addPosterInfo(card, ctx, item);
         bindPosterFocus(card, imgFrame, titleView, item, cb, ctx);
-        int w = dp(ctx, GlassTheme.POSTER_W + 6);
-        addCardToRow(row, card, ctx, w, ViewGroup.LayoutParams.WRAP_CONTENT);
+        addCardToRow(row, card, ctx, posterW, ViewGroup.LayoutParams.WRAP_CONTENT, isLast);
     }
 
-    private static FrameLayout addPosterImage(LinearLayout card, Context ctx, JSONObject item) {
+    private static FrameLayout addPosterImage(LinearLayout card, Context ctx,
+                                               JSONObject item, int w, int h) {
         FrameLayout imgFrame = new FrameLayout(ctx);
-        int w = dp(ctx, GlassTheme.POSTER_W);
-        int h = dp(ctx, GlassTheme.POSTER_H);
         float rad = dp(ctx, 11);
         imgFrame.setBackground(GlassTheme.focusRounded(
             GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_LIGHT, dp(ctx, 1), rad));
@@ -406,8 +462,6 @@ public final class RailBuilder {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         ivLp.setMargins(inset, inset, inset, inset);
         imgFrame.addView(iv, ivLp);
-        addPlatformBadge(imgFrame, ctx, item);
-        addImdbBadge(imgFrame, ctx, item);
         card.addView(imgFrame, new LinearLayout.LayoutParams(w, h));
         return imgFrame;
     }
@@ -469,30 +523,23 @@ public final class RailBuilder {
     }
 
     private static TextView addPosterInfo(LinearLayout card, Context ctx, JSONObject item) {
-        TextView title = GlassTheme.makeText(ctx, item.optString("title", ""),
-                                              11f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        title.setPadding(dp(ctx, 2), dp(ctx, 5), dp(ctx, 2), 0);
-        card.addView(title, GlassTheme.matchWrapParams());
         String meta = buildPosterMetaText(item);
-        if (!meta.isEmpty()) {
-            TextView tv = GlassTheme.makeText(ctx, meta, 9.5f, GlassTheme.TEXT_MUTED,
-                                               GlassTheme.FONT_MEDIUM, 1);
-            tv.setPadding(dp(ctx, 2), 0, dp(ctx, 2), 0);
-            card.addView(tv, GlassTheme.matchWrapParams());
-        }
-        return title;
+        TextView tv = GlassTheme.makeText(ctx, meta, 9.5f, GlassTheme.TEXT_SECONDARY,
+                                           GlassTheme.FONT_MEDIUM, 1);
+        tv.setGravity(Gravity.CENTER_HORIZONTAL);
+        tv.setPadding(dp(ctx, 2), dp(ctx, 4), dp(ctx, 2), 0);
+        card.addView(tv, GlassTheme.matchWrapParams());
+        return tv;
     }
 
     private static String buildPosterMetaText(JSONObject item) {
-        StringBuilder sb = new StringBuilder();
+        String genres = item.optString("genres", "");
+        String firstGenre = genres.isEmpty() ? "" : genres.split(",")[0].trim();
         int year = item.optInt("year", 0);
-        if (year > 0) sb.append(year);
-        String app = HeroSliderBuilder.cleanPlatformName(item.optString("app", ""));
-        if (!app.isEmpty()) {
-            if (sb.length() > 0) sb.append(" \u00B7 ");
-            sb.append(app);
-        }
-        return sb.toString();
+        if (!firstGenre.isEmpty() && year > 0) return firstGenre + " \u00B7 " + year;
+        if (!firstGenre.isEmpty()) return firstGenre;
+        if (year > 0) return String.valueOf(year);
+        return "Featured";
     }
 
     // ── Unmistakable Platinum Focus Ring + Smooth Animated Scrolling ─────
@@ -529,40 +576,109 @@ public final class RailBuilder {
     }
 
     private static void scrollToChild(View child) {
-        if (!(child.getParent() instanceof View)) return;
-        View row = (View) child.getParent();
-        if (row.getParent() instanceof HorizontalScrollView) {
-            HorizontalScrollView scroll = (HorizontalScrollView) row.getParent();
-            int targetX = Math.max(0, child.getLeft() - dp(child.getContext(), 32));
-            ObjectAnimator anim = ObjectAnimator.ofInt(scroll, "scrollX", scroll.getScrollX(), targetX);
-            anim.setDuration(220);
-            anim.setInterpolator(GlassTheme.EASE);
-            anim.start();
+        if (!(child.getParent() instanceof ViewGroup)) return;
+        ViewGroup row = (ViewGroup) child.getParent();
+        if (!(row.getParent() instanceof HorizontalScrollView)) return;
+        HorizontalScrollView scroll = (HorizontalScrollView) row.getParent();
+        row.setTag(TAG_LAST_FOCUSED_INDEX, row.indexOfChild(child));
+        if (row.getWidth() <= 0 || child.getWidth() <= 0) {
+            scroll.post(() -> scrollToChild(child));
+            return;
+        }
+        applyHorizontalScroll(scroll, row, child);
+    }
+
+    private static void applyHorizontalScroll(HorizontalScrollView scroll, ViewGroup row, View child) {
+        Context ctx = child.getContext();
+        int viewportW = scroll.getWidth() > 0 ? scroll.getWidth() : getAvailableWidth(ctx);
+        int targetX = computeTargetScrollX(
+            row.indexOfChild(child), row.getChildCount(),
+            child.getLeft(), child.getRight(),
+            getTargetScrollX(scroll), viewportW, row.getWidth(), dp(ctx, 18));
+        scroll.setTag(TAG_TARGET_SCROLL_X, targetX);
+        cancelRunningAnim(scroll);
+        if (targetX != scroll.getScrollX()) animateScrollX(scroll, targetX);
+    }
+
+    public static int computeTargetScrollX(int idx, int count, int childLeft, int childRight,
+                                           int curTargetX, int viewportW, int rowW, int margin) {
+        int maxScroll = Math.max(0, rowW - viewportW);
+        if (idx <= 0 || maxScroll <= 0) return 0;
+        if (idx == count - 1) return maxScroll;
+        int targetX = curTargetX;
+        if (childLeft - margin < curTargetX) {
+            targetX = Math.max(0, childLeft - margin);
+        } else if (childRight + margin > curTargetX + viewportW) {
+            targetX = Math.max(0, childRight + margin - viewportW);
+        }
+        return Math.max(0, Math.min(targetX, maxScroll));
+    }
+
+    private static void animateScrollX(HorizontalScrollView scroll, int targetX) {
+        ObjectAnimator anim = ObjectAnimator.ofInt(scroll, "scrollX", scroll.getScrollX(), targetX);
+        anim.setDuration(200);
+        anim.setInterpolator(GlassTheme.EASE);
+        scroll.setTag(TAG_SCROLL_ANIM, anim);
+        anim.start();
+    }
+
+    private static int getTargetScrollX(HorizontalScrollView scroll) {
+        if (scroll == null) return 0;
+        Object tag = scroll.getTag(TAG_TARGET_SCROLL_X);
+        if (tag instanceof Integer) return (Integer) tag;
+        return scroll.getScrollX();
+    }
+
+    private static void cancelRunningAnim(View view) {
+        if (view == null) return;
+        Object tag = view.getTag(TAG_SCROLL_ANIM);
+        if (tag instanceof ObjectAnimator) {
+            ((ObjectAnimator) tag).cancel();
+            view.setTag(TAG_SCROLL_ANIM, null);
         }
     }
 
     private static void setupRailDpad(View card, RailCallback cb) {
         card.setOnKeyListener((v, keyCode, event) -> {
-            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                if (!moveSibling(v, -1) && cb != null) cb.onMoveLeftToNav();
-                return true;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                    || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                    || keyCode == KeyEvent.KEYCODE_DPAD_UP
+                    || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    moveSibling(v, -1);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    moveSibling(v, 1);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    moveVerticalRail(v, 1, cb);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    moveVerticalRail(v, -1, cb);
+                    return true;
+                }
             }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return moveSibling(v, 1);
-            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return moveVerticalRail(v, 1, cb);
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return moveVerticalRail(v, -1, cb);
             return false;
         });
     }
 
     private static boolean moveSibling(View current, int dir) {
+        if (!(current.getParent() instanceof ViewGroup)) return false;
         ViewGroup parent = (ViewGroup) current.getParent();
-        if (parent == null) return false;
-        int idx = parent.indexOfChild(current) + dir;
-        if (idx >= 0 && idx < parent.getChildCount()) {
-            return parent.getChildAt(idx).requestFocus();
+        int curIdx = parent.indexOfChild(current);
+        int nextIdx = Math.max(0, Math.min(parent.getChildCount() - 1, curIdx + dir));
+        View target = parent.getChildAt(nextIdx);
+        if (target != null && target != current) {
+            target.requestFocus();
+            return true;
         }
-        return false;
+        if (!current.isFocused()) current.requestFocus();
+        scrollToChild(current);
+        return true;
     }
 
     private static boolean moveVerticalRail(View currentItem, int railDir, RailCallback cb) {
@@ -591,14 +707,20 @@ public final class RailBuilder {
                 return true;
             }
         }
-        return false;
+        return true;
     }
 
     private static View findClosestChildInNextRow(View currentItem, ViewGroup curRow, LinearLayout nextRow) {
-        int curScrollX = (curRow.getParent() instanceof HorizontalScrollView)
-            ? ((HorizontalScrollView) curRow.getParent()).getScrollX() : 0;
-        int nextScrollX = (nextRow.getParent() instanceof HorizontalScrollView)
-            ? ((HorizontalScrollView) nextRow.getParent()).getScrollX() : 0;
+        HorizontalScrollView curHsv = (curRow.getParent() instanceof HorizontalScrollView)
+            ? (HorizontalScrollView) curRow.getParent() : null;
+        HorizontalScrollView nextHsv = (nextRow.getParent() instanceof HorizontalScrollView)
+            ? (HorizontalScrollView) nextRow.getParent() : null;
+        int curScrollX = getTargetScrollX(curHsv);
+        int nextScrollX = getTargetScrollX(nextHsv);
+        int curIdx = curRow.indexOfChild(currentItem);
+        if (curIdx <= 0 && curScrollX == 0) {
+            return nextRow.getChildAt(0);
+        }
         int targetViewportX = (currentItem.getLeft() + currentItem.getRight()) / 2 - curScrollX;
         View best = nextRow.getChildAt(0);
         int bestDist = Integer.MAX_VALUE;
@@ -621,9 +743,11 @@ public final class RailBuilder {
                 ScrollView sv = (ScrollView) cur.getParent();
                 int railsTopOffset = ((View) targetRail.getParent()).getTop();
                 int targetY = Math.max(0, railsTopOffset + targetRail.getTop() - dp(targetRail.getContext(), 28));
+                cancelRunningAnim(sv);
                 ObjectAnimator anim = ObjectAnimator.ofInt(sv, "scrollY", sv.getScrollY(), targetY);
-                anim.setDuration(260);
+                anim.setDuration(240);
                 anim.setInterpolator(GlassTheme.EASE);
+                sv.setTag(TAG_SCROLL_ANIM, anim);
                 anim.start();
                 return;
             }
@@ -643,9 +767,10 @@ public final class RailBuilder {
         return null;
     }
 
-    private static void addCardToRow(LinearLayout row, View card, Context ctx, int w, int h) {
+    private static void addCardToRow(LinearLayout row, View card, Context ctx,
+                                      int w, int h, boolean isLast) {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, h);
-        lp.setMargins(0, 0, dp(ctx, CARD_GAP), 0);
+        lp.setMargins(0, 0, isLast ? 0 : dp(ctx, CARD_GAP), 0);
         row.addView(card, lp);
     }
 

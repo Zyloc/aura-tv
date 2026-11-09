@@ -44,10 +44,40 @@ public final class SearchOverlay {
     private static final int TAG_INPUT_BOX = 0x5E_0007;
     private static final int TAG_EDIT_TEXT = 0x5E_0008;
     private static final int TAG_RESET_BTN = 0x5E_000A;
+    private static final int TAG_HINT_IDX  = 0x5E_000B;
+    private static final int TAG_LOADING_PANEL = 0x5E_000C;
+    private static final int TAG_LOADING_TEXT  = 0x5E_000D;
 
-    private static final int COLS     = 5;
-    private static final int POSTER_W = 162;
-    private static final int POSTER_H = 228;
+    private static final int COLS     = 6;
+    private static final int POSTER_W = 132;
+    private static final int POSTER_H = 204;
+
+    public static final String[] MULTILINGUAL_HINTS = {
+        "Search movies, shows, or ask by mood\u2026",
+        "Ask AI \u00B7 'Dark sci-fi like Severance'",
+        "Ask AI \u00B7 'Gripping crime thrillers on Netflix'"
+    };
+
+    public static List<String> getHintsForProfile(AuraDb db, String profileId) {
+        List<String> hints = new ArrayList<>();
+        hints.add("Search movies, shows, or ask by mood\u2026");
+        hints.add("Ask AI \u00B7 'Dark sci-fi like Severance'");
+        hints.add("Ask AI \u00B7 'Gripping crime thrillers on Netflix'");
+        if (db == null) return hints;
+        String langs = (db.getSetting("preferred_langs", "English") + " "
+            + db.getProfileTaste(profileId) + " "
+            + db.getActiveFilters(profileId).toString()).toLowerCase();
+        if (langs.contains("hindi")) {
+            hints.add("\u0939\u093F\u0902\u0926\u0940 \u092E\u0947\u0902 \u092A\u0942\u091B\u0947\u0902 \u00B7 '\u092E\u093F\u0930\u094D\u091C\u093C\u093E\u092A\u0941\u0930 \u091C\u0948\u0938\u0940 \u0915\u094D\u0930\u093E\u0907\u092E \u0925\u094D\u0930\u093F\u0932\u0930'");
+        }
+        if (langs.contains("tamil")) {
+            hints.add("\u0BA4\u0BAE\u0BBF\u0BB4\u0BCD \u00B7 'Top rated Tamil crime thrillers'");
+        }
+        if (langs.contains("telugu")) {
+            hints.add("\u0C24\u0C46\u0C32\u0C41\u0C17\u0C41 \u00B7 'High IMDb Telugu suspense movies'");
+        }
+        return hints;
+    }
 
     public interface SearchCallback {
         void onResultClicked(JSONObject item);
@@ -69,12 +99,41 @@ public final class SearchOverlay {
     public static void show(FrameLayout overlay, Context ctx, boolean focusInputBar) {
         overlay.setVisibility(View.VISIBLE);
         animateIn(overlay);
+        startMultilingualHintCycle(overlay);
         if (focusInputBar) {
             View inputBox = overlay.findViewWithTag(TAG_INPUT_BOX);
             if (inputBox != null) inputBox.post(inputBox::requestFocus);
         } else {
             focusFirstPoster(overlay);
         }
+    }
+
+    private static void startMultilingualHintCycle(FrameLayout overlay) {
+        EditText et = findTagged(overlay, TAG_EDIT_TEXT);
+        if (et == null) return;
+        Runnable cycle = new Runnable() {
+            @Override
+            public void run() {
+                if (overlay.getVisibility() != View.VISIBLE) return;
+                View resetBtn = overlay.findViewWithTag(TAG_RESET_BTN);
+                boolean inThread = resetBtn != null && resetBtn.getVisibility() == View.VISIBLE;
+                if (!inThread && !et.hasFocus() && et.getText().length() == 0) {
+                    AuraDb db = AuraDb.getInstance(overlay.getContext());
+                    String pid = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+                    List<String> hints = getHintsForProfile(db, pid);
+                    Object tagObj = et.getTag(TAG_HINT_IDX);
+                    int idx = (tagObj instanceof Integer) ? ((Integer) tagObj + 1) % hints.size() : 0;
+                    et.setTag(TAG_HINT_IDX, idx);
+                    final String nextHint = hints.get(idx);
+                    et.animate().alpha(0.25f).setDuration(220).withEndAction(() -> {
+                        et.setHint(nextHint);
+                        et.animate().alpha(1f).setDuration(260).start();
+                    }).start();
+                }
+                et.postDelayed(this, 3600);
+            }
+        };
+        et.postDelayed(cycle, 3600);
     }
 
     public static void dismiss(FrameLayout overlay) {
@@ -93,8 +152,26 @@ public final class SearchOverlay {
 
     public static void setLoading(FrameLayout overlay, boolean loading, String message) {
         View v = overlay.findViewWithTag(TAG_LOADING);
-        if (v == null) return;
-        v.setVisibility(loading ? View.VISIBLE : View.GONE);
+        if (v != null) v.setVisibility(loading ? View.VISIBLE : View.GONE);
+
+        View panel = overlay.findViewWithTag(TAG_LOADING_PANEL);
+        TextView txt = findTagged(overlay, TAG_LOADING_TEXT);
+        View gridRows = overlay.findViewWithTag(TAG_RESULTS);
+        if (txt != null && message != null && !message.isEmpty()) {
+            txt.setText(message);
+        }
+        if (panel != null) {
+            if (loading) {
+                panel.setVisibility(View.VISIBLE);
+                panel.animate().alpha(1f).setDuration(160).start();
+            } else {
+                panel.animate().alpha(0f).setDuration(150)
+                    .withEndAction(() -> panel.setVisibility(View.GONE)).start();
+            }
+        }
+        if (gridRows != null) {
+            gridRows.animate().alpha(loading ? 0.08f : 1f).setDuration(180).start();
+        }
     }
 
     public static void setConversationTurns(FrameLayout overlay, JSONArray turns, Context ctx) {
@@ -117,9 +194,9 @@ public final class SearchOverlay {
         if (et != null && !et.hasFocus()) {
             et.setText("");
             if (!latestUserQuery.isEmpty()) {
-                et.setHint(latestUserQuery + "  \u00B7  Ask follow-up\u2026");
+                et.setHint(latestUserQuery + "  \u00B7  Ask follow-up in any language\u2026");
             } else {
-                et.setHint("Search or ask anything\u2026");
+                et.setHint(MULTILINGUAL_HINTS[0]);
             }
         }
         if (resetBtn != null) {
@@ -132,7 +209,9 @@ public final class SearchOverlay {
         LinearLayout gridRows = findTagged(overlay, TAG_RESULTS);
         if (gridRows == null) return;
         populatePosterGrid(overlay, gridRows, results, ctx, cb);
-        focusFirstPoster(overlay);
+        if (overlay.getVisibility() == View.VISIBLE) {
+            focusFirstPoster(overlay);
+        }
     }
 
     public static void setFollowUps(FrameLayout overlay, List<String> chips,
@@ -152,12 +231,27 @@ public final class SearchOverlay {
         col.setOrientation(LinearLayout.VERTICAL);
         col.setClipChildren(false);
         col.setClipToPadding(false);
-        col.setPadding(dp(ctx, 24), dp(ctx, 18), dp(ctx, 24), dp(ctx, 16));
+        col.setPadding(dp(ctx, 20), dp(ctx, 12), dp(ctx, 20), dp(ctx, 6));
         col.setLayoutParams(new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         col.addView(buildMinimalTopBar(ctx, root, cb));
-        col.addView(buildResultsScroll(ctx));
+        FrameLayout bodyFrame = new FrameLayout(ctx);
+        bodyFrame.setClipChildren(false);
+        bodyFrame.setClipToPadding(false);
+        bodyFrame.addView(buildResultsScroll(ctx), new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        bodyFrame.addView(buildLoadingBanner(ctx));
+        col.addView(bodyFrame, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        return col;
+    }
+
+    private static LinearLayout buildLoadingBanner(Context ctx) {
+        LinearLayout col = AgenticOrbView.buildFloatingLoaderColumn(ctx, TAG_LOADING_TEXT, 0);
+        col.setTag(TAG_LOADING_PANEL);
+        col.setVisibility(View.GONE);
+        col.setAlpha(0f);
         return col;
     }
 
@@ -170,45 +264,60 @@ public final class SearchOverlay {
         bar.setClipChildren(false);
         bar.setPadding(0, 0, 0, dp(ctx, 14));
 
-        // 1. Clean Search / Follow-Up Input Pill
+        // 1. Flagship AI Search / Follow-Up Input Pill
         LinearLayout inputBox = new LinearLayout(ctx);
         inputBox.setOrientation(LinearLayout.HORIZONTAL);
         inputBox.setGravity(Gravity.CENTER_VERTICAL);
         inputBox.setTag(TAG_INPUT_BOX);
         inputBox.setFocusable(true);
         inputBox.setClickable(true);
-        float r = dp(ctx, 20);
-        inputBox.setBackground(GlassTheme.focusRounded(
-            GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_STRONG, dp(ctx, 1), r));
-        inputBox.setPadding(dp(ctx, 14), dp(ctx, 7), dp(ctx, 14), dp(ctx, 7));
+        float r = dp(ctx, 19);
+        int shadedBg = Color.argb(195, 20, 26, 38);
+        int subtleBorder = Color.argb(48, 255, 255, 255);
+        inputBox.setBackground(GlassTheme.focusRounded(shadedBg, subtleBorder, dp(ctx, 1), r));
+        inputBox.setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 6), dp(ctx, 5));
 
-        TextView icon = GlassTheme.makeText(ctx, "\u2315  ", 13f,
-            GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_BOLD, 1);
-        inputBox.addView(icon, GlassTheme.wrapParams());
+        TextView aiBadge = GlassTheme.makeText(ctx, "\u2726 AI", 9.5f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        aiBadge.setGravity(Gravity.CENTER);
+        aiBadge.setPadding(dp(ctx, 9), dp(ctx, 3.5f), dp(ctx, 9), dp(ctx, 3.5f));
+        aiBadge.setBackground(GlassTheme.solidRounded(Color.argb(38, 255, 255, 255), dp(ctx, 12)));
+        LinearLayout.LayoutParams abLp = GlassTheme.wrapParams();
+        abLp.rightMargin = dp(ctx, 10);
+        inputBox.addView(aiBadge, abLp);
 
         EditText et = new EditText(ctx);
         et.setTag(TAG_EDIT_TEXT);
-        et.setHint("Search or ask anything\u2026");
-        et.setHintTextColor(GlassTheme.TEXT_MUTED);
+        et.setHint(MULTILINGUAL_HINTS[0]);
+        et.setHintTextColor(GlassTheme.TEXT_SECONDARY);
         et.setTextColor(GlassTheme.TEXT_PRIMARY);
-        et.setTextSize(12f);
+        et.setTextSize(11.5f);
         et.setSingleLine(true);
         et.setBackground(null);
-        et.setPadding(0, 0, dp(ctx, 6), 0);
+        et.setPadding(0, 0, dp(ctx, 8), 0);
         et.setInputType(InputType.TYPE_CLASS_TEXT);
         et.setImeOptions(EditorInfo.IME_ACTION_SEARCH | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         et.setFocusable(false);
         et.setFocusableInTouchMode(false);
-        inputBox.addView(et, new LinearLayout.LayoutParams(dp(ctx, 240), ViewGroup.LayoutParams.WRAP_CONTENT));
+        inputBox.addView(et, new LinearLayout.LayoutParams(dp(ctx, 340), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // Subtle inline spinner inside the input pill when searching
         ProgressBar pb = new ProgressBar(ctx);
         int pbSize = dp(ctx, 14);
-        pb.setLayoutParams(new LinearLayout.LayoutParams(pbSize, pbSize));
-        pb.getIndeterminateDrawable().setTint(GlassTheme.GOLD_ACCENT);
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(pbSize, pbSize);
+        pbLp.rightMargin = dp(ctx, 8);
+        pb.setLayoutParams(pbLp);
+        pb.getIndeterminateDrawable().setTint(Color.WHITE);
         pb.setTag(TAG_LOADING);
         pb.setVisibility(View.GONE);
         inputBox.addView(pb);
+
+        // Right Circular Magnifying Glass Icon inside search pill
+        TextView icon = GlassTheme.makeText(ctx, "\u2315", 13.5f,
+            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
+        icon.setGravity(Gravity.CENTER);
+        icon.setBackground(GlassTheme.solidRounded(Color.argb(38, 255, 255, 255), dp(ctx, 13)));
+        inputBox.addView(icon, new LinearLayout.LayoutParams(dp(ctx, 26), dp(ctx, 26)));
 
         Runnable activateTyping = () -> {
             et.setFocusableInTouchMode(true);
@@ -246,20 +355,31 @@ public final class SearchOverlay {
         });
 
         inputBox.setOnFocusChangeListener((v, hasFocus) -> {
-            int stroke = hasFocus ? Color.WHITE : GlassTheme.BORDER_STRONG;
-            int sw = hasFocus ? dp(ctx, 2.5f) : dp(ctx, 1);
-            v.setBackground(GlassTheme.focusRounded(GlassTheme.SURFACE_ELEV, stroke, sw, r));
+            if (hasFocus) {
+                v.setBackground(GlassTheme.focusRounded(GlassTheme.SURFACE_ELEV, Color.WHITE, dp(ctx, 2.5f), r));
+                aiBadge.setBackground(GlassTheme.solidRounded(Color.WHITE, dp(ctx, 12)));
+                aiBadge.setTextColor(GlassTheme.TEXT_ON_LIGHT);
+                icon.setBackground(GlassTheme.solidRounded(Color.WHITE, dp(ctx, 13)));
+                icon.setTextColor(GlassTheme.TEXT_ON_LIGHT);
+            } else {
+                v.setBackground(GlassTheme.focusRounded(shadedBg, subtleBorder, dp(ctx, 1), r));
+                aiBadge.setBackground(GlassTheme.solidRounded(Color.argb(38, 255, 255, 255), dp(ctx, 12)));
+                aiBadge.setTextColor(GlassTheme.TEXT_PRIMARY);
+                icon.setBackground(GlassTheme.solidRounded(Color.argb(38, 255, 255, 255), dp(ctx, 13)));
+                icon.setTextColor(GlassTheme.TEXT_PRIMARY);
+            }
         });
 
         LinearLayout.LayoutParams ibLp = GlassTheme.wrapParams();
-        ibLp.rightMargin = dp(ctx, 10);
+        ibLp.rightMargin = dp(ctx, 12);
         bar.addView(inputBox, ibLp);
 
         // 2. Inline Follow-Up Pills (in the same single top bar!)
         HorizontalScrollView chipsScroll = new HorizontalScrollView(ctx);
         chipsScroll.setHorizontalScrollBarEnabled(false);
         chipsScroll.setFocusable(false);
-        chipsScroll.setClipChildren(false);
+        chipsScroll.setClipChildren(true);
+        chipsScroll.setClipToPadding(true);
         LinearLayout chipsRow = new LinearLayout(ctx);
         chipsRow.setOrientation(LinearLayout.HORIZONTAL);
         chipsRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -368,12 +488,12 @@ public final class SearchOverlay {
         List<String> list = new ArrayList<>();
         if (aiChips != null) {
             for (String c : aiChips) {
-                if (c != null && !c.trim().isEmpty() && list.size() < 4) list.add(c.trim());
+                if (c != null && !c.trim().isEmpty() && list.size() < 3) list.add(c.trim());
             }
         }
-        String[] fallbacks = {"Only on Netflix", "Shorter under 2h", "IMDb 8.0+", "Darker tone"};
+        String[] fallbacks = {"Only on Netflix", "Shorter under 2h", "IMDb 8.0+"};
         for (String f : fallbacks) {
-            if (list.size() >= 4) break;
+            if (list.size() >= 3) break;
             boolean exists = false;
             for (String s : list) {
                 if (s.equalsIgnoreCase(f)) { exists = true; break; }
@@ -449,6 +569,7 @@ public final class SearchOverlay {
         gridRows.setOrientation(LinearLayout.VERTICAL);
         gridRows.setClipChildren(false);
         gridRows.setClipToPadding(false);
+        gridRows.setPadding(0, dp(ctx, 6), 0, dp(ctx, 6));
         gridRows.setTag(TAG_RESULTS);
         sv.addView(gridRows, GlassTheme.matchWrapParams());
         return sv;
@@ -458,7 +579,7 @@ public final class SearchOverlay {
                                            JSONArray results, Context ctx, SearchCallback cb) {
         gridRows.removeAllViews();
         if (results == null || results.length() == 0) return;
-        int n = results.length();
+        int n = Math.min(results.length(), COLS * 2);
         int totalRows = (n + COLS - 1) / COLS;
 
         for (int r = 0; r < totalRows; r++) {
@@ -468,7 +589,7 @@ public final class SearchOverlay {
             rowLayout.setClipToPadding(false);
             LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rowLp.bottomMargin = dp(ctx, 16);
+            rowLp.bottomMargin = dp(ctx, 10);
             rowLayout.setLayoutParams(rowLp);
 
             for (int c = 0; c < COLS; c++) {
@@ -480,18 +601,27 @@ public final class SearchOverlay {
                             overlay, gridRows, r, c, totalRows, item, ctx, cb);
                         LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
                             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                        if (c < COLS - 1) cLp.rightMargin = dp(ctx, 14);
+                        if (c < COLS - 1) cLp.rightMargin = dp(ctx, 12);
                         card.setLayoutParams(cLp);
                         rowLayout.addView(card);
                     }
                 } else {
                     View spacer = new View(ctx);
                     LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(0, 1, 1f);
-                    if (c < COLS - 1) sLp.rightMargin = dp(ctx, 14);
+                    if (c < COLS - 1) sLp.rightMargin = dp(ctx, 12);
                     rowLayout.addView(spacer, sLp);
                 }
             }
+            rowLayout.setAlpha(0f);
+            rowLayout.setTranslationY(dp(ctx, 14));
             gridRows.addView(rowLayout);
+            rowLayout.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(r * 45L)
+                .setDuration(240)
+                .setInterpolator(GlassTheme.EASE)
+                .start();
         }
     }
 
@@ -523,57 +653,20 @@ public final class SearchOverlay {
         ivLp.setMargins(inset, inset, inset, inset);
         imgFrame.addView(iv, ivLp);
 
-        // Minimalist Platform Badge (Top-Left)
-        String app = HeroSliderBuilder.cleanPlatformName(
-            item.optString("app", item.optString("app_name", "")));
-        if (!app.isEmpty()) {
-            TextView pill = GlassTheme.makeText(ctx, app.toUpperCase(), 7.5f,
-                Color.WHITE, GlassTheme.FONT_BOLD, 1);
-            pill.setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2));
-            pill.setBackground(GlassTheme.solidRounded(HeroSliderBuilder.getPlatformColor(app), dp(ctx, 4)));
-            FrameLayout.LayoutParams pLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            pLp.gravity = Gravity.TOP | Gravity.START;
-            pLp.setMargins(dp(ctx, 6), dp(ctx, 6), 0, 0);
-            imgFrame.addView(pill, pLp);
-        }
-
-        // Minimalist Rating Pill (Top-Right)
-        String rating = HeroSliderBuilder.extractRatingText(item);
-        if (!rating.isEmpty()) {
-            TextView rBadge = GlassTheme.makeText(ctx, rating, 8.5f,
-                GlassTheme.GOLD_ACCENT, GlassTheme.FONT_BOLD, 1);
-            rBadge.setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2));
-            rBadge.setBackground(GlassTheme.solidRounded(Color.argb(220, 11, 14, 20), dp(ctx, 5)));
-            FrameLayout.LayoutParams rLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rLp.gravity = Gravity.TOP | Gravity.END;
-            rLp.setMargins(0, dp(ctx, 6), dp(ctx, 6), 0);
-            imgFrame.addView(rBadge, rLp);
-        }
-
         card.addView(imgFrame, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, POSTER_H)));
 
-        // Minimalist Title (1 line)
-        TextView title = GlassTheme.makeText(ctx, item.optString("title", ""),
-            11.5f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        title.setEllipsize(TextUtils.TruncateAt.END);
-        title.setPadding(dp(ctx, 2), dp(ctx, 6), dp(ctx, 2), 0);
-        card.addView(title, GlassTheme.matchWrapParams());
-
-        // Minimalist Subtitle (Year · Genre)
+        // Minimalist Genre / Year Caption Only (no OTT badge, no rating badge, no truncated title)
         int year = item.optInt("year", 0);
         String genres = item.optString("genres", "");
         String firstGenre = genres.isEmpty() ? "" : genres.split(",")[0].trim();
-        String sub = (year > 0 && !firstGenre.isEmpty()) ? (year + " \u00B7 " + firstGenre)
-                   : (year > 0 ? String.valueOf(year) : firstGenre);
-        if (!sub.isEmpty()) {
-            TextView subTv = GlassTheme.makeText(ctx, sub, 9.5f,
-                GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
-            subTv.setPadding(dp(ctx, 2), dp(ctx, 1), dp(ctx, 2), 0);
-            card.addView(subTv, GlassTheme.matchWrapParams());
-        }
+        String sub = (!firstGenre.isEmpty() && year > 0) ? (firstGenre + " \u00B7 " + year)
+                   : (!firstGenre.isEmpty() ? firstGenre : (year > 0 ? String.valueOf(year) : "Featured"));
+        TextView subTv = GlassTheme.makeText(ctx, sub, 9.5f,
+            GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1);
+        subTv.setGravity(Gravity.CENTER_HORIZONTAL);
+        subTv.setPadding(dp(ctx, 2), dp(ctx, 4), dp(ctx, 2), 0);
+        card.addView(subTv, GlassTheme.matchWrapParams());
 
         card.setOnClickListener(v -> {
             if (cb != null) cb.onResultClicked(item);
@@ -584,14 +677,14 @@ public final class SearchOverlay {
                 imgFrame.setBackground(GlassTheme.focusRounded(
                     GlassTheme.SURFACE_ELEV, Color.WHITE, dp(ctx, 2.5f), rad));
                 imgFrame.setElevation(dp(ctx, 14));
-                title.setTextColor(Color.WHITE);
-                v.animate().scaleX(1.05f).scaleY(1.05f).setDuration(160).setInterpolator(GlassTheme.EASE).start();
+                subTv.setTextColor(Color.WHITE);
+                v.animate().scaleX(1.04f).scaleY(1.04f).setDuration(160).setInterpolator(GlassTheme.EASE).start();
                 scrollResultIntoView(overlay, (View) v.getParent());
             } else {
                 imgFrame.setBackground(GlassTheme.focusRounded(
                     GlassTheme.SURFACE_ELEV, GlassTheme.BORDER_LIGHT, dp(ctx, 1), rad));
                 imgFrame.setElevation(0);
-                title.setTextColor(GlassTheme.TEXT_PRIMARY);
+                subTv.setTextColor(GlassTheme.TEXT_SECONDARY);
                 v.animate().scaleX(1f).scaleY(1f).setDuration(160).setInterpolator(GlassTheme.EASE).start();
             }
         });
@@ -698,13 +791,15 @@ public final class SearchOverlay {
     }
 
     private static void animateIn(FrameLayout overlay) {
+        overlay.animate().cancel();
         overlay.setAlpha(0f);
         overlay.animate().alpha(1f).setDuration(180).setInterpolator(GlassTheme.EASE).start();
     }
 
     private static void animateOut(FrameLayout overlay) {
-        overlay.animate().alpha(0f).setDuration(150).setInterpolator(GlassTheme.EASE)
-               .withEndAction(() -> overlay.setVisibility(View.GONE)).start();
+        overlay.animate().cancel();
+        overlay.setAlpha(1f);
+        overlay.setVisibility(View.GONE);
     }
 
     private static int dp(Context ctx, float v) {

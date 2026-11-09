@@ -17,10 +17,12 @@ public class SyncManager {
     }
 
     public String getTargetHostUrl() {
-        String mode = db.getSetting("server_mode", "auto");
-        if ("tv".equals(mode)) return "";
-        if ("phone".equals(mode)) return db.getSetting("phone_host", "");
-        return db.getSetting("mac_host", "");
+        // 100% self-contained on-TV mode by default (no external MacBook or phone server required)
+        String mode = db.getSetting("server_mode", "tv");
+        if ("tv".equalsIgnoreCase(mode) || "auto".equalsIgnoreCase(mode)) return "";
+        if ("phone".equalsIgnoreCase(mode)) return db.getSetting("phone_host", "");
+        if ("mac".equalsIgnoreCase(mode)) return db.getSetting("mac_host", "");
+        return "";
     }
 
     public boolean syncWithHost() {
@@ -75,13 +77,18 @@ public class SyncManager {
                 }
             }
             JSONArray hist = remote.optJSONArray("history");
-            if (hist != null && db.listHistory(profile).length() < 20) {
+            if (hist != null && db.listHistory(profile).length() < 10) {
                 android.database.sqlite.SQLiteDatabase wdb = db.getWritableDatabase();
                 wdb.beginTransaction();
                 try {
                     for (int i = 0; i < hist.length(); i++) {
                         JSONObject item = hist.optJSONObject(i);
-                        if (item != null) db.upsertWatchItem(item);
+                        if (item != null && item.optInt("position_sec", 0) >= 60) {
+                            String pkg = item.optString("app_pkg", "").toLowerCase();
+                            if (!pkg.contains("youtube") && !pkg.contains("smarttube") && !pkg.contains("stremio")) {
+                                db.upsertWatchItem(item);
+                            }
+                        }
                     }
                     wdb.setTransactionSuccessful();
                 } finally {

@@ -20,21 +20,27 @@ import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * Ultra-HD 32-bit ARGB_8888 Poster & Hero Backdrop Loader for Aura TV.
+ * Supports configurable quality tiers ("ultra", "balanced", "saver") from Aura Settings.
+ */
 public class ImageLoader {
-    private static final int RAIL_POSTER_W = 190;
-    private static final int RAIL_POSTER_H = 274;
-    private static final int HERO_POSTER_W = 460;
-    private static final int HERO_POSTER_H = 650;
-    private static final int MAX_DISK_FILES = 200;
+    private static volatile String sQualityMode = "ultra"; // "ultra" | "balanced" | "saver"
 
-    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(5120) {
+    private static final int ULTRA_RAIL_W = 360;
+    private static final int ULTRA_RAIL_H = 508;
+    private static final int ULTRA_HERO_W = 1280;
+    private static final int ULTRA_HERO_H = 720;
+    private static final int MAX_DISK_FILES = 180;
+
+    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(16384) {
         @Override
         protected int sizeOf(String key, Bitmap value) {
             return Math.max(1, value.getAllocationByteCount() / 1024);
         }
     };
 
-    private static final ExecutorService POOL = Executors.newFixedThreadPool(3, r -> {
+    private static final ExecutorService POOL = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(() -> {
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
             r.run();
@@ -44,6 +50,41 @@ public class ImageLoader {
     });
 
     private static final Handler UI = new Handler(Looper.getMainLooper());
+
+    public static void setQualityMode(String mode) {
+        if (mode != null && !mode.equalsIgnoreCase(sQualityMode)) {
+            sQualityMode = mode.toLowerCase();
+            MEM_CACHE.evictAll();
+        }
+    }
+
+    public static String getQualityMode() {
+        return sQualityMode;
+    }
+
+    public static String upgradePosterUrl(String urlStr) {
+        if (urlStr == null || urlStr.isEmpty()) return "";
+        if (urlStr.contains("/backdrop/")) return upgradeBackdropUrl(urlStr);
+        if ("saver".equals(sQualityMode)) {
+            return urlStr.replace("/s592/", "/s332/").replace("/s718/", "/s332/");
+        }
+        return urlStr.replace("/s166/", "/s718/").replace("/s332/", "/s718/").replace("/s592/", "/s718/");
+    }
+
+    private static String upgradeBackdropUrl(String urlStr) {
+        if ("saver".equals(sQualityMode)) {
+            return urlStr.replace("/s1440/", "/s640/").replace("/s1920/", "/s640/");
+        }
+        return urlStr.replace("/s640/", "/s1920/").replace("/s480/", "/s1920/").replace("/s1440/", "/s1920/");
+    }
+
+    public static String downgradeFallbackUrl(String urlStr) {
+        if (urlStr == null || urlStr.isEmpty()) return "";
+        if (urlStr.contains("/backdrop/")) {
+            return urlStr.replace("/s1920/", "/s1440/");
+        }
+        return urlStr.replace("/s718/", "/s592/");
+    }
 
     public static void applyRoundedCorners(ImageView iv, final float radiusPx) {
         iv.setOutlineProvider(new ViewOutlineProvider() {
@@ -59,8 +100,21 @@ public class ImageLoader {
         MEM_CACHE.evictAll();
     }
 
+    public static void clear(final ImageView iv) {
+        if (iv == null) return;
+        iv.animate().cancel();
+        iv.setTag(null);
+        iv.setImageBitmap(null);
+        iv.setImageDrawable(null);
+        iv.setAlpha(1f);
+    }
+
     public static void load(final Context ctx, final String urlStr, final ImageView iv) {
-        loadInternal(ctx, urlStr, urlStr, iv, RAIL_POSTER_W, RAIL_POSTER_H, "rail:");
+        String hdUrl = upgradePosterUrl(urlStr);
+        String fbUrl = downgradeFallbackUrl(hdUrl);
+        int w = "saver".equals(sQualityMode) ? 240 : ("balanced".equals(sQualityMode) ? 340 : ULTRA_RAIL_W);
+        int h = "saver".equals(sQualityMode) ? 340 : ("balanced".equals(sQualityMode) ? 480 : ULTRA_RAIL_H);
+        loadInternal(ctx, hdUrl, fbUrl, iv, w, h, "rail:" + sQualityMode + ":");
     }
 
     public static void loadHero(final Context ctx, final String urlStr, final ImageView iv) {
@@ -69,25 +123,22 @@ public class ImageLoader {
             iv.setImageBitmap(null);
             return;
         }
-        String hiResUrl = urlStr.replace("/s332/", "/s592/");
-        String heroKey = "hero:" + hiResUrl;
+        String hiResUrl = upgradePosterUrl(urlStr);
+        String fbUrl = downgradeFallbackUrl(hiResUrl);
+        String heroKey = "hero:" + sQualityMode + ":" + hiResUrl;
         Bitmap cachedHero = MEM_CACHE.get(heroKey);
         if (cachedHero != null && !cachedHero.isRecycled()) {
             iv.setTag(heroKey);
-            iv.animate().cancel();
-            iv.setAlpha(1f);
             iv.setImageBitmap(cachedHero);
             return;
         }
-        // Immediately show matching rail poster if in memory so wrong show's image never lingers
-        Bitmap cachedRail = MEM_CACHE.get("rail:" + urlStr);
+        Bitmap cachedRail = MEM_CACHE.get("rail:" + sQualityMode + ":" + hiResUrl);
         if (cachedRail != null && !cachedRail.isRecycled()) {
             iv.setImageBitmap(cachedRail);
-            iv.setAlpha(0.92f);
         } else {
             iv.setImageBitmap(null);
         }
-        loadInternal(ctx, hiResUrl, urlStr, iv, HERO_POSTER_W, HERO_POSTER_H, "hero:");
+        loadInternal(ctx, hiResUrl, fbUrl, iv, ULTRA_HERO_W, ULTRA_HERO_H, "hero:" + sQualityMode + ":");
     }
 
     private static void loadInternal(final Context ctx, final String primaryUrl, final String fallbackUrl,
@@ -98,16 +149,18 @@ public class ImageLoader {
             return;
         }
         final String cacheKey = prefix + primaryUrl;
-        if (cacheKey.equals(iv.getTag()) && iv.getDrawable() != null && !"hero:".equals(prefix)) return;
+        if (cacheKey.equals(iv.getTag()) && iv.getDrawable() != null && !prefix.startsWith("hero:")) return;
         iv.setTag(cacheKey);
         Bitmap cached = MEM_CACHE.get(cacheKey);
         if (cached != null && !cached.isRecycled()) {
-            iv.animate().cancel();
-            iv.setAlpha(1f);
+            if (!prefix.startsWith("hero:")) {
+                iv.animate().cancel();
+                iv.setAlpha(1f);
+            }
             iv.setImageBitmap(cached);
             return;
         }
-        if (!"hero:".equals(prefix)) {
+        if (!prefix.startsWith("hero:")) {
             iv.setImageBitmap(null);
         }
         POOL.submit(() -> {
@@ -122,9 +175,13 @@ public class ImageLoader {
                 final Bitmap finalBmp = bmp;
                 UI.post(() -> {
                     if (cacheKey.equals(iv.getTag())) {
-                        iv.setAlpha(0.25f);
-                        iv.setImageBitmap(finalBmp);
-                        iv.animate().alpha(1f).setDuration(180).start();
+                        if (!prefix.startsWith("hero:")) {
+                            iv.setAlpha(0.25f);
+                            iv.setImageBitmap(finalBmp);
+                            iv.animate().alpha(1f).setDuration(220).start();
+                        } else {
+                            iv.setImageBitmap(finalBmp);
+                        }
                     }
                 });
             }
@@ -133,27 +190,27 @@ public class ImageLoader {
 
     private static Bitmap loadFromDiskOrNet(Context ctx, String urlStr, int reqW, int reqH) {
         try {
-            File dir = new File(ctx.getCacheDir(), "posters_hd");
+            File dir = new File(ctx.getCacheDir(), "posters_uhd_v3");
             if (!dir.exists()) dir.mkdirs();
-            File f = new File(dir, "poster_hd_" + Math.abs(urlStr.hashCode()) + ".jpg");
-            if (f.exists() && f.length() > 400) {
+            File f = new File(dir, "poster_uhd_" + Math.abs(urlStr.hashCode()) + ".jpg");
+            if (f.exists() && f.length() > 600) {
                 f.setLastModified(System.currentTimeMillis());
-                Bitmap b = decodeCompact(f, reqW, reqH);
+                Bitmap b = decodeCrisp(f, reqW, reqH);
                 if (b != null) return b;
             }
             HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-            conn.setConnectTimeout(4000);
-            conn.setReadTimeout(4000);
+            conn.setConnectTimeout(4500);
+            conn.setReadTimeout(4500);
             conn.setRequestProperty("User-Agent", "Mozilla/5.0");
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) return null;
             try (InputStream is = conn.getInputStream(); FileOutputStream fos = new FileOutputStream(f)) {
-                byte[] buf = new byte[4096];
+                byte[] buf = new byte[8192];
                 int n;
                 while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
             }
             evictOldCacheFiles(dir);
-            return decodeCompact(f, reqW, reqH);
+            return decodeCrisp(f, reqW, reqH);
         } catch (Exception e) {
             return null;
         }
@@ -171,7 +228,7 @@ public class ImageLoader {
         } catch (Exception ignored) {}
     }
 
-    private static Bitmap decodeCompact(File f, int reqW, int reqH) {
+    private static Bitmap decodeCrisp(File f, int reqW, int reqH) {
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
@@ -184,11 +241,15 @@ public class ImageLoader {
             }
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inSampleSize = sample;
-            opts.inPreferredConfig = Bitmap.Config.RGB_565;
+            // Use full 32-bit ARGB_8888 in Ultra/Balanced modes for zero color banding and razor-sharp text
+            opts.inPreferredConfig = "saver".equals(sQualityMode)
+                ? Bitmap.Config.RGB_565
+                : Bitmap.Config.ARGB_8888;
+            opts.inScaled = false;
             Bitmap raw = BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
             if (raw == null) return null;
 
-            if (raw.getWidth() > reqW + 32) {
+            if (raw.getWidth() > reqW + 64) {
                 float scale = (float) reqW / (float) raw.getWidth();
                 int targetH = Math.max(1, Math.round(raw.getHeight() * scale));
                 Bitmap scaled = Bitmap.createScaledBitmap(raw, reqW, targetH, true);

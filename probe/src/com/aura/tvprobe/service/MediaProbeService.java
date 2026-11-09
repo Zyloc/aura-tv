@@ -54,12 +54,15 @@ public class MediaProbeService extends NotificationListenerService {
             try { Thread.sleep(45000L); } catch (Exception ignored) {}
             while (running) {
                 try {
-                    inspector.syncAndBuildState(false);
-                    sync.syncWithHost();
+                    runBackgroundTick();
                     Thread.sleep(300000L);
                 } catch (Exception ignored) {}
             }
         }, "AuraBgMonitor").start();
+    }
+
+    private void runBackgroundTick() {
+        inspector.recordActivePlaybackOnly();
     }
 
     private void startHttpServer() {

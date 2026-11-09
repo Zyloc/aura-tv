@@ -103,49 +103,141 @@ public class VoiceConcierge {
         List<String> watchedNames = collectWatchedNames(profileId);
         String contextualQuery = buildContextualQuery(turns, userText);
 
-        // Agent Step 1: Plan primary search queries + watched-show second-hop traversal seeds
-        if (progress != null) progress.onStep("Search Agent 1/3 · Planning follow-up & graph queries for \"" + userText + "\"…");
-        JSONObject searchPlan = ai.planAgentSearchStrategy(profileId, contextualQuery, watchedNames, minModernYear, currentYear);
+        // Agent Step 1: Fast Seed & Watch-History Anchor Plan
+        if (progress != null) progress.onStep("Searching across your streaming apps for \"" + userText + "\"\u2026");
+        JSONObject searchPlan = ai.buildFastSeedPlan(profileId, contextualQuery);
 
         // Agent Step 2: Execute multi-hop search & co-watched graph traversal
-        if (progress != null) progress.onStep("Search Agent 2/3 · Traversing " + minModernYear + "–" + currentYear + " streaming graph…");
+        if (progress != null) progress.onStep("Traversing " + minModernYear + "\u2013" + currentYear + " streaming graph\u2026");
         List<String> cfPool = ai.executeMultiHopTraversal(profileId, searchPlan, minModernYear);
 
         // Agent Step 3: Rank & synthesize search results + next-hop traversal chips
-        if (progress != null) progress.onStep("Search Agent 3/3 · Ranking top matches for your conversation…");
+        if (progress != null) progress.onStep("AI ranking top matches for your conversation\u2026");
         String prompt = buildPrompt(profileId, turns, userText, activeFilters, watchedNames, cfPool, minModernYear, currentYear);
         String rawJson = ai.callGeminiJson(prompt);
 
         JSONObject out = new JSONObject();
         try {
             turns.put(new JSONObject().put("role", "user").put("text", userText));
+            JSONArray finalResults = new JSONArray();
+            String reply = "Curated top matches across your streaming apps.";
+            JSONArray followUps = defaultFollowUps(currentYear);
+
             if (rawJson != null) {
                 JSONObject parsed = new JSONObject(rawJson);
-                String reply = parsed.optString("reply", "Updated picks for your search.");
-                turns.put(new JSONObject().put("role", "assistant").put("text", reply));
-                out.put("reply", reply);
-                out.put("turns", trimTurns(turns, 8));
+                reply = parsed.optString("reply", "Updated picks for your search.");
                 JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minModernYear, currentYear);
-                out.put("results", db.filterOutWatched(enriched));
-                JSONArray followUps = parsed.optJSONArray("follow_ups");
-                if (followUps != null && followUps.length() > 0) {
-                    db.saveTraversalChips(profileId, followUps);
-                    out.put("follow_ups", followUps);
-                } else {
-                    out.put("follow_ups", defaultFollowUps(currentYear));
+                finalResults = applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters);
+                JSONArray parsedFollowUps = parsed.optJSONArray("follow_ups");
+                if (parsedFollowUps != null && parsedFollowUps.length() > 0) {
+                    followUps = parsedFollowUps;
                 }
-            } else {
-                String reply = "Matched '" + contextualQuery + "' via JustWatch India graph.";
-                turns.put(new JSONObject().put("role", "assistant").put("text", reply));
-                out.put("reply", reply);
-                out.put("turns", trimTurns(turns, 8));
-                JSONArray jwHits = JustWatchGraph.fetchDeterministicSearchCandidates(contextualQuery, minModernYear);
-                out.put("results", jwHits.length() > 0 ? db.filterOutWatched(jwHits) : db.getProfileRecommendations(profileId));
-                out.put("follow_ups", defaultFollowUps(currentYear));
             }
+
+            if (finalResults.length() < 6) {
+                JSONArray sotaFallback = buildDeterministicSotaSearch(profileId, userText, contextualQuery, minModernYear);
+                sotaFallback = applyConversationalConstraints(db.filterOutWatched(sotaFallback), userText, activeFilters);
+                java.util.Set<String> seen = new java.util.HashSet<>();
+                for (int i = 0; i < finalResults.length(); i++) {
+                    JSONObject item = finalResults.optJSONObject(i);
+                    if (item != null) seen.add(AuraDb.normalizeTitleKey(item.optString("title", "")));
+                }
+                for (int i = 0; i < sotaFallback.length() && finalResults.length() < 16; i++) {
+                    JSONObject item = sotaFallback.optJSONObject(i);
+                    if (item == null) continue;
+                    String key = AuraDb.normalizeTitleKey(item.optString("title", ""));
+                    if (!key.isEmpty() && seen.add(key)) {
+                        finalResults.put(item);
+                    }
+                }
+                if (rawJson == null) {
+                    reply = "Ranked top matches for \"" + userText + "\" by taste similarity & Bayesian IMDb.";
+                }
+            }
+
+            turns.put(new JSONObject().put("role", "assistant").put("text", reply));
+            out.put("reply", reply);
+            out.put("turns", trimTurns(turns, 8));
+            out.put("results", finalResults);
+            db.saveTraversalChips(profileId, followUps);
+            out.put("follow_ups", followUps);
             db.saveVoiceSession(profileId, out);
         } catch (Exception ignored) {}
         return db.getVoiceSession(profileId);
+    }
+
+    private JSONArray buildDeterministicSotaSearch(String profileId, String userText, String contextualQuery, int minModernYear) {
+        String low = userText == null ? "" : userText.toLowerCase();
+        if (low.startsWith("more like ") || low.startsWith("similar to ")) {
+            String seed = userText.replaceFirst("(?i)^(more like|similar to)\\s+", "").trim();
+            if (!seed.isEmpty()) {
+                JSONArray sim = ai.traverseSimilarToWatched(profileId, seed, null);
+                if (sim != null && sim.length() > 0) return sim;
+            }
+        }
+        List<String> genres = new ArrayList<>();
+        if (low.contains("sci-fi") || low.contains("scifi") || low.contains("science")) genres.add("scf");
+        if (low.contains("thriller") || low.contains("suspense") || low.contains("mystery") || low.contains("dark")) genres.add("trl");
+        if (low.contains("crime") || low.contains("detective")) genres.add("crm");
+        if (low.contains("action") || low.contains("fast")) genres.add("act");
+        if (low.contains("horror") || low.contains("scary")) genres.add("hrr");
+        if (low.contains("comedy") || low.contains("funny")) genres.add("cmy");
+        if (low.contains("romance") || low.contains("romantic")) genres.add("rma");
+        if (low.contains("drama")) genres.add("drm");
+        if (low.contains("anime") || low.contains("animation")) genres.add("ani");
+
+        List<JSONObject> pool = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        if (!genres.isEmpty()) {
+            JSONArray structured = JustWatchGraph.fetchStructuredGenreCandidates(genres, null, Math.max(minModernYear, JustWatchGraph.getCurrentYear() - 3), JustWatchGraph.getCurrentYear());
+            for (int i = 0; i < structured.length(); i++) {
+                JSONObject o = structured.optJSONObject(i);
+                if (o != null && seen.add(AuraDb.normalizeTitleKey(o.optString("title", "")))) pool.add(o);
+            }
+        }
+        JSONArray direct = JustWatchGraph.fetchDeterministicSearchCandidates(contextualQuery, minModernYear);
+        for (int i = 0; i < direct.length(); i++) {
+            JSONObject o = direct.optJSONObject(i);
+            if (o != null && seen.add(AuraDb.normalizeTitleKey(o.optString("title", "")))) pool.add(o);
+        }
+        pool.sort((a, b) -> Double.compare(
+            JustWatchGraph.computeBayesianImdb(b),
+            JustWatchGraph.computeBayesianImdb(a)
+        ));
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < Math.min(16, pool.size()); i++) out.put(pool.get(i));
+        return out.length() > 0 ? out : db.getProfileRecommendations(profileId);
+    }
+
+    private JSONArray applyConversationalConstraints(JSONArray items, String userText, List<String> activeFilters) {
+        if (items == null || items.length() == 0) return new JSONArray();
+        String combined = ((userText == null ? "" : userText) + " " + (activeFilters == null ? "" : activeFilters.toString())).toLowerCase();
+        boolean filterNetflix = combined.contains("netflix");
+        boolean filterPrime = combined.contains("prime");
+        boolean filterHotstar = combined.contains("hotstar") || combined.contains("jio");
+        boolean filterApple = combined.contains("apple");
+        boolean hasPlatformConstraint = filterNetflix || filterPrime || filterHotstar || filterApple;
+        boolean underTwoHours = combined.contains("under 2 hours") || combined.contains("shorter") || combined.contains("< 120");
+
+        JSONArray filtered = new JSONArray();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item == null) continue;
+            if (hasPlatformConstraint) {
+                String app = item.optString("app", "").toLowerCase();
+                boolean match = (filterNetflix && app.contains("netflix"))
+                    || (filterPrime && app.contains("prime"))
+                    || (filterHotstar && (app.contains("hotstar") || app.contains("jio")))
+                    || (filterApple && app.contains("apple"));
+                if (!match) continue;
+            }
+            if (underTwoHours) {
+                int rt = item.optInt("runtime_min", 100);
+                if (rt > 125) continue;
+            }
+            filtered.put(item);
+        }
+        return filtered.length() >= 3 ? filtered : items;
     }
 
     private String buildContextualQuery(JSONArray turns, String currentQuery) {

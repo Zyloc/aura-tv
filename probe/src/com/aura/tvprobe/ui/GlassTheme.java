@@ -36,13 +36,13 @@ public final class GlassTheme {
     public static final int TEXT_HINT      = 0xFF64748B;
     public static final int TEXT_ON_LIGHT  = 0xFF0B0E14;
 
-    // ── Professional Accent & Focus (Crisp Platinum White + Warm Gold) ───
+    // ── Professional Accent & Focus (Crisp Platinum White & Frosted Silver) ─
     public static final int ACCENT       = 0xFFF8FAFC;
     public static final int ACCENT_FOCUS = 0xFFFFFFFF;
     public static final int ACCENT_LIGHT = Color.argb(42, 248, 250, 252);
     public static final int ACCENT_BG    = Color.argb(32, 248, 250, 252);
     public static final int FOCUS_RING   = 0xFFFFFFFF;
-    public static final int GOLD_ACCENT  = 0xFFF59E0B;
+    public static final int GOLD_ACCENT  = 0xFFE2E8F0;
 
     // ── Platform colors ──────────────────────────────────────────────────
     public static final int COLOR_NETFLIX  = 0xFFE50914;
@@ -54,9 +54,9 @@ public final class GlassTheme {
     public static final int COLOR_ZEE5     = 0xFF9333EA;
 
     // ── Utility colors ───────────────────────────────────────────────────
-    public static final int COLOR_IMDB    = 0xFFF59E0B;
+    public static final int COLOR_IMDB    = 0xFFE2E8F0;
     public static final int COLOR_SUCCESS = 0xFF10B981;
-    public static final int COLOR_WARN    = 0xFFF59E0B;
+    public static final int COLOR_WARN    = 0xFFCBD5E1;
 
     // ── Borders / dividers (Subtle specular glass hairlines) ─────────────
     public static final int BORDER_LIGHT  = Color.argb(34, 255, 255, 255);
@@ -74,9 +74,9 @@ public final class GlassTheme {
     // ── Dimension constants (dp) ─────────────────────────────────────────
     public static final int NAV_COLLAPSED_W = 52;
     public static final int NAV_EXPANDED_W  = 228;
-    public static final int HERO_HEIGHT     = 212;
-    public static final int POSTER_W        = 122;
-    public static final int POSTER_H        = 174;
+    public static final int HERO_HEIGHT     = 264;
+    public static final int POSTER_W        = 120;
+    public static final int POSTER_H        = 168;
 
     public static int dp(Context ctx, float dp) {
         float density = ctx.getResources().getDisplayMetrics().density;

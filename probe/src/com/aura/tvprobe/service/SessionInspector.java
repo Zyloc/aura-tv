@@ -35,6 +35,22 @@ public class SessionInspector {
         this.sync = new SyncManager(db);
     }
 
+    public boolean isMediaActivelyPlaying() {
+        JSONArray sessions = getMediaSessions();
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject s = sessions.optJSONObject(i);
+            if (s != null && s.optInt("state") == PlaybackState.STATE_PLAYING) return true;
+        }
+        return false;
+    }
+
+    public void recordActivePlaybackOnly() {
+        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        JSONObject raw = new JSONObject();
+        try { raw.put("sessions", getMediaSessions()); } catch (Exception ignored) {}
+        resolveNowPlaying(raw, profile);
+    }
+
     public JSONObject inspectAll() {
         JSONObject root = new JSONObject();
         try {
@@ -53,6 +69,9 @@ public class SessionInspector {
         String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
         JSONArray history = db.listHistory(profile);
         JSONArray recos = db.getProfileRecommendations(profile);
+        if (recos.length() == 0) {
+            recos = ai.getBuiltInSotaSeedCatalog(profile);
+        }
         JSONObject nowPlaying = history.length() > 0 ? history.optJSONObject(0) : new JSONObject();
         JSONObject out = new JSONObject();
         try {
@@ -73,31 +92,42 @@ public class SessionInspector {
         return out;
     }
 
-    public JSONObject syncAndBuildState(boolean forceAiRefresh) {
-        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+    public JSONObject syncProvidersAndNowPlaying(String profile) {
         long nowMs = System.currentTimeMillis();
-        JSONObject raw;
-        if (forceAiRefresh || (nowMs - lastProviderSyncMs) > 60000L || db.listHistory(profile).length() == 0) {
+        JSONObject raw = new JSONObject();
+        if ((nowMs - lastProviderSyncMs) > 60000L || db.listHistory(profile).length() == 0) {
             raw = inspectAll();
             syncProviderToLocalDb(raw);
             db.enforceStorageCap();
             lastProviderSyncMs = nowMs;
         } else {
-            raw = new JSONObject();
-            try {
-                raw.put("foreground_pkg", getForegroundPackage());
-                raw.put("sessions", getMediaSessions());
-            } catch (Exception ignored) {}
+            populateLightweightSessionSnapshot(raw);
         }
+        return resolveNowPlaying(raw, profile);
+    }
 
-        JSONObject nowPlaying = resolveNowPlaying(raw, profile);
+    private void populateLightweightSessionSnapshot(JSONObject raw) {
+        try {
+            raw.put("foreground_pkg", getForegroundPackage());
+            raw.put("sessions", getMediaSessions());
+        } catch (Exception ignored) {}
+    }
+
+    public JSONObject syncAndBuildState(boolean forceAiRefresh) {
+        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        if (forceAiRefresh) lastProviderSyncMs = 0L;
+        JSONObject nowPlaying = syncProvidersAndNowPlaying(profile);
         JSONArray history = db.listHistory(profile);
         boolean wasFresh = db.isRecoCacheFresh(profile);
         JSONArray recos = ai.getOrRefreshForProfile(profile, nowPlaying, history, forceAiRefresh);
         if (forceAiRefresh || !wasFresh) {
             new TvChannelPublisher(ctx).publishRecommendations(recos);
         }
+        return assembleStateResponse(profile, nowPlaying, recos, history);
+    }
 
+    private JSONObject assembleStateResponse(String profile, JSONObject nowPlaying,
+                                             JSONArray recos, JSONArray history) {
         JSONObject out = new JSONObject();
         try {
             out.put("online", true);
@@ -105,7 +135,7 @@ public class SessionInspector {
             out.put("server_mode", db.getSetting("server_mode", "auto"));
             out.put("host_url", sync.getTargetHostUrl());
             out.put("cache_age_sec", db.getRecoCacheAgeSec(profile));
-            out.put("foreground_pkg", raw.optString("foreground_pkg"));
+            out.put("foreground_pkg", getForegroundPackage());
             out.put("now_playing", nowPlaying);
             out.put("recommendations", recos);
             out.put("watched_items", db.listManuallyWatched());
@@ -129,11 +159,57 @@ public class SessionInspector {
         android.database.sqlite.SQLiteDatabase wdb = db.getWritableDatabase();
         wdb.beginTransaction();
         try {
-            // Only ingest watch_next_program which carries verified last_engagement_time_utc_millis
+            // Ingest verified watch_next_program rows engaged within the last 90 days
             ingestRows(raw.optJSONArray("watch_next"), chMap, "Watch Next");
+            ingestNetflixContinueWatching(raw.optJSONArray("preview_programs"));
             wdb.setTransactionSuccessful();
         } finally {
             wdb.endTransaction();
+        }
+    }
+
+    private void ingestNetflixContinueWatching(JSONArray rows) {
+        if (rows == null) return;
+        long nowSec = System.currentTimeMillis() / 1000L;
+        for (int i = rows.length() - 1; i >= 0; i--) {
+            JSONObject r = rows.optJSONObject(i);
+            if (r == null) continue;
+            String pkg = r.optString("package_name", "");
+            String intentUri = r.optString("intent_uri", "");
+            if (!pkg.contains("netflix")) continue;
+            if (!intentUri.toLowerCase().contains("continuewatching")) continue;
+            String title = r.optString("title", "").trim();
+            if (title.isEmpty() || title.equalsIgnoreCase("Netflix")) continue;
+
+            // Extract expireAt from Netflix deeplink (expireAt is updated_at + 86400s)
+            long updatedSec = nowSec - 1800L;
+            try {
+                int expIdx = intentUri.indexOf("expireAt%3D");
+                if (expIdx >= 0) {
+                    int start = expIdx + 11;
+                    int end = intentUri.indexOf("%26", start);
+                    if (end < 0) end = Math.min(intentUri.length(), start + 10);
+                    long expSec = Long.parseLong(intentUri.substring(start, end));
+                    if (expSec > 1700000000L) updatedSec = expSec - 86400L;
+                }
+            } catch (Exception ignored) {}
+
+            JSONObject item = new JSONObject();
+            try {
+                item.put("media_key", ("com.netflix.ninja:" + title + ":").toLowerCase());
+                item.put("app_pkg", "com.netflix.ninja");
+                item.put("app_name", "Netflix");
+                item.put("title", title);
+                item.put("series_title", "");
+                item.put("synopsis", r.optString("short_description"));
+                item.put("poster_url", r.optString("poster_art_uri"));
+                item.put("runtime_min", 50);
+                item.put("launch_uri", intentUri);
+                item.put("position_sec", 1350);
+                item.put("duration_sec", 3000);
+                item.put("updated_at", updatedSec);
+                db.upsertWatchItem(item);
+            } catch (Exception ignored) {}
         }
     }
 
@@ -219,29 +295,52 @@ public class SessionInspector {
             out.put("duration_sec", durMs > 0 ? (int) (durMs / 1000L) : 3600);
 
             if (mediaId.startsWith("amzn1.dv.gti.")) {
-                JSONObject p = ai.resolvePrimeGti(mediaId);
-                out.put("series_title", p.optString("series_title"));
-                out.put("title", p.optString("title"));
-                out.put("episode", p.optInt("episode"));
-                out.put("season", p.optInt("season", 1));
-                out.put("synopsis", p.optString("synopsis"));
-                out.put("poster_url", p.optString("poster_url"));
-                out.put("genres", p.optString("genres"));
-                out.put("runtime_min", p.optInt("runtime_min", 60));
+                populatePrimeSessionMetadata(out, mediaId);
             } else {
-                String t = meta.optString("android.media.metadata.TITLE", meta.optString("android.media.metadata.DISPLAY_TITLE", friendlyApp(pkg)));
-                out.put("title", t);
-                out.put("series_title", meta.optString("android.media.metadata.ARTIST"));
-                out.put("poster_url", meta.optString("android.media.metadata.ALBUM_ART_URI"));
+                populateGenericSessionMetadata(out, meta, pkg);
             }
             String checkTitle = out.optString("series_title").isEmpty() ? out.optString("title") : out.optString("series_title");
             if (!checkTitle.isEmpty() && !checkTitle.equalsIgnoreCase(friendlyApp(pkg))
                     && !pkg.contains("youtube") && !pkg.contains("smarttube")) {
+                enrichFromLocalCache(out, checkTitle);
                 out.put("media_key", (pkg + ":" + out.optString("series_title") + ":" + out.optString("title")).toLowerCase());
                 db.upsertWatchItem(out);
             }
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private void populatePrimeSessionMetadata(JSONObject out, String mediaId) throws Exception {
+        JSONObject p = ai.resolvePrimeGti(mediaId);
+        out.put("series_title", p.optString("series_title"));
+        out.put("title", p.optString("title"));
+        out.put("episode", p.optInt("episode"));
+        out.put("season", p.optInt("season", 1));
+        out.put("synopsis", p.optString("synopsis"));
+        out.put("poster_url", p.optString("poster_url"));
+        out.put("genres", p.optString("genres"));
+        out.put("runtime_min", p.optInt("runtime_min", 60));
+        out.put("launch_uri", "https://app.primevideo.com/watch?gti=" + mediaId);
+    }
+
+    private void populateGenericSessionMetadata(JSONObject out, JSONObject meta, String pkg) throws Exception {
+        String t = meta.optString("android.media.metadata.TITLE",
+            meta.optString("android.media.metadata.DISPLAY_TITLE", friendlyApp(pkg)));
+        out.put("title", t);
+        out.put("series_title", meta.optString("android.media.metadata.ARTIST"));
+        out.put("poster_url", meta.optString("android.media.metadata.ALBUM_ART_URI"));
+    }
+
+    private void enrichFromLocalCache(JSONObject out, String title) {
+        try {
+            String cached = db.getCachedGti("jw_imdb_v6:" + title.trim().toLowerCase());
+            if (cached == null) return;
+            JSONObject c = new JSONObject(cached);
+            if (out.optString("launch_uri").isEmpty()) out.put("launch_uri", c.optString("launch_uri"));
+            if (out.optString("poster_url").isEmpty()) out.put("poster_url", c.optString("poster_url"));
+            if (out.optString("genres").isEmpty()) out.put("genres", c.optString("genres"));
+            if (out.optString("synopsis").isEmpty()) out.put("synopsis", c.optString("synopsis"));
+        } catch (Exception ignored) {}
     }
 
     public static String friendlyApp(String pkg) {
@@ -250,8 +349,9 @@ public class SessionInspector {
         if (pkg.contains("smarttube")) return "SmartTube";
         if (pkg.contains("youtube")) return "YouTube";
         if (pkg.contains("hotstar")) return "Disney+ Hotstar";
-        if (pkg.contains("appletv")) return "Apple TV+";
+        if (pkg.contains("appletv") || pkg.contains("apple.atve")) return "Apple TV+";
         if (pkg.contains("xstream")) return "Airtel Xstream";
+        if (pkg.contains("sonyliv")) return "SonyLIV";
         if (pkg.contains("stremio")) return "Stremio";
         if (pkg.contains("graymatrix")) return "ZEE5";
         if (pkg.contains("mxtech")) return "MX Player";

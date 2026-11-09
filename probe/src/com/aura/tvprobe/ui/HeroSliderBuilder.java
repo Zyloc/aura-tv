@@ -6,9 +6,12 @@ import android.graphics.Outline;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.animation.Interpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -19,12 +22,13 @@ import java.util.List;
 
 /**
  * Interactive Dark-Glass Hero Carousel for Aura TV.
- * Persistent buttons guarantee clicking Prev/Next never resets D-pad focus,
- * and every slide immediately displays its own matching artwork.
+ * Uses dual crossfading + parallax backdrop ImageViews, animated metadata transitions,
+ * a topmost 4-sided platinum focus border overlay, and deterministic D-pad routing.
  */
 public final class HeroSliderBuilder {
 
-    private static final int AUTO_INTERVAL = 8000;
+    private static final int AUTO_INTERVAL = 7500;
+    private static final Interpolator HERO_EASE = new PathInterpolator(0.22f, 1f, 0.36f, 1f);
 
     private static final class HeroState {
         List<JSONObject> items = new ArrayList<>();
@@ -32,15 +36,17 @@ public final class HeroSliderBuilder {
         JSONObject currentItem;
         Runnable runnable;
         HeroCallback callback;
-        ImageView bgImage;
+        ImageView bgImageA;
+        ImageView bgImageB;
+        boolean activeIsA = true;
         LinearLayout infoCol;
         TextView tagView;
         TextView metaView;
         TextView titleView;
         TextView synopsisView;
         TextView provenanceView;
-        TextView watchBtn;
         LinearLayout dotsRow;
+        View focusBorderOverlay;
     }
 
     public interface HeroCallback {
@@ -49,6 +55,8 @@ public final class HeroSliderBuilder {
         void onSimilarClicked(JSONObject item);
         void onMoreClicked(JSONObject item);
         void onSlideChanged(int index);
+        default void onMoveUpToTopBar() {}
+        default void onMoveDownToFirstRail() {}
     }
 
     public static FrameLayout build(Context ctx, HeroCallback callback) {
@@ -56,16 +64,17 @@ public final class HeroSliderBuilder {
         HeroState st = new HeroState();
         st.callback = callback;
         hero.setTag(st);
-        addBackgroundLayer(hero, st, ctx);
+        addBackgroundLayers(hero, st, ctx);
         addGradientOverlays(hero, ctx);
         addInfoOverlay(hero, st, ctx);
         addSlideDotsLayer(hero, st, ctx);
+        addTopmostFocusBorderOverlay(hero, st, ctx);
+        bindHeroCardInteraction(hero, st, ctx);
         return hero;
     }
 
     public static void requestInitialFocus(FrameLayout hero) {
-        HeroState st = getState(hero);
-        if (st.watchBtn != null) st.watchBtn.requestFocus();
+        if (hero != null) hero.requestFocus();
     }
 
     public static void setItems(FrameLayout hero, List<JSONObject> items,
@@ -74,7 +83,7 @@ public final class HeroSliderBuilder {
         st.items = items != null ? new ArrayList<>(items) : new ArrayList<>();
         st.index = 0;
         if (callback != null) st.callback = callback;
-        if (!st.items.isEmpty()) showSlide(hero, 0, ctx, false);
+        if (!st.items.isEmpty()) showSlide(hero, 0, 0, ctx, false);
     }
 
     public static void showItemDirect(FrameLayout hero, JSONObject item,
@@ -82,9 +91,13 @@ public final class HeroSliderBuilder {
         if (item == null) return;
         HeroState st = getState(hero);
         if (callback != null) st.callback = callback;
+        if (st.currentItem != null &&
+                item.optString("title", "").equalsIgnoreCase(st.currentItem.optString("title", ""))) {
+            return;
+        }
         st.currentItem = item;
         syncIndexIfMatching(st, item);
-        bindItemToViews(hero, st, item, ctx, true);
+        bindItemToViews(hero, st, item, 1, ctx, true);
         updateDots(st, st.index, st.items.size(), ctx);
     }
 
@@ -92,14 +105,14 @@ public final class HeroSliderBuilder {
         HeroState st = getState(hero);
         if (st.items.isEmpty()) return;
         st.index = (st.index + 1) % st.items.size();
-        showSlide(hero, st.index, hero.getContext(), true);
+        showSlide(hero, st.index, 1, hero.getContext(), true);
     }
 
     public static void prevSlide(FrameLayout hero) {
         HeroState st = getState(hero);
         if (st.items.isEmpty()) return;
         st.index = (st.index - 1 + st.items.size()) % st.items.size();
-        showSlide(hero, st.index, hero.getContext(), true);
+        showSlide(hero, st.index, -1, hero.getContext(), true);
     }
 
     public static void startAutoRotate(FrameLayout hero, Handler handler) {
@@ -108,9 +121,7 @@ public final class HeroSliderBuilder {
         st.runnable = new Runnable() {
             @Override
             public void run() {
-                if (!hero.hasFocus()) {
-                    nextSlide(hero);
-                }
+                nextSlide(hero);
                 handler.postDelayed(this, AUTO_INTERVAL);
             }
         };
@@ -144,12 +155,13 @@ public final class HeroSliderBuilder {
         int h = dp(ctx, GlassTheme.HERO_HEIGHT);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, h);
-        lp.setMargins(dp(ctx, 14), dp(ctx, 4), dp(ctx, 14), dp(ctx, 6));
+        lp.setMargins(dp(ctx, 20), dp(ctx, 4), dp(ctx, 20), dp(ctx, 8));
         hero.setLayoutParams(lp);
         float radius = dp(ctx, 18);
-        hero.setBackground(GlassTheme.focusRounded(
-            GlassTheme.BG_HERO_DARK, GlassTheme.BORDER_STRONG, 1, radius));
-        hero.setElevation(dp(ctx, 8));
+        hero.setBackground(GlassTheme.solidRounded(GlassTheme.BG_HERO_DARK, radius));
+        hero.setElevation(dp(ctx, 10));
+        hero.setFocusable(true);
+        hero.setClickable(true);
         hero.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
@@ -161,14 +173,79 @@ public final class HeroSliderBuilder {
         return hero;
     }
 
-    private static void addBackgroundLayer(FrameLayout hero, HeroState st, Context ctx) {
-        ImageView bg = new ImageView(ctx);
-        bg.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        bg.setBackgroundColor(GlassTheme.BG_HERO_DARK);
-        st.bgImage = bg;
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-            dp(ctx, 420), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END);
-        hero.addView(bg, lp);
+    private static void addTopmostFocusBorderOverlay(FrameLayout hero, HeroState st, Context ctx) {
+        View border = new View(ctx);
+        border.setFocusable(false);
+        border.setClickable(false);
+        float radius = dp(ctx, 18);
+        border.setBackground(GlassTheme.focusRounded(
+            Color.TRANSPARENT, GlassTheme.BORDER_STRONG, dp(ctx, 1), radius));
+        st.focusBorderOverlay = border;
+        hero.addView(border, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private static void bindHeroCardInteraction(FrameLayout hero, HeroState st, Context ctx) {
+        float radius = dp(ctx, 18);
+        hero.setOnClickListener(v -> {
+            if (st.callback != null && st.currentItem != null) {
+                st.callback.onMoreClicked(st.currentItem);
+            }
+        });
+        hero.setOnFocusChangeListener((v, focused) -> {
+            if (st.focusBorderOverlay != null) {
+                int stroke = focused ? Color.WHITE : GlassTheme.BORDER_STRONG;
+                int sw = focused ? GlassTheme.dp(ctx, 2.5f) : dp(ctx, 1);
+                st.focusBorderOverlay.setBackground(
+                    GlassTheme.focusRounded(Color.TRANSPARENT, stroke, sw, radius));
+            }
+            hero.setElevation(focused ? dp(ctx, 16) : dp(ctx, 8));
+            hero.animate()
+                .scaleX(focused ? 1.012f : 1.0f)
+                .scaleY(focused ? 1.012f : 1.0f)
+                .setDuration(220)
+                .setInterpolator(HERO_EASE)
+                .start();
+        });
+        hero.setOnKeyListener((v, code, ev) -> {
+            if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                nextSlide(hero);
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
+                prevSlide(hero);
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_DPAD_UP) {
+                if (st.callback != null) st.callback.onMoveUpToTopBar();
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (st.callback != null) st.callback.onMoveDownToFirstRail();
+                return true;
+            }
+            return false;
+        });
+    }
+
+    private static void addBackgroundLayers(FrameLayout hero, HeroState st, Context ctx) {
+        FrameLayout.LayoutParams lpA = new FrameLayout.LayoutParams(
+            dp(ctx, 620), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END);
+        ImageView bgA = new ImageView(ctx);
+        bgA.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bgA.setBackgroundColor(GlassTheme.BG_HERO_DARK);
+        st.bgImageA = bgA;
+        hero.addView(bgA, lpA);
+
+        FrameLayout.LayoutParams lpB = new FrameLayout.LayoutParams(
+            dp(ctx, 620), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END);
+        ImageView bgB = new ImageView(ctx);
+        bgB.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bgB.setBackgroundColor(Color.TRANSPARENT);
+        bgB.setAlpha(0f);
+        st.bgImageB = bgB;
+        hero.addView(bgB, lpB);
     }
 
     private static void addGradientOverlays(FrameLayout hero, Context ctx) {
@@ -177,14 +254,14 @@ public final class HeroSliderBuilder {
             GradientDrawable.Orientation.LEFT_RIGHT,
             new int[]{
                 GlassTheme.BG_HERO_DARK,
-                Color.argb(235, 19, 24, 34),
+                Color.argb(245, 19, 24, 34),
                 Color.argb(140, 19, 24, 34),
                 Color.TRANSPARENT
             });
         leftFade.setBackground(gd);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-            dp(ctx, 300), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END);
-        lp.rightMargin = dp(ctx, 125);
+            dp(ctx, 360), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END);
+        lp.rightMargin = dp(ctx, 260);
         hero.addView(leftFade, lp);
 
         View bottomFade = new View(ctx);
@@ -193,36 +270,35 @@ public final class HeroSliderBuilder {
             new int[]{GlassTheme.BG_HERO_DARK, Color.TRANSPARENT});
         bottomFade.setBackground(bgd);
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 48), Gravity.BOTTOM);
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 54), Gravity.BOTTOM);
         hero.addView(bottomFade, blp);
     }
 
     private static void addInfoOverlay(FrameLayout hero, HeroState st, Context ctx) {
         LinearLayout info = new LinearLayout(ctx);
         info.setOrientation(LinearLayout.VERTICAL);
-        info.setGravity(Gravity.CENTER_VERTICAL);
+        info.setGravity(Gravity.BOTTOM);
         info.setClipChildren(false);
         info.setClipToPadding(false);
         st.infoCol = info;
 
         buildBadgeMetaRow(info, st, ctx);
-        st.titleView = GlassTheme.makeText(ctx, "", 25f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        st.titleView.setPadding(0, dp(ctx, 4), 0, dp(ctx, 2));
+        st.titleView = GlassTheme.makeText(ctx, "", 28f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 2);
+        st.titleView.setPadding(0, 0, 0, dp(ctx, 6));
         info.addView(st.titleView, GlassTheme.wrapParams());
 
-        st.synopsisView = GlassTheme.makeText(ctx, "", 11.5f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_REGULAR, 2);
-        st.synopsisView.setPadding(0, 0, 0, dp(ctx, 3));
+        st.synopsisView = GlassTheme.makeText(ctx, "", 12.5f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_REGULAR, 3);
+        st.synopsisView.setLineSpacing(0, 1.2f);
+        st.synopsisView.setPadding(0, 0, 0, dp(ctx, 4));
         info.addView(st.synopsisView, GlassTheme.matchWrapParams());
 
         st.provenanceView = GlassTheme.makeText(ctx, "", 10f, GlassTheme.GOLD_ACCENT, GlassTheme.FONT_MEDIUM, 1);
-        st.provenanceView.setPadding(0, 0, 0, dp(ctx, 8));
+        st.provenanceView.setVisibility(View.GONE);
         info.addView(st.provenanceView, GlassTheme.matchWrapParams());
 
-        buildActionButtonsRow(hero, info, st, ctx);
-
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-            dp(ctx, 560), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START);
-        lp.setMargins(dp(ctx, 22), dp(ctx, 8), 0, dp(ctx, 8));
+            dp(ctx, 510), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START);
+        lp.setMargins(dp(ctx, 28), dp(ctx, 16), 0, dp(ctx, 20));
         hero.addView(info, lp);
     }
 
@@ -230,54 +306,16 @@ public final class HeroSliderBuilder {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setVisibility(View.GONE);
 
-        st.tagView = GlassTheme.makeText(ctx, "STREAMING", 9f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
-        st.tagView.setPadding(dp(ctx, 8), dp(ctx, 3), dp(ctx, 8), dp(ctx, 3));
-        st.tagView.setBackground(GlassTheme.solidRounded(GlassTheme.COLOR_NETFLIX, dp(ctx, 5)));
+        st.tagView = GlassTheme.makeText(ctx, "STREAMING", 9.5f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
+        st.tagView.setVisibility(View.GONE);
         row.addView(st.tagView, GlassTheme.wrapParams());
 
-        st.metaView = GlassTheme.makeText(ctx, "", 11f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_BOLD, 1);
+        st.metaView = GlassTheme.makeText(ctx, "", 11.5f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_BOLD, 1);
+        st.metaView.setVisibility(View.GONE);
         row.addView(st.metaView, GlassTheme.wrapParams());
         info.addView(row, GlassTheme.wrapParams());
-    }
-
-    private static void buildActionButtonsRow(FrameLayout hero, LinearLayout info,
-                                               HeroState st, Context ctx) {
-        LinearLayout row = new LinearLayout(ctx);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setClipChildren(false);
-        row.setClipToPadding(false);
-        row.setPadding(dp(ctx, 2), dp(ctx, 2), dp(ctx, 4), dp(ctx, 4));
-
-        st.watchBtn = GlassTheme.makePrimaryButton(ctx, "\u25B6 Watch Now");
-        addBtn(row, st.watchBtn, v -> {
-            if (st.callback != null && st.currentItem != null) st.callback.onWatchClicked(st.currentItem);
-        }, ctx);
-
-        addBtn(row, GlassTheme.makeGlassButton(ctx, "\u2713 Watched"), v -> {
-            if (st.callback != null && st.currentItem != null) st.callback.onWatchedClicked(st.currentItem);
-        }, ctx);
-
-        addBtn(row, GlassTheme.makeGlassButton(ctx, "\u22EF Details"), v -> {
-            if (st.callback != null && st.currentItem != null) st.callback.onMoreClicked(st.currentItem);
-        }, ctx);
-
-        addBtn(row, GlassTheme.makeGlassButton(ctx, "\u2039 Prev"), v -> prevSlide(hero), ctx);
-        addBtn(row, GlassTheme.makeGlassButton(ctx, "Next \u203A"), v -> nextSlide(hero), ctx);
-
-        info.addView(row, GlassTheme.wrapParams());
-    }
-
-    private static void addBtn(LinearLayout row, TextView btn,
-                                View.OnClickListener click, Context ctx) {
-        btn.setTextSize(11f);
-        int h = dp(ctx, 11), v = dp(ctx, 6);
-        btn.setPadding(h, v, h, v);
-        btn.setOnClickListener(click);
-        LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
-        lp.setMargins(0, 0, dp(ctx, 8), 0);
-        row.addView(btn, lp);
     }
 
     private static void addSlideDotsLayer(FrameLayout hero, HeroState st, Context ctx) {
@@ -288,38 +326,49 @@ public final class HeroSliderBuilder {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.BOTTOM | Gravity.END;
-        lp.setMargins(0, 0, dp(ctx, 18), dp(ctx, 12));
+        lp.setMargins(0, 0, dp(ctx, 20), dp(ctx, 14));
         hero.addView(dots, lp);
     }
 
     private static void updateDots(HeroState st, int activeIdx, int total, Context ctx) {
         if (st.dotsRow == null) return;
-        st.dotsRow.removeAllViews();
         int cap = Math.min(total, 6);
+        if (st.dotsRow.getChildCount() != cap) {
+            st.dotsRow.removeAllViews();
+            for (int i = 0; i < cap; i++) {
+                View dot = new View(ctx);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(ctx, 6), dp(ctx, 6));
+                lp.setMargins(dp(ctx, 3), 0, dp(ctx, 3), 0);
+                st.dotsRow.addView(dot, lp);
+            }
+        }
         for (int i = 0; i < cap; i++) {
-            View dot = new View(ctx);
+            View dot = st.dotsRow.getChildAt(i);
             int w = (i == activeIdx) ? dp(ctx, 20) : dp(ctx, 6);
             int h = dp(ctx, 6);
             int color = (i == activeIdx) ? Color.WHITE : Color.argb(85, 255, 255, 255);
             dot.setBackground(GlassTheme.solidRounded(color, dp(ctx, 3)));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, h);
-            lp.setMargins(dp(ctx, 3), 0, dp(ctx, 3), 0);
-            st.dotsRow.addView(dot, lp);
+            ViewGroup.LayoutParams lp = dot.getLayoutParams();
+            if (lp != null && lp.width != w) {
+                lp.width = w;
+                lp.height = h;
+                dot.setLayoutParams(lp);
+            }
         }
     }
 
-    private static void showSlide(FrameLayout hero, int idx, Context ctx, boolean animateText) {
+    private static void showSlide(FrameLayout hero, int idx, int dir, Context ctx, boolean animate) {
         HeroState st = getState(hero);
         if (st.items.isEmpty() || idx >= st.items.size()) return;
         JSONObject item = st.items.get(idx);
         st.currentItem = item;
-        bindItemToViews(hero, st, item, ctx, animateText);
+        bindItemToViews(hero, st, item, dir, ctx, animate);
         updateDots(st, idx, st.items.size(), ctx);
         if (st.callback != null) st.callback.onSlideChanged(idx);
     }
 
     private static void bindItemToViews(FrameLayout hero, HeroState st,
-                                         JSONObject item, Context ctx, boolean animate) {
+                                         JSONObject item, int dir, Context ctx, boolean animate) {
         String app = cleanPlatformName(item.optString("app", item.optString("app_name", "Streaming")));
         if (st.tagView != null) {
             st.tagView.setText(app.toUpperCase());
@@ -343,21 +392,74 @@ public final class HeroSliderBuilder {
         if (st.provenanceView != null) {
             st.provenanceView.setVisibility(View.GONE);
         }
-        if (animate && st.titleView != null) {
-            st.titleView.setAlpha(0.4f);
-            st.titleView.animate().alpha(1f).setDuration(160).start();
+
+        int slideDir = (dir == 0) ? 1 : dir;
+
+        // Smooth native transition on the left info column
+        if (animate && st.infoCol != null) {
+            st.infoCol.animate().cancel();
+            st.infoCol.setAlpha(0.12f);
+            st.infoCol.setTranslationX(slideDir * dp(ctx, 18));
+            st.infoCol.animate()
+                .alpha(1f)
+                .translationX(0f)
+                .setDuration(380)
+                .setInterpolator(HERO_EASE)
+                .start();
         }
-        if (st.bgImage != null) {
-            String url = item.optString("poster_url", "");
-            ImageLoader.loadHero(ctx, url, st.bgImage);
+
+        // Dual-layer crossfade + subtle parallax glide on the 16:9 UHD Hero artwork
+        String url = item.optString("backdrop_url", "");
+        if (url.isEmpty()) url = item.optString("poster_url", "");
+        if (st.bgImageA != null && st.bgImageB != null) {
+            if (!animate) {
+                st.activeIsA = true;
+                st.bgImageA.animate().cancel();
+                st.bgImageB.animate().cancel();
+                st.bgImageA.setAlpha(1f);
+                st.bgImageA.setTranslationX(0f);
+                st.bgImageA.setScaleX(1f);
+                st.bgImageA.setScaleY(1f);
+                st.bgImageB.setAlpha(0f);
+                ImageLoader.loadHero(ctx, url, st.bgImageA);
+            } else {
+                ImageView outgoing = st.activeIsA ? st.bgImageA : st.bgImageB;
+                ImageView incoming = st.activeIsA ? st.bgImageB : st.bgImageA;
+                st.activeIsA = !st.activeIsA;
+
+                outgoing.animate().cancel();
+                incoming.animate().cancel();
+
+                ImageLoader.loadHero(ctx, url, incoming);
+
+                incoming.setAlpha(0f);
+                incoming.setTranslationX(slideDir * dp(ctx, 24));
+                incoming.setScaleX(1.045f);
+                incoming.setScaleY(1.045f);
+
+                outgoing.animate()
+                    .alpha(0f)
+                    .translationX(-slideDir * dp(ctx, 16))
+                    .scaleX(1.0f)
+                    .scaleY(1.0f)
+                    .setDuration(420)
+                    .setInterpolator(HERO_EASE)
+                    .start();
+
+                incoming.animate()
+                    .alpha(1f)
+                    .translationX(0f)
+                    .scaleX(1.0f)
+                    .scaleY(1.0f)
+                    .setDuration(440)
+                    .setInterpolator(HERO_EASE)
+                    .start();
+            }
         }
     }
 
     static String cleanPlatformName(String raw) {
-        if (raw == null || raw.isEmpty()) return "Streaming";
-        int dot = raw.indexOf('\u00B7');
-        if (dot > 0) raw = raw.substring(0, dot).trim();
-        return raw;
+        return ContinueWatchingSelector.cleanPlatformName(raw);
     }
 
     static String buildMetaString(JSONObject item) {
