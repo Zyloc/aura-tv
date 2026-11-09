@@ -29,22 +29,22 @@ public final class SlateAllocator {
     private SlateAllocator() {}
 
     public static List<JSONObject> allocateBalancedSlate(
-            List<JSONObject> pool, int currentEpoch,
-            Map<String, ImpressionTracker.ImpressionRecord> impressions) {
+            List<JSONObject> pool, int currentEpoch, Map<String, ImpressionTracker.ImpressionRecord> impressions) {
         applyEpochExplorationAndNovelty(pool, currentEpoch, impressions);
-        List<JSONObject> freshPool = filterByFreshness(pool, currentEpoch, impressions, true);
-        List<JSONObject> cooldownPool = filterByFreshness(pool, currentEpoch, impressions, false);
-
         List<JSONObject> selected = new ArrayList<>();
         Set<String> usedKeys = new HashSet<>();
         Map<String, Integer> seedCounts = new HashMap<>();
-
-        fillFromBuckets(partitionIntoBuckets(freshPool), selected, usedKeys, seedCounts);
+        fillFromPool(filterByFreshness(pool, currentEpoch, impressions, true), selected, usedKeys, seedCounts);
         if (selected.size() < TARGET_SLATE_SIZE) {
-            fillFromBuckets(partitionIntoBuckets(cooldownPool), selected, usedKeys, seedCounts);
+            fillFromPool(filterByFreshness(pool, currentEpoch, impressions, false), selected, usedKeys, seedCounts);
         }
         selected.sort((a, b) -> Double.compare(b.optDouble("slate_score", 0.0), a.optDouble("slate_score", 0.0)));
         return selected;
+    }
+
+    private static void fillFromPool(
+            List<JSONObject> poolSubset, List<JSONObject> selected, Set<String> usedKeys, Map<String, Integer> seedCounts) {
+        fillFromBuckets(partitionIntoBuckets(poolSubset), selected, usedKeys, seedCounts);
     }
 
     private static void applyEpochExplorationAndNovelty(
@@ -128,13 +128,7 @@ public final class SlateAllocator {
             Set<String> usedKeys, Map<String, Integer> seedCounts) {
         boolean added = false;
         for (Map.Entry<String, List<JSONObject>> entry : buckets.entrySet()) {
-            String bName = entry.getKey();
-            int currentCount = bucketCounts.getOrDefault(bName, 0);
-            if (currentCount >= quotas.getOrDefault(bName, 6)) continue;
-            JSONObject next = pollNextEligible(entry.getValue(), usedKeys, seedCounts);
-            if (next != null) {
-                selected.add(next);
-                bucketCounts.put(bName, currentCount + 1);
+            if (tryPullFromBucket(entry.getKey(), entry.getValue(), quotas, bucketCounts, selected, usedKeys, seedCounts)) {
                 added = true;
                 if (selected.size() >= TARGET_SLATE_SIZE) break;
             }
@@ -142,18 +136,35 @@ public final class SlateAllocator {
         return added;
     }
 
+    private static boolean tryPullFromBucket(
+            String bName, List<JSONObject> list, Map<String, Integer> quotas,
+            Map<String, Integer> bucketCounts, List<JSONObject> selected,
+            Set<String> usedKeys, Map<String, Integer> seedCounts) {
+        int currentCount = bucketCounts.getOrDefault(bName, 0);
+        if (currentCount >= quotas.getOrDefault(bName, 6)) return false;
+        JSONObject next = pollNextEligible(list, usedKeys, seedCounts);
+        if (next == null) return false;
+        selected.add(next);
+        bucketCounts.put(bName, currentCount + 1);
+        return true;
+    }
+
     private static JSONObject pollNextEligible(
             List<JSONObject> bucketList, Set<String> usedKeys, Map<String, Integer> seedCounts) {
         while (!bucketList.isEmpty()) {
             JSONObject cand = bucketList.remove(0);
-            String key = AuraDb.normalizeTitleKey(cand.optString("title", ""));
-            if (key.isEmpty() || usedKeys.contains(key)) continue;
-            String seed = cand.optString("seed_anchor", "").trim().toLowerCase();
-            if (!seed.isEmpty() && seedCounts.getOrDefault(seed, 0) >= MAX_PER_SEED) continue;
-            usedKeys.add(key);
-            if (!seed.isEmpty()) seedCounts.put(seed, seedCounts.getOrDefault(seed, 0) + 1);
-            return cand;
+            if (tryClaimCandidate(cand, usedKeys, seedCounts)) return cand;
         }
         return null;
+    }
+
+    private static boolean tryClaimCandidate(JSONObject cand, Set<String> usedKeys, Map<String, Integer> seedCounts) {
+        String key = AuraDb.normalizeTitleKey(cand.optString("title", ""));
+        if (key.isEmpty() || usedKeys.contains(key)) return false;
+        String seed = cand.optString("seed_anchor", "").trim().toLowerCase();
+        if (!seed.isEmpty() && seedCounts.getOrDefault(seed, 0) >= MAX_PER_SEED) return false;
+        usedKeys.add(key);
+        if (!seed.isEmpty()) seedCounts.put(seed, seedCounts.getOrDefault(seed, 0) + 1);
+        return true;
     }
 }

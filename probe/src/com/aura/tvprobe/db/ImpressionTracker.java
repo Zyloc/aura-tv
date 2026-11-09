@@ -72,28 +72,29 @@ public final class ImpressionTracker {
         try {
             SQLiteDatabase db = auraDb.getReadableDatabase();
             ensureTable(db);
-            try (Cursor c = db.rawQuery("SELECT title_key, last_epoch, shown_count, last_shown_at FROM reco_impressions", null)) {
-                while (c.moveToNext()) {
-                    map.put(c.getString(0), new ImpressionRecord(c.getInt(1), c.getInt(2), c.getLong(3)));
-                }
-            }
+            readImpressionsCursor(db, map);
         } catch (Exception ignored) {}
         return map;
     }
 
-    public static double computeNoveltyPenalty(
-            String titleKey, int currentEpoch, Map<String, ImpressionRecord> history) {
+    private static void readImpressionsCursor(SQLiteDatabase db, Map<String, ImpressionRecord> map) {
+        String sql = "SELECT title_key, last_epoch, shown_count, last_shown_at FROM reco_impressions";
+        try (Cursor c = db.rawQuery(sql, null)) {
+            while (c.moveToNext()) {
+                map.put(c.getString(0), new ImpressionRecord(c.getInt(1), c.getInt(2), c.getLong(3)));
+            }
+        }
+    }
+
+    public static double computeNoveltyPenalty(String titleKey, int currentEpoch, Map<String, ImpressionRecord> history) {
         if (history == null || !history.containsKey(titleKey)) return 0.0;
         ImpressionRecord rec = history.get(titleKey);
         int epochDelta = Math.max(0, currentEpoch - rec.lastEpoch);
-        if (epochDelta < COOLDOWN_EPOCHS) {
-            return -4.5 + (epochDelta * 1.1);
-        }
+        if (epochDelta < COOLDOWN_EPOCHS) return -4.5 + (epochDelta * 1.1);
         return -Math.min(2.0, rec.shownCount * 0.45);
     }
 
-    public static boolean isRecentlyShown(
-            String titleKey, int currentEpoch, Map<String, ImpressionRecord> history) {
+    public static boolean isRecentlyShown(String titleKey, int currentEpoch, Map<String, ImpressionRecord> history) {
         if (history == null || !history.containsKey(titleKey)) return false;
         ImpressionRecord rec = history.get(titleKey);
         return (currentEpoch - rec.lastEpoch) < COOLDOWN_EPOCHS;
@@ -105,31 +106,35 @@ public final class ImpressionTracker {
             Map<String, ImpressionRecord> existing = loadActiveImpressions(auraDb);
             SQLiteDatabase db = auraDb.getWritableDatabase();
             ensureTable(db);
-            long nowSec = System.currentTimeMillis() / 1000L;
-            db.beginTransaction();
-            try {
-                for (JSONObject item : slate) {
-                    upsertSingleImpression(db, item, epoch, nowSec, existing);
-                }
-                db.setTransactionSuccessful();
-            } finally {
-                db.endTransaction();
-            }
+            commitSlateImpressions(db, epoch, slate, existing);
         } catch (Exception ignored) {}
     }
 
-    private static void upsertSingleImpression(
-            SQLiteDatabase db, JSONObject item, int epoch, long nowSec,
-            Map<String, ImpressionRecord> existing) {
+    private static void commitSlateImpressions(SQLiteDatabase db, int epoch, List<JSONObject> slate, Map<String, ImpressionRecord> existing) {
+        long nowSec = System.currentTimeMillis() / 1000L;
+        db.beginTransaction();
+        try {
+            for (JSONObject item : slate) upsertSingleImpression(db, item, epoch, nowSec, existing);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    private static void upsertSingleImpression(SQLiteDatabase db, JSONObject item, int epoch, long nowSec, Map<String, ImpressionRecord> existing) {
         String key = AuraDb.normalizeTitleKey(item.optString("title", ""));
         if (key.isEmpty()) return;
         ImpressionRecord prev = existing.get(key);
-        int count = (prev != null ? prev.shownCount : 0) + 1;
+        ContentValues cv = buildImpressionValues(key, epoch, (prev != null ? prev.shownCount : 0) + 1, nowSec);
+        db.insertWithOnConflict("reco_impressions", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    private static ContentValues buildImpressionValues(String key, int epoch, int count, long nowSec) {
         ContentValues cv = new ContentValues();
         cv.put("title_key", key);
         cv.put("last_epoch", epoch);
         cv.put("shown_count", count);
         cv.put("last_shown_at", nowSec);
-        db.insertWithOnConflict("reco_impressions", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        return cv;
     }
 }

@@ -36,38 +36,27 @@ public final class RegionProviderRegistry {
 
     private static Map<String, String> createDisplayMap() {
         Map<String, String> m = new HashMap<>();
-        m.put("nfx", "Netflix");
-        m.put("prv", "Prime Video");
-        m.put("dnp", "Disney+");
-        m.put("jhs", "Disney+ Hotstar");
-        m.put("atp", "Apple TV+");
-        m.put("mxx", "Max");
-        m.put("hlu", "Hulu");
-        m.put("pmp", "Paramount+");
-        m.put("pck", "Peacock");
-        m.put("cru", "Crunchyroll");
-        m.put("snl", "SonyLIV");
-        m.put("zee", "ZEE5");
+        putPairs(m, "nfx", "Netflix", "prv", "Prime Video", "dnp", "Disney+", "jhs", "Disney+ Hotstar");
+        putPairs(m, "atp", "Apple TV+", "mxx", "Max", "hlu", "Hulu", "pmp", "Paramount+");
+        putPairs(m, "pck", "Peacock", "cru", "Crunchyroll", "snl", "SonyLIV", "zee", "ZEE5");
         return Collections.unmodifiableMap(m);
     }
 
     private static Map<String, String> createPackageMap() {
         Map<String, String> m = new HashMap<>();
-        m.put("netflix", "com.netflix.ninja");
-        m.put("prime", "com.amazon.amazonvideo.livingroom");
-        m.put("hotstar", "in.startv.hotstar");
-        m.put("disney", "com.disney.disneyplus");
-        m.put("apple", "com.apple.atve.androidtv.appletv");
-        m.put("max", "com.wbd.stream");
-        m.put("hulu", "com.hulu.livingroomplus");
-        m.put("crunchyroll", "com.crunchyroll.crunchyroid");
-        m.put("sony", "com.sonyliv");
-        m.put("zee", "com.graymatrix.did");
-        m.put("xstream", "tv.airtel.xstream.tvapp");
-        m.put("airtel", "tv.airtel.xstream.tvapp");
-        m.put("youtube", "com.google.android.youtube.tv");
-        m.put("smarttube", "org.smarttube.stable");
+        putPairs(m, "netflix", "com.netflix.ninja", "prime", "com.amazon.amazonvideo.livingroom",
+            "hotstar", "in.startv.hotstar", "disney", "com.disney.disneyplus");
+        putPairs(m, "apple", "com.apple.atve.androidtv.appletv", "max", "com.wbd.stream",
+            "hulu", "com.hulu.livingroomplus", "crunchyroll", "com.crunchyroll.crunchyroid");
+        putPairs(m, "sony", "com.sonyliv", "zee", "com.graymatrix.did", "xstream", "tv.airtel.xstream.tvapp",
+            "airtel", "tv.airtel.xstream.tvapp", "youtube", "com.google.android.youtube.tv", "smarttube", "org.smarttube.stable");
         return Collections.unmodifiableMap(m);
+    }
+
+    private static void putPairs(Map<String, String> map, String... kv) {
+        for (int i = 0; i + 1 < kv.length; i += 2) {
+            map.put(kv[i], kv[i + 1]);
+        }
     }
 
     public static String getCountryCode(AuraDb db) {

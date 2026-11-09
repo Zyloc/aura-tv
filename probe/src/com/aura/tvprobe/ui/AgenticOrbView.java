@@ -41,23 +41,26 @@ public final class AgenticOrbView extends View {
     public AgenticOrbView(Context context) {
         super(context);
         float d = context.getResources().getDisplayMetrics().density;
+        initWavePaints(d);
+        initArcAndNodePaints(d);
+    }
 
+    private void initWavePaints(float d) {
         wavePaintA.setStyle(Paint.Style.STROKE);
         wavePaintA.setStrokeWidth(2.4f * d);
         wavePaintA.setColor(Color.argb(215, 129, 140, 248)); // Soft Indigo
-
         wavePaintB.setStyle(Paint.Style.STROKE);
         wavePaintB.setStrokeWidth(2.0f * d);
         wavePaintB.setColor(Color.argb(190, 56, 189, 248));  // Soft Cyan
+    }
 
+    private void initArcAndNodePaints(float d) {
         arcPaint.setStyle(Paint.Style.STROKE);
         arcPaint.setStrokeCap(Paint.Cap.ROUND);
         arcPaint.setStrokeWidth(2.6f * d);
         arcPaint.setColor(Color.argb(230, 192, 132, 252));   // Soft Violet
-
         corePaint.setStyle(Paint.Style.FILL);
         corePaint.setColor(Color.WHITE);
-
         nodePaint.setStyle(Paint.Style.FILL);
         nodePaint.setColor(Color.argb(235, 226, 232, 240));
     }
@@ -90,11 +93,13 @@ public final class AgenticOrbView extends View {
         animator.setDuration(2400);
         animator.setRepeatCount(ValueAnimator.INFINITE);
         animator.setInterpolator(new LinearInterpolator());
-        animator.addUpdateListener(a -> {
-            phase = (float) a.getAnimatedValue();
-            invalidate();
-        });
+        animator.addUpdateListener(this::onPhaseUpdate);
         animator.start();
+    }
+
+    private void onPhaseUpdate(ValueAnimator a) {
+        phase = (float) a.getAnimatedValue();
+        invalidate();
     }
 
     public void stopLoop() {
@@ -107,36 +112,36 @@ public final class AgenticOrbView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        int w = getWidth();
-        int h = getHeight();
-        if (w <= 0 || h <= 0) return;
+        if (getWidth() <= 0 || getHeight() <= 0) return;
+        float cx = getWidth() * 0.5f;
+        float cy = getHeight() * 0.5f;
+        float maxR = Math.min(getWidth(), getHeight()) * 0.44f;
+        drawAmbientAura(canvas, cx, cy, maxR);
+        drawNeuralRings(canvas, cx, cy, maxR);
+        drawOrbitalArcs(canvas, cx, cy, maxR);
+        drawSatelliteAndCoreNodes(canvas, cx, cy, maxR);
+    }
 
-        float cx = w * 0.5f;
-        float cy = h * 0.5f;
-        float maxR = Math.min(w, h) * 0.44f;
-
-        // 1. Breathing radial ambient aura
+    // 1. Breathing radial ambient aura
+    private void drawAmbientAura(Canvas canvas, float cx, float cy, float maxR) {
         float pulse = 0.88f + 0.12f * (float) Math.sin(phase * 2f);
         float glowR = Math.max(8f, maxR * 1.12f * pulse);
-        glowPaint.setShader(new RadialGradient(
-            cx, cy, glowR,
-            new int[]{
-                Color.argb(120, 99, 102, 241),
-                Color.argb(55, 56, 189, 248),
-                Color.TRANSPARENT
-            },
-            new float[]{0f, 0.58f, 1f},
-            Shader.TileMode.CLAMP
-        ));
+        int[] colors = {Color.argb(120, 99, 102, 241), Color.argb(55, 56, 189, 248), Color.TRANSPARENT};
+        float[] stops = {0f, 0.58f, 1f};
+        glowPaint.setShader(new RadialGradient(cx, cy, glowR, colors, stops, Shader.TileMode.CLAMP));
         canvas.drawCircle(cx, cy, glowR, glowPaint);
+    }
 
-        // 2. Morphing Agentic Neural Ring A & B
+    // 2. Morphing Agentic Neural Ring A & B
+    private void drawNeuralRings(Canvas canvas, float cx, float cy, float maxR) {
         buildMorphPath(wavePathA, cx, cy, maxR * 0.72f, 3, phase, 0.13f);
         buildMorphPath(wavePathB, cx, cy, maxR * 0.66f, 4, -phase * 1.3f, 0.11f);
         canvas.drawPath(wavePathA, wavePaintA);
         canvas.drawPath(wavePathB, wavePaintB);
+    }
 
-        // 3. Counter-rotating orbital recognition arcs
+    // 3. Counter-rotating orbital recognition arcs
+    private void drawOrbitalArcs(Canvas canvas, float cx, float cy, float maxR) {
         float orbitR = maxR * 0.88f;
         arcRect.set(cx - orbitR, cy - orbitR, cx + orbitR, cy + orbitR);
         float deg = (float) Math.toDegrees(phase);
@@ -144,16 +149,16 @@ public final class AgenticOrbView extends View {
         canvas.drawArc(arcRect, deg * 1.5f, 68f, false, arcPaint);
         arcPaint.setColor(Color.argb(210, 56, 189, 248));
         canvas.drawArc(arcRect, deg * 1.5f + 180f, 68f, false, arcPaint);
+    }
 
-        // 4. Orbiting satellite nodes
+    // 4. Orbiting satellite nodes & 5. Breathing central core node
+    private void drawSatelliteAndCoreNodes(Canvas canvas, float cx, float cy, float maxR) {
         for (int i = 0; i < 3; i++) {
             double ang = phase * 1.2 + i * (Math.PI * 2.0 / 3.0);
             float nx = cx + (float) Math.cos(ang) * (maxR * 0.88f);
             float ny = cy + (float) Math.sin(ang) * (maxR * 0.88f);
             canvas.drawCircle(nx, ny, maxR * 0.065f, nodePaint);
         }
-
-        // 5. Breathing central core node
         float coreR = maxR * (0.19f + 0.045f * (float) Math.cos(phase * 3f));
         canvas.drawCircle(cx, cy, coreR, corePaint);
     }
@@ -164,15 +169,21 @@ public final class AgenticOrbView extends View {
         int steps = 64;
         for (int i = 0; i <= steps; i++) {
             double theta = (i * 2.0 * Math.PI) / steps;
-            float wave = (float) Math.sin(theta * lobes + phase) * (baseR * ampFrac)
-                       + (float) Math.cos(theta * (lobes + 2) - phase * 1.4f) * (baseR * ampFrac * 0.5f);
-            float r = baseR + wave;
-            float x = cx + (float) Math.cos(theta) * r;
-            float y = cy + (float) Math.sin(theta) * r;
-            if (i == 0) out.moveTo(x, y);
-            else out.lineTo(x, y);
+            float r = baseR + computeWaveOffset(theta, baseR, lobes, phase, ampFrac);
+            addMorphPoint(out, i, cx + (float) Math.cos(theta) * r, cy + (float) Math.sin(theta) * r);
         }
         out.close();
+    }
+
+    private static float computeWaveOffset(double theta, float baseR, int lobes, float phase, float ampFrac) {
+        float w1 = (float) Math.sin(theta * lobes + phase) * (baseR * ampFrac);
+        float w2 = (float) Math.cos(theta * (lobes + 2) - phase * 1.4f) * (baseR * ampFrac * 0.5f);
+        return w1 + w2;
+    }
+
+    private static void addMorphPoint(Path out, int idx, float x, float y) {
+        if (idx == 0) out.moveTo(x, y);
+        else out.lineTo(x, y);
     }
 
     /**
@@ -180,18 +191,34 @@ public final class AgenticOrbView extends View {
      * (Orb + floating status text + subtle phase subcaption).
      */
     public static LinearLayout buildFloatingLoaderColumn(Context ctx, int statusTextTag, int subTextTag) {
+        LinearLayout col = createLoaderColumnContainer(ctx);
+        addOrbChild(ctx, col);
+        addBadgeChild(ctx, col);
+        addMainStatusChild(ctx, col, statusTextTag);
+        addSubStatusChild(ctx, col, subTextTag);
+        return col;
+    }
+
+    private static LinearLayout createLoaderColumnContainer(Context ctx) {
         LinearLayout col = new LinearLayout(ctx);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
         col.setClipChildren(false);
         col.setClipToPadding(false);
+        col.setLayoutParams(new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        return col;
+    }
 
+    private static void addOrbChild(Context ctx, LinearLayout col) {
         AgenticOrbView orb = new AgenticOrbView(ctx);
         int orbSize = GlassTheme.dp(ctx, 92);
         LinearLayout.LayoutParams orbLp = new LinearLayout.LayoutParams(orbSize, orbSize);
         orbLp.bottomMargin = GlassTheme.dp(ctx, 14);
         col.addView(orb, orbLp);
+    }
 
+    private static void addBadgeChild(Context ctx, LinearLayout col) {
         TextView badge = GlassTheme.makeText(ctx, "AURA AGENTIC RECOGNITION", 9.5f,
             Color.argb(210, 148, 163, 184), GlassTheme.FONT_BOLD, 1);
         badge.setLetterSpacing(0.14f);
@@ -199,14 +226,18 @@ public final class AgenticOrbView extends View {
         LinearLayout.LayoutParams bLp = GlassTheme.wrapParams();
         bLp.bottomMargin = GlassTheme.dp(ctx, 6);
         col.addView(badge, bLp);
+    }
 
+    private static void addMainStatusChild(Context ctx, LinearLayout col, int statusTextTag) {
         TextView mainTxt = GlassTheme.makeText(ctx,
             "Analyzing your watch history & taste profile\u2026", 14.5f,
             Color.WHITE, GlassTheme.FONT_BOLD, 2);
         mainTxt.setGravity(Gravity.CENTER);
         if (statusTextTag != 0) mainTxt.setTag(statusTextTag);
         col.addView(mainTxt, GlassTheme.wrapParams());
+    }
 
+    private static void addSubStatusChild(Context ctx, LinearLayout col, int subTextTag) {
         TextView subTxt = GlassTheme.makeText(ctx,
             "Synthesizing deep-linked matches across your streaming apps", 10.5f,
             GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
@@ -215,11 +246,5 @@ public final class AgenticOrbView extends View {
         LinearLayout.LayoutParams sLp = GlassTheme.wrapParams();
         sLp.topMargin = GlassTheme.dp(ctx, 4);
         col.addView(subTxt, sLp);
-
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.CENTER);
-        col.setLayoutParams(lp);
-        return col;
     }
 }

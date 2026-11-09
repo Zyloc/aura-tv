@@ -45,6 +45,16 @@ public final class AmbientScreensaverOverlay {
     private AmbientScreensaverOverlay() {}
 
     public static FrameLayout build(Context ctx, Runnable onWake) {
+        FrameLayout root = createRootContainer(ctx, onWake);
+        SaverState st = new SaverState();
+        root.setTag(st);
+        addBackdropLayers(ctx, root, st);
+        addBottomScrim(ctx, root);
+        addBottomHud(ctx, root, st);
+        return root;
+    }
+
+    private static FrameLayout createRootContainer(Context ctx, Runnable onWake) {
         FrameLayout root = new FrameLayout(ctx);
         root.setVisibility(View.GONE);
         root.setAlpha(0f);
@@ -52,85 +62,86 @@ public final class AmbientScreensaverOverlay {
         root.setClickable(true);
         root.setFocusable(true);
         root.setKeepScreenOn(true);
+        root.setOnClickListener(v -> onRootClicked(root, onWake));
+        return root;
+    }
 
-        SaverState st = new SaverState();
-        root.setTag(st);
+    private static void onRootClicked(FrameLayout root, Runnable onWake) {
+        dismiss(root);
+        if (onWake != null) onWake.run();
+    }
 
+    private static void addBackdropLayers(Context ctx, FrameLayout root, SaverState st) {
         st.bgA = new ImageView(ctx);
         st.bgA.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        root.addView(st.bgA, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
+        root.addView(st.bgA, matchParentParams());
         st.bgB = new ImageView(ctx);
         st.bgB.setScaleType(ImageView.ScaleType.CENTER_CROP);
         st.bgB.setAlpha(0f);
-        root.addView(st.bgB, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(st.bgB, matchParentParams());
+    }
 
-        // Bottom cinema vignette gradient
+    private static FrameLayout.LayoutParams matchParentParams() {
+        return new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+    }
+
+    // Bottom cinema vignette gradient
+    private static void addBottomScrim(Context ctx, FrameLayout root) {
         View bottomScrim = new View(ctx);
-        GradientDrawable gd = new GradientDrawable(
-            GradientDrawable.Orientation.BOTTOM_TOP,
-            new int[]{
-                Color.argb(235, 8, 10, 16),
-                Color.argb(145, 8, 10, 16),
-                Color.TRANSPARENT
-            });
+        int[] colors = {Color.argb(235, 8, 10, 16), Color.argb(145, 8, 10, 16), Color.TRANSPARENT};
+        GradientDrawable gd = new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, colors);
         bottomScrim.setBackground(gd);
         root.addView(bottomScrim, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, GlassTheme.dp(ctx, 210), Gravity.BOTTOM));
+    }
 
-        // Bottom HUD row (Left: Artwork Title + Genre, Right: Large Ambient Clock)
+    // Bottom HUD row (Left: Artwork Title + Genre, Right: Large Ambient Clock)
+    private static void addBottomHud(Context ctx, FrameLayout root, SaverState st) {
         LinearLayout hud = new LinearLayout(ctx);
         hud.setOrientation(LinearLayout.HORIZONTAL);
         hud.setGravity(Gravity.BOTTOM);
         hud.setPadding(GlassTheme.dp(ctx, 36), 0, GlassTheme.dp(ctx, 36), GlassTheme.dp(ctx, 28));
         st.infoHud = hud;
+        hud.addView(buildLeftHudColumn(ctx, st), new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        hud.addView(buildRightHudColumn(ctx, st), GlassTheme.wrapParams());
+        root.addView(hud, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+    }
 
+    private static LinearLayout buildLeftHudColumn(Context ctx, SaverState st) {
         LinearLayout leftCol = new LinearLayout(ctx);
         leftCol.setOrientation(LinearLayout.VERTICAL);
-
         TextView pill = GlassTheme.makeText(ctx, "\u2726  AURA AMBIENT CINEMA", 9.5f,
             Color.argb(200, 148, 163, 184), GlassTheme.FONT_BOLD, 1);
         pill.setLetterSpacing(0.12f);
         leftCol.addView(pill, GlassTheme.wrapParams());
+        addLeftHudTextViews(ctx, leftCol, st);
+        return leftCol;
+    }
 
-        st.titleTv = GlassTheme.makeText(ctx, "", 24f,
-            Color.WHITE, GlassTheme.FONT_BOLD, 1);
+    private static void addLeftHudTextViews(Context ctx, LinearLayout leftCol, SaverState st) {
+        st.titleTv = GlassTheme.makeText(ctx, "", 24f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
         LinearLayout.LayoutParams tLp = GlassTheme.wrapParams();
         tLp.topMargin = GlassTheme.dp(ctx, 4);
         leftCol.addView(st.titleTv, tLp);
-
-        st.metaTv = GlassTheme.makeText(ctx, "", 11.5f,
-            GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1);
+        st.metaTv = GlassTheme.makeText(ctx, "", 11.5f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1);
         LinearLayout.LayoutParams mLp = GlassTheme.wrapParams();
         mLp.topMargin = GlassTheme.dp(ctx, 2);
         leftCol.addView(st.metaTv, mLp);
+    }
 
-        hud.addView(leftCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
+    private static LinearLayout buildRightHudColumn(Context ctx, SaverState st) {
         LinearLayout rightCol = new LinearLayout(ctx);
         rightCol.setOrientation(LinearLayout.VERTICAL);
         rightCol.setGravity(Gravity.END);
-
-        st.clockTv = GlassTheme.makeText(ctx, "", 28f,
-            Color.WHITE, GlassTheme.FONT_BOLD, 1);
+        st.clockTv = GlassTheme.makeText(ctx, "", 28f, Color.WHITE, GlassTheme.FONT_BOLD, 1);
         rightCol.addView(st.clockTv, GlassTheme.wrapParams());
-
         TextView hint = GlassTheme.makeText(ctx, "Press any button to resume", 10f,
             GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
         rightCol.addView(hint, GlassTheme.wrapParams());
-
-        hud.addView(rightCol, GlassTheme.wrapParams());
-
-        root.addView(hud, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
-
-        root.setOnClickListener(v -> {
-            dismiss(root);
-            if (onWake != null) onWake.run();
-        });
-        return root;
+        return rightCol;
     }
 
     public static void setItems(FrameLayout overlay, List<JSONObject> items) {
@@ -149,24 +160,27 @@ public final class AmbientScreensaverOverlay {
         if (overlay == null || !(overlay.getTag() instanceof SaverState)) return;
         SaverState st = (SaverState) overlay.getTag();
         if (st.items.isEmpty()) return;
-
         overlay.setVisibility(View.VISIBLE);
         overlay.animate().cancel();
         overlay.animate().alpha(1f).setDuration(550).setInterpolator(GlassTheme.EASE).start();
         overlay.requestFocus();
-
         showSlide(overlay, st, ctx, false);
+        startSlideTicker(overlay, st, ctx);
+    }
+
+    private static void startSlideTicker(FrameLayout overlay, SaverState st, Context ctx) {
         stopTicker(st);
-        st.slideTicker = new Runnable() {
-            @Override
-            public void run() {
-                if (overlay.getVisibility() != View.VISIBLE) return;
-                st.index = (st.index + 1) % st.items.size();
-                showSlide(overlay, st, ctx, true);
-                st.handler.postDelayed(this, SLIDE_INTERVAL_MS);
-            }
-        };
+        st.slideTicker = () -> tickSlide(overlay, st, ctx);
         st.handler.postDelayed(st.slideTicker, SLIDE_INTERVAL_MS);
+    }
+
+    private static void tickSlide(FrameLayout overlay, SaverState st, Context ctx) {
+        if (overlay.getVisibility() != View.VISIBLE) return;
+        st.index = (st.index + 1) % st.items.size();
+        showSlide(overlay, st, ctx, true);
+        if (st.slideTicker != null) {
+            st.handler.postDelayed(st.slideTicker, SLIDE_INTERVAL_MS);
+        }
     }
 
     public static void dismiss(FrameLayout overlay) {
@@ -175,11 +189,8 @@ public final class AmbientScreensaverOverlay {
         stopTicker(st);
         if (overlay.getVisibility() == View.VISIBLE) {
             overlay.animate().cancel();
-            overlay.animate()
-                .alpha(0f)
-                .setDuration(220)
-                .withEndAction(() -> overlay.setVisibility(View.GONE))
-                .start();
+            overlay.animate().alpha(0f).setDuration(220)
+                .withEndAction(() -> overlay.setVisibility(View.GONE)).start();
         }
     }
 
@@ -193,32 +204,42 @@ public final class AmbientScreensaverOverlay {
     private static void showSlide(FrameLayout overlay, SaverState st, Context ctx, boolean crossfade) {
         if (st.items.isEmpty()) return;
         JSONObject item = st.items.get(st.index % st.items.size());
+        updateSlideLabels(st, item);
+        applyHudPixelShift(st, ctx);
+        String url = item.optString("backdrop_url", "");
+        if (url.isEmpty()) url = item.optString("poster_url", "");
+        animateSlideBackdrop(st, ctx, url, crossfade);
+    }
+
+    private static void updateSlideLabels(SaverState st, JSONObject item) {
         String title = item.optString("title", "Featured Cinema");
         int year = item.optInt("year", 0);
         String genres = item.optString("genres", "");
         String meta = (year > 0 && !genres.isEmpty()) ? (year + "  \u00B7  " + genres)
                     : (year > 0 ? String.valueOf(year) : genres);
-
         st.titleTv.setText(title);
         st.metaTv.setText(meta);
         st.clockTv.setText(new SimpleDateFormat("h:mm a", Locale.US).format(new Date()));
+    }
 
-        // Subtle pixel-shift burn-in protection (-4dp to +4dp)
+    // Subtle pixel-shift burn-in protection (-4dp to +4dp)
+    private static void applyHudPixelShift(SaverState st, Context ctx) {
         float shiftX = ((st.index % 3) - 1) * GlassTheme.dp(ctx, 3);
         float shiftY = (((st.index / 3) % 3) - 1) * GlassTheme.dp(ctx, 2);
         st.infoHud.animate().translationX(shiftX).translationY(shiftY).setDuration(800).start();
+    }
 
-        String url = item.optString("backdrop_url", "");
-        if (url.isEmpty()) url = item.optString("poster_url", "");
-
+    private static void animateSlideBackdrop(SaverState st, Context ctx, String url, boolean crossfade) {
         ImageView incoming = st.activeIsA ? st.bgA : st.bgB;
         ImageView outgoing = st.activeIsA ? st.bgB : st.bgA;
         st.activeIsA = !st.activeIsA;
-
         incoming.animate().cancel();
         outgoing.animate().cancel();
         ImageLoader.loadHero(ctx, url, incoming);
+        applyBackdropCrossfadeAndZoom(incoming, outgoing, crossfade);
+    }
 
+    private static void applyBackdropCrossfadeAndZoom(ImageView incoming, ImageView outgoing, boolean crossfade) {
         incoming.setScaleX(1.0f);
         incoming.setScaleY(1.0f);
         if (!crossfade) {
@@ -229,10 +250,6 @@ public final class AmbientScreensaverOverlay {
             incoming.animate().alpha(1f).setDuration(1100).start();
             outgoing.animate().alpha(0f).setDuration(1100).start();
         }
-        incoming.animate()
-            .scaleX(1.075f)
-            .scaleY(1.075f)
-            .setDuration(SLIDE_INTERVAL_MS + 800L)
-            .start();
+        incoming.animate().scaleX(1.075f).scaleY(1.075f).setDuration(SLIDE_INTERVAL_MS + 800L).start();
     }
 }

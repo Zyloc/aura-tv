@@ -81,31 +81,34 @@ public final class HybridScorer {
         double bestMmr = -1e9;
         int limit = Math.min(remaining.size(), 28);
         for (int i = 0; i < limit; i++) {
-            JSONObject cand = remaining.get(i);
-            double rel = cand.optDouble("sota_score", 0.0);
-            double mmr = lambda * rel - (1.0 - lambda) * computeMaxPairSimilarity(cand, selected) * 2.2;
-            if (mmr > bestMmr) {
-                bestMmr = mmr;
-                bestIdx = i;
-            }
+            double mmr = evaluateCandidateMmr(remaining.get(i), selected, lambda);
+            if (mmr > bestMmr) { bestMmr = mmr; bestIdx = i; }
         }
         return bestIdx;
     }
 
+    private static double evaluateCandidateMmr(JSONObject cand, List<JSONObject> selected, double lambda) {
+        double rel = cand.optDouble("sota_score", 0.0);
+        return lambda * rel - (1.0 - lambda) * computeMaxPairSimilarity(cand, selected) * 2.2;
+    }
+
     private static double computeMaxPairSimilarity(JSONObject cand, List<JSONObject> selected) {
         double maxSim = 0.0;
-        String candGenres = cand.optString("genre_codes", "");
-        boolean candIsAnime = candGenres.contains("ani");
         for (JSONObject sel : selected) {
-            String selGenres = sel.optString("genre_codes", "");
-            double gSim = CandidateValidator.computeGenreJaccard(candGenres, selGenres);
-            double sameApp = cand.optString("app", "").equalsIgnoreCase(sel.optString("app", "")) ? 0.25 : 0.0;
-            String sA = cand.optString("seed_anchor", "");
-            double sameSeed = (!sA.isEmpty() && sA.equalsIgnoreCase(sel.optString("seed_anchor", ""))) ? 0.85 : 0.0;
-            double bothAnime = (candIsAnime && selGenres.contains("ani")) ? 0.45 : 0.0;
-            maxSim = Math.max(maxSim, gSim * 1.4 + sameApp + sameSeed + bothAnime);
+            maxSim = Math.max(maxSim, computePairSimilarity(cand, sel));
         }
         return maxSim;
+    }
+
+    private static double computePairSimilarity(JSONObject cand, JSONObject sel) {
+        String candGenres = cand.optString("genre_codes", "");
+        String selGenres = sel.optString("genre_codes", "");
+        double gSim = CandidateValidator.computeGenreJaccard(candGenres, selGenres);
+        double sameApp = cand.optString("app", "").equalsIgnoreCase(sel.optString("app", "")) ? 0.25 : 0.0;
+        String sA = cand.optString("seed_anchor", "");
+        double sameSeed = (!sA.isEmpty() && sA.equalsIgnoreCase(sel.optString("seed_anchor", ""))) ? 0.85 : 0.0;
+        double bothAnime = (candGenres.contains("ani") && selGenres.contains("ani")) ? 0.45 : 0.0;
+        return gSim * 1.4 + sameApp + sameSeed + bothAnime;
     }
 
     public static String formatReason(JSONObject item, String seedAnchor, double imdb, int votes) {

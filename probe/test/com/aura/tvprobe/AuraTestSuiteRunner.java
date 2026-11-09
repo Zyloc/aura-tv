@@ -19,6 +19,7 @@ public final class AuraTestSuiteRunner {
         ContinueWatchingSelectorTest.class,
         AppCatalogProviderTest.class,
         RailNavigationMathTest.class,
+        AndroidManifestContractTest.class,
         // Integration Tests
         RecommendationPipelineIntegrationTest.class,
         LiveJustWatchGraphIntegrationTest.class

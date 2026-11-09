@@ -46,64 +46,71 @@ public final class DynamicRailClusterer {
 
     private static List<JSONObject> buildForYouRail(List<JSONObject> all, Set<String> usedKeys, int maxCount) {
         List<JSONObject> out = new ArrayList<>();
-        Set<String> usedSeedsInTopRail = new HashSet<>();
+        Set<String> usedSeeds = new HashSet<>();
         for (JSONObject item : all) {
-            String k = AuraDb.normalizeTitleKey(item.optString("title", ""));
-            if (k.isEmpty() || usedKeys.contains(k)) continue;
-            String seed = item.optString("seed_anchor", "").trim().toLowerCase();
-            if (!seed.isEmpty() && !usedSeedsInTopRail.add(seed)) continue;
-            usedKeys.add(k);
-            out.add(item);
-            if (out.size() >= maxCount) break;
+            if (tryAddForYouItem(item, usedKeys, usedSeeds, out) && out.size() >= maxCount) break;
         }
         return out;
+    }
+
+    private static boolean tryAddForYouItem(JSONObject item, Set<String> usedKeys, Set<String> usedSeeds, List<JSONObject> out) {
+        String k = AuraDb.normalizeTitleKey(item.optString("title", ""));
+        if (k.isEmpty() || usedKeys.contains(k)) return false;
+        String seed = item.optString("seed_anchor", "").trim().toLowerCase();
+        if (!seed.isEmpty() && !usedSeeds.add(seed)) return false;
+        usedKeys.add(k);
+        return out.add(item);
     }
 
     private static List<JSONObject> buildThrillerSciFiRail(List<JSONObject> all, Set<String> usedKeys, int maxCount) {
         List<JSONObject> out = new ArrayList<>();
         for (JSONObject item : all) {
-            String k = AuraDb.normalizeTitleKey(item.optString("title", ""));
-            if (k.isEmpty() || usedKeys.contains(k)) continue;
-            String g = item.optString("genre_codes", "");
-            if (g.contains("spt") || g.contains("doc")) continue;
-            if (g.contains("scf") || g.contains("crm") || g.contains("trl")) {
-                usedKeys.add(k);
-                out.add(item);
-                if (out.size() >= maxCount) break;
-            }
+            if (isThrillerSciFiMatch(item) && tryClaimItem(item, usedKeys, out) && out.size() >= maxCount) break;
         }
         return out;
+    }
+
+    private static boolean isThrillerSciFiMatch(JSONObject item) {
+        String g = item.optString("genre_codes", "");
+        if (g.contains("spt") || g.contains("doc")) return false;
+        return g.contains("scf") || g.contains("crm") || g.contains("trl");
     }
 
     private static List<JSONObject> buildSportsAndDocRail(List<JSONObject> all, Set<String> usedKeys, int maxCount) {
         List<JSONObject> out = new ArrayList<>();
         for (JSONObject item : all) {
-            String k = AuraDb.normalizeTitleKey(item.optString("title", ""));
-            if (k.isEmpty() || usedKeys.contains(k)) continue;
-            String g = item.optString("genre_codes", "");
-            if (g.contains("spt") || g.contains("doc") || g.contains("hst") || g.contains("war")) {
-                usedKeys.add(k);
-                out.add(item);
-                if (out.size() >= maxCount) break;
-            }
+            if (isSportsOrDocMatch(item) && tryClaimItem(item, usedKeys, out) && out.size() >= maxCount) break;
         }
         return out;
     }
 
+    private static boolean isSportsOrDocMatch(JSONObject item) {
+        String g = item.optString("genre_codes", "");
+        return g.contains("spt") || g.contains("doc") || g.contains("hst") || g.contains("war");
+    }
+
+    private static boolean tryClaimItem(JSONObject item, Set<String> usedKeys, List<JSONObject> out) {
+        String k = AuraDb.normalizeTitleKey(item.optString("title", ""));
+        if (k.isEmpty() || !usedKeys.add(k)) return false;
+        return out.add(item);
+    }
+
     private static List<JSONObject> buildAcclaimedRail(List<JSONObject> all, Set<String> usedKeys, int maxCount) {
+        List<JSONObject> remaining = collectUnusedItems(all, usedKeys);
+        remaining.sort((a, b) -> Double.compare(CandidateValidator.computeBayesianImdb(b), CandidateValidator.computeBayesianImdb(a)));
+        List<JSONObject> out = new ArrayList<>();
+        for (JSONObject item : remaining) {
+            if (out.size() < maxCount) tryClaimItem(item, usedKeys, out);
+        }
+        return out;
+    }
+
+    private static List<JSONObject> collectUnusedItems(List<JSONObject> all, Set<String> usedKeys) {
         List<JSONObject> remaining = new ArrayList<>();
         for (JSONObject item : all) {
             String k = AuraDb.normalizeTitleKey(item.optString("title", ""));
             if (!k.isEmpty() && !usedKeys.contains(k)) remaining.add(item);
         }
-        remaining.sort((a, b) -> Double.compare(
-            CandidateValidator.computeBayesianImdb(b),
-            CandidateValidator.computeBayesianImdb(a)));
-        List<JSONObject> out = new ArrayList<>();
-        for (JSONObject item : remaining) {
-            String k = AuraDb.normalizeTitleKey(item.optString("title", ""));
-            if (out.size() < maxCount && usedKeys.add(k)) out.add(item);
-        }
-        return out;
+        return remaining;
     }
 }

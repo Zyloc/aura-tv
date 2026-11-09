@@ -1,0 +1,48 @@
+package com.aura.tvprobe;
+
+import org.junit.Test;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import static org.junit.Assert.*;
+
+/**
+ * Contract test for {@code probe/AndroidManifest.xml} and {@code scripts/deploy_tv.sh}:
+ * prevents regressions where HOME launcher categories, singleTask launchMode,
+ * BootReceiver, or MediaProbeService declarations are accidentally dropped.
+ */
+public class AndroidManifestContractTest {
+
+    @Test
+    public void testAndroidManifestDeclaresHomeLauncherCategoriesAndSingleTask() throws Exception {
+        File manifestFile = resolveFile("probe/AndroidManifest.xml", "AndroidManifest.xml");
+        assertTrue("AndroidManifest.xml must exist", manifestFile.exists());
+        String xml = new String(Files.readAllBytes(manifestFile.toPath()), StandardCharsets.UTF_8);
+
+        assertTrue("Must declare .AuraActivity", xml.contains("android:name=\".AuraActivity\""));
+        assertTrue("Must use singleTask launchMode for Home button onNewIntent routing",
+            xml.contains("android:launchMode=\"singleTask\""));
+        assertTrue("Must declare android.intent.category.HOME so Home button never hits FallbackHome",
+            xml.contains("android.intent.category.HOME"));
+        assertTrue("Must declare android.intent.category.DEFAULT for Home intent resolution",
+            xml.contains("android.intent.category.DEFAULT"));
+        assertTrue("Must declare android.intent.category.LEANBACK_LAUNCHER",
+            xml.contains("android.intent.category.LEANBACK_LAUNCHER"));
+        assertTrue("Must declare .BootReceiver", xml.contains("android:name=\".BootReceiver\""));
+        assertTrue("Must declare .MediaProbeService", xml.contains("android:name=\".MediaProbeService\""));
+    }
+
+    @Test
+    public void testDeployScriptRegistersDefaultHomeActivity() throws Exception {
+        File deployFile = resolveFile("scripts/deploy_tv.sh", "../scripts/deploy_tv.sh");
+        assertTrue("deploy_tv.sh must exist", deployFile.exists());
+        String script = new String(Files.readAllBytes(deployFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue("deploy_tv.sh must register com.aura.tvprobe/.AuraActivity as home activity",
+            script.contains("cmd package set-home-activity com.aura.tvprobe/.AuraActivity"));
+    }
+
+    private static File resolveFile(String rootRelative, String probeRelative) {
+        File f1 = new File(rootRelative);
+        return f1.exists() ? f1 : new File(probeRelative);
+    }
+}

@@ -180,35 +180,27 @@ public final class GlassTheme {
     }
 
     private static void applyPrimaryButtonFocus(Context ctx, TextView btn, float r) {
-        btn.setOnFocusChangeListener((v, focused) -> {
-            if (focused) {
-                btn.setBackground(focusRounded(Color.WHITE, GOLD_ACCENT, dp(ctx, 2.5f), r));
-                btn.setTextColor(TEXT_ON_LIGHT);
-                btn.setElevation(dp(ctx, 12));
-                v.animate().scaleX(1.07f).scaleY(1.07f).setDuration(150).setInterpolator(EASE).start();
-            } else {
-                btn.setBackground(primaryPill(r));
-                btn.setTextColor(TEXT_ON_LIGHT);
-                btn.setElevation(dp(ctx, 2));
-                v.animate().scaleX(1f).scaleY(1f).setDuration(150).setInterpolator(EASE).start();
-            }
-        });
+        btn.setOnFocusChangeListener((v, focused) -> updatePrimaryFocus(ctx, btn, v, focused, r));
+    }
+
+    private static void updatePrimaryFocus(Context ctx, TextView btn, View v, boolean focused, float r) {
+        btn.setBackground(focused ? focusRounded(Color.WHITE, GOLD_ACCENT, dp(ctx, 2.5f), r) : primaryPill(r));
+        btn.setTextColor(TEXT_ON_LIGHT);
+        btn.setElevation(dp(ctx, focused ? 12 : 2));
+        float scale = focused ? 1.07f : 1f;
+        v.animate().scaleX(scale).scaleY(scale).setDuration(150).setInterpolator(EASE).start();
     }
 
     private static void applyGlassButtonFocus(Context ctx, TextView btn, float r) {
-        btn.setOnFocusChangeListener((v, focused) -> {
-            if (focused) {
-                btn.setBackground(focusRounded(Color.WHITE, Color.WHITE, dp(ctx, 2), r));
-                btn.setTextColor(TEXT_ON_LIGHT);
-                btn.setElevation(dp(ctx, 10));
-                v.animate().scaleX(1.07f).scaleY(1.07f).setDuration(150).setInterpolator(EASE).start();
-            } else {
-                btn.setBackground(glassButton(r));
-                btn.setTextColor(TEXT_PRIMARY);
-                btn.setElevation(0);
-                v.animate().scaleX(1f).scaleY(1f).setDuration(150).setInterpolator(EASE).start();
-            }
-        });
+        btn.setOnFocusChangeListener((v, focused) -> updateGlassFocus(ctx, btn, v, focused, r));
+    }
+
+    private static void updateGlassFocus(Context ctx, TextView btn, View v, boolean focused, float r) {
+        btn.setBackground(focused ? focusRounded(Color.WHITE, Color.WHITE, dp(ctx, 2), r) : glassButton(r));
+        btn.setTextColor(focused ? TEXT_ON_LIGHT : TEXT_PRIMARY);
+        btn.setElevation(focused ? dp(ctx, 10) : 0);
+        float scale = focused ? 1.07f : 1f;
+        v.animate().scaleX(scale).scaleY(scale).setDuration(150).setInterpolator(EASE).start();
     }
 
     // ── Layout param helpers ─────────────────────────────────────────────

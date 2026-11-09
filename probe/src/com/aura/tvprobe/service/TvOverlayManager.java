@@ -44,19 +44,21 @@ public class TvOverlayManager {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(36, 28, 36, 28);
-
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.parseColor("#E6141418"));
-        bg.setCornerRadius(24f);
-        bg.setStroke(2, Color.parseColor("#7C6EF7"));
-        box.setBackground(bg);
-
+        box.setBackground(buildCardBackground());
         box.addView(makeText(badge.toUpperCase(), 11f, "#A599FF", true));
         box.addView(makeText(title, 18f, "#FFFFFF", true));
         if (reason != null && !reason.isEmpty()) {
             box.addView(makeText(reason, 13f, "#B0B0C0", false));
         }
         return box;
+    }
+
+    private GradientDrawable buildCardBackground() {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor("#E6141418"));
+        bg.setCornerRadius(24f);
+        bg.setStroke(2, Color.parseColor("#7C6EF7"));
+        return bg;
     }
 
     private TextView makeText(String txt, float sizeSp, String hexColor, boolean bold) {
@@ -70,13 +72,11 @@ public class TvOverlayManager {
     }
 
     private WindowManager.LayoutParams buildLayoutParams() {
+        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-            680,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        );
+            680, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.BOTTOM | Gravity.END;
         lp.x = 48;
         lp.y = 48;
@@ -98,56 +98,76 @@ public class TvOverlayManager {
     }
 
     public static boolean launchNativeStreamingApp(Context ctx, String uriStr, String pkgOrApp, String title) {
-        String pkg = (pkgOrApp != null && pkgOrApp.contains("."))
+        String pkg = resolveStreamingPackage(pkgOrApp);
+        // 1. If we have a real TvProvider intent: URI for this exact app, launch it
+        if (tryLaunchIntentSchemeUri(ctx, uriStr)) return true;
+        // 2. If we have a target streaming app package (Hotstar, Netflix, Prime, Apple TV+, SonyLIV, ZEE5, etc.)
+        if (tryLaunchTargetStreamingPkg(ctx, pkg, title)) return true;
+        // 3. Fallback for SmartTube / YouTube or generic deep link
+        return tryLaunchFallbackViewIntent(ctx, uriStr, pkg, title);
+    }
+
+    private static String resolveStreamingPackage(String pkgOrApp) {
+        return (pkgOrApp != null && pkgOrApp.contains("."))
             ? pkgOrApp
             : AuraDb.resolveAppPackage(pkgOrApp);
+    }
 
-        // 1. If we have a real TvProvider intent: URI for this exact app, launch it
-        if (uriStr != null && uriStr.startsWith("intent:")) {
-            try {
-                Intent i = Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                ctx.startActivity(i);
-                return true;
-            } catch (Exception ignored) {}
-        }
-
-        // 2. If we have a target streaming app package (Hotstar, Netflix, Prime, Apple TV+, SonyLIV, ZEE5, etc.)
-        if (pkg != null && !pkg.isEmpty() && !pkg.contains("smarttube") && !pkg.contains("youtube")) {
-            if ("com.netflix.ninja".equals(pkg) && title != null && !title.isEmpty()) {
-                try {
-                    Intent nf = new Intent(Intent.ACTION_VIEW, Uri.parse("nflx://www.netflix.com/search?q=" + Uri.encode(title)));
-                    nf.setPackage(pkg);
-                    nf.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(nf);
-                    return true;
-                } catch (Exception ignored) {}
-            }
-            try {
-                android.content.pm.PackageManager pm = ctx.getPackageManager();
-                Intent lb = pm.getLeanbackLaunchIntentForPackage(pkg);
-                if (lb == null) lb = pm.getLaunchIntentForPackage(pkg);
-                if (lb != null) {
-                    lb.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(lb);
-                    return true;
-                }
-            } catch (Exception ignored) {}
-        }
-
-        // 3. Fallback for SmartTube / YouTube or generic deep link
+    private static boolean tryLaunchIntentSchemeUri(Context ctx, String uriStr) {
+        if (uriStr == null || !uriStr.startsWith("intent:")) return false;
         try {
-            String target = (uriStr != null && !uriStr.isEmpty())
-                ? uriStr
-                : "https://www.youtube.com/results?search_query=" + Uri.encode((title != null ? title : "") + " official trailer");
+            Intent i = Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+            return true;
+        } catch (Exception ignored) { return false; }
+    }
+
+    private static boolean tryLaunchTargetStreamingPkg(Context ctx, String pkg, String title) {
+        if (pkg == null || pkg.isEmpty() || pkg.contains("smarttube") || pkg.contains("youtube")) return false;
+        if ("com.netflix.ninja".equals(pkg) && title != null && !title.isEmpty()) {
+            if (tryLaunchNetflixSearchUri(ctx, pkg, title)) return true;
+        }
+        return tryLaunchLeanbackOrStandardPkg(ctx, pkg);
+    }
+
+    private static boolean tryLaunchNetflixSearchUri(Context ctx, String pkg, String title) {
+        try {
+            Uri uri = Uri.parse("nflx://www.netflix.com/search?q=" + Uri.encode(title));
+            Intent nf = new Intent(Intent.ACTION_VIEW, uri).setPackage(pkg);
+            nf.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(nf);
+            return true;
+        } catch (Exception ignored) { return false; }
+    }
+
+    private static boolean tryLaunchLeanbackOrStandardPkg(Context ctx, String pkg) {
+        try {
+            android.content.pm.PackageManager pm = ctx.getPackageManager();
+            Intent lb = pm.getLeanbackLaunchIntentForPackage(pkg);
+            if (lb == null) lb = pm.getLaunchIntentForPackage(pkg);
+            if (lb == null) return false;
+            lb.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(lb);
+            return true;
+        } catch (Exception ignored) { return false; }
+    }
+
+    private static boolean tryLaunchFallbackViewIntent(Context ctx, String uriStr, String pkg, String title) {
+        try {
+            String target = resolveFallbackTargetUrl(uriStr, title);
             Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(target));
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (pkg != null && !pkg.isEmpty()) intent.setPackage(pkg);
             else if (target.contains("youtube.com")) intent.setPackage("org.smarttube.stable");
             ctx.startActivity(intent);
             return true;
-        } catch (Exception e) {
-            return false;
-        }
+        } catch (Exception e) { return false; }
+    }
+
+    private static String resolveFallbackTargetUrl(String uriStr, String title) {
+        if (uriStr != null && !uriStr.isEmpty()) return uriStr;
+        String safeTitle = title != null ? title : "";
+        return "https://www.youtube.com/results?search_query=" + Uri.encode(safeTitle + " official trailer");
     }
 }

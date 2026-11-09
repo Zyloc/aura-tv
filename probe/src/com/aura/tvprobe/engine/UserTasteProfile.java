@@ -112,9 +112,11 @@ public final class UserTasteProfile {
         if (c.equals(regionCountry) && !RegionProviderRegistry.isEnglishPrimaryCountry(c)) {
             return (votes >= 22000 || (votes >= 8500 && pop >= 22.0)) ? 0.60 : -1.80;
         }
-        if (RegionProviderRegistry.isEnglishPrimaryCountry(c) && preferredLangs.contains("english")) {
-            return 0.65;
-        }
+        return computeInternationalOriginAffinity(c, votes, pop, hasSeed);
+    }
+
+    private double computeInternationalOriginAffinity(String c, int votes, double pop, boolean hasSeed) {
+        if (RegionProviderRegistry.isEnglishPrimaryCountry(c) && preferredLangs.contains("english")) return 0.65;
         if (countryWeights.containsKey(c) || hasSeed) {
             return (pop >= 8.0 || votes >= 3500) ? 0.50 : -0.55;
         }
