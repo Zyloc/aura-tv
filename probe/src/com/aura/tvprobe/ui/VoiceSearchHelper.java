@@ -172,6 +172,15 @@ public final class VoiceSearchHelper {
         return keyCode == KeyEvent.KEYCODE_SEARCH || keyCode == KeyEvent.KEYCODE_VOICE_ASSIST;
     }
 
+    public static String extractKatnissRecognizedText(String logLine) {
+        if (logLine == null) return "";
+        int idx = logLine.indexOf("setFinalRecognizedText(");
+        if (idx < 0) return "";
+        int start = idx + 23;
+        int end = logLine.lastIndexOf(')');
+        return (end > start) ? logLine.substring(start, end).trim() : "";
+    }
+
     public static TextView buildMicButton(Context ctx, Runnable onClick) {
         TextView btn = GlassTheme.makeText(ctx, "\uD83C\uDFA4", 13f,
             GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);

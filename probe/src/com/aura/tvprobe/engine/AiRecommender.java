@@ -314,7 +314,9 @@ public class AiRecommender {
         try {
             JSONArray pq = new JSONArray(), seeds = new JSONArray();
             addQueryToSeedPlan(userQuery, pq, seeds);
-            appendProfileAnchorsToSeedPlan(profileId, pq, seeds);
+            if (extractSimilaritySeed(userQuery).isEmpty()) {
+                appendProfileAnchorsToSeedPlan(profileId, pq, seeds);
+            }
             plan.put("primary_queries", pq).put("watched_traversal_seeds", seeds);
         } catch (Exception ignored) {}
         return plan;
@@ -327,14 +329,23 @@ public class AiRecommender {
         }
     }
 
+    public static String extractSimilaritySeed(String userQuery) {
+        if (userQuery == null || userQuery.trim().isEmpty()) return "";
+        String q = userQuery.trim();
+        String stripped = q.replaceAll("(?i)^(?:show me |find |recommend |search |watch )?(?:shows and movies |movies and shows |movies |movie |shows |show |series |films |film |titles |something |anything )?(?:similar to|more like|like)\\s+", "").trim();
+        if (!stripped.equalsIgnoreCase(q) && !stripped.isEmpty()) return stripped;
+        int idx = q.toLowerCase(Locale.US).lastIndexOf(" like ");
+        return idx >= 0 ? q.substring(idx + 6).trim() : "";
+    }
+
     private void addQueryToSeedPlan(String userQuery, JSONArray pq, JSONArray seeds) {
         if (userQuery == null || userQuery.trim().isEmpty()) return;
         String cleanQ = userQuery.trim();
-        String stripped = cleanQ.replaceAll("(?i)^(shows and movies )?similar to\\s+", "")
-                                .replaceAll("(?i)^more like\\s+", "").trim();
-        if (!stripped.isEmpty() && !stripped.contains("->")) {
-            seeds.put(stripped);
-            pq.put(stripped);
+        String simSeed = extractSimilaritySeed(cleanQ);
+        String target = !simSeed.isEmpty() ? simSeed : cleanQ;
+        if (!target.isEmpty() && !target.contains("->")) {
+            seeds.put(target);
+            pq.put(target);
         } else {
             pq.put(cleanQ);
         }
@@ -533,7 +544,7 @@ public class AiRecommender {
         String title = p.optString("title").trim();
         if (title.isEmpty() || db.isTitleWatched(title)) return null;
         JSONObject meta = fetchOpenMetadata(title);
-        if (!JustWatchGraph.isValidModernStreamingCandidate(meta, minAllowedYear, 7.0)) return null;
+        if (!JustWatchGraph.isValidDirectSimilarCandidate(meta, minAllowedYear, 6.8)) return null;
         String verifiedApp = meta.optString("app", "");
         if (verifiedApp.isEmpty()) return null;
         return buildEnrichedCard(p, meta, title, verifiedApp, idx, maxAllowedYear);

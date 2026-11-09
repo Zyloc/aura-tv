@@ -43,10 +43,25 @@ public class VoiceAndContinueWatchingIntegrationTest {
             "android.intent.action.MAIN", "Silo", null, null);
         assertEquals("Non-search actions must not trigger search handoff", "", ignoredMainIntent);
 
-        // 3b. Global Searchable ContentProvider (katniss physical remote mic button KEYCODE_ASSIST=219)
+        // 3b. Global Searchable ContentProvider & Katniss StreamingTextView logcat transcript extraction
         String providerQueryFromArgs = VoiceSearchHelper.extractProviderQuery(
             null, new String[]{"  movies like Avenger  "});
         assertEquals("movies like Avenger", providerQueryFromArgs);
+
+        String katnissLogLine = "11-10 00:59:14.692 I/katniss_interactor_StreamingTextView( 1194): setFinalRecognizedText(movies like Avenger)";
+        assertEquals("movies like Avenger", VoiceSearchHelper.extractKatnissRecognizedText(katnissLogLine));
+        assertEquals("Avenger", AiRecommender.extractSimilaritySeed("movies like Avenger"));
+        assertTrue(VoiceConcierge.wantsMoviesOnly("movies like Avenger"));
+
+        JSONArray mixedCandidates = new JSONArray()
+            .put(new JSONObject().put("title", "Slow Horses").put("type", "Series").put("app", "Apple TV+").put("runtime_min", 50))
+            .put(new JSONObject().put("title", "Avengers: Endgame").put("type", "Movie").put("app", "JioHotstar").put("runtime_min", 181))
+            .put(new JSONObject().put("title", "Guardians of the Galaxy").put("type", "Movie").put("app", "JioHotstar").put("runtime_min", 121));
+        JSONArray moviesOnly = VoiceConcierge.applyConversationalConstraints(
+            mixedCandidates, "movies like Avenger", Collections.emptyList());
+        assertEquals("TV Series must be excluded when user asks for 'movies like Avenger'", 2, moviesOnly.length());
+        assertEquals("Avengers: Endgame", moviesOnly.getJSONObject(0).optString("title"));
+        assertEquals("Guardians of the Galaxy", moviesOnly.getJSONObject(1).optString("title"));
 
         AuraVoiceSearchProvider provider = new AuraVoiceSearchProvider();
         assertTrue(provider.onCreate());

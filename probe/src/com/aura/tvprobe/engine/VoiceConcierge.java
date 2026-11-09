@@ -127,12 +127,52 @@ public class VoiceConcierge {
         String profileId, String userText, String contextualQuery,
         int minModernYear, int currentYear, AiRecommender.AgentProgressListener progress
     ) {
-        // Agent Step 1: Fast Seed & Watch-History Anchor Plan
+        String simSeed = resolveActiveSimilaritySeed(userText, contextualQuery);
+        if (!simSeed.isEmpty()) {
+            List<String> simPool = buildSimilarityCandidatePool(simSeed, userText, progress);
+            if (simPool.size() >= 3) return simPool;
+        }
         if (progress != null) progress.onStep("Searching across your streaming apps for \"" + userText + "\"\u2026");
         JSONObject searchPlan = ai.buildFastSeedPlan(profileId, contextualQuery);
-        // Agent Step 2: Execute multi-hop search & co-watched graph traversal
         if (progress != null) progress.onStep("Traversing " + minModernYear + "\u2013" + currentYear + " streaming graph\u2026");
         return ai.executeMultiHopTraversal(profileId, searchPlan, minModernYear);
+    }
+
+    private String resolveActiveSimilaritySeed(String userText, String contextualQuery) {
+        String direct = AiRecommender.extractSimilaritySeed(userText);
+        return !direct.isEmpty() ? direct : AiRecommender.extractSimilaritySeed(contextualQuery);
+    }
+
+    private List<String> buildSimilarityCandidatePool(
+        String simSeed, String userText, AiRecommender.AgentProgressListener progress
+    ) {
+        if (progress != null) progress.onStep("Traversing co-watch & franchise graph for \"" + simSeed + "\"\u2026");
+        List<String> summaries = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        appendSimilarityCandidates(JustWatchGraph.fetchCollaborativeSimilar(simSeed, 2008), userText, seen, summaries);
+        appendSimilarityCandidates(JustWatchGraph.fetchDeterministicSearchCandidates(simSeed, 2008), userText, seen, summaries);
+        return summaries;
+    }
+
+    private void appendSimilarityCandidates(
+        JSONArray arr, String userText, java.util.Set<String> seen, List<String> summaries
+    ) {
+        if (arr == null) return;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null) tryAddSimilaritySummary(o, userText, seen, summaries);
+        }
+    }
+
+    private void tryAddSimilaritySummary(
+        JSONObject o, String userText, java.util.Set<String> seen, List<String> summaries
+    ) {
+        String t = o.optString("title", "").trim();
+        String norm = AuraDb.normalizeTitleKey(t);
+        if (t.isEmpty() || db.isTitleWatched(t) || !matchesFormatConstraint(o.optString("type", ""), userText)) return;
+        if (!seen.add(norm)) return;
+        db.saveCachedGti("jw_imdb_v6:" + t.toLowerCase(), o.toString());
+        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app") + ")");
     }
 
     private void persistTurnResult(
@@ -155,7 +195,7 @@ public class VoiceConcierge {
     ) throws Exception {
         JSONObject out = parseGeminiTurnOrDefault(rawJson, userText, activeFilters, minModernYear, currentYear);
         JSONArray finalResults = out.getJSONArray("results");
-        if (finalResults.length() < 6) {
+        if (finalResults.length() < 8) {
             backfillWithDeterministicSearch(profileId, userText, contextualQuery, activeFilters, minModernYear, finalResults);
             if (rawJson == null) {
                 out.put("reply", "Ranked top matches for \"" + userText + "\" by taste similarity & Bayesian IMDb.");
@@ -182,7 +222,8 @@ public class VoiceConcierge {
         int minModernYear, int currentYear, JSONObject out
     ) throws Exception {
         out.put("reply", parsed.optString("reply", "Updated picks for your search."));
-        JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minModernYear, currentYear);
+        int minSearchYear = !AiRecommender.extractSimilaritySeed(userText).isEmpty() ? 2008 : (minModernYear - 2);
+        JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minSearchYear, currentYear);
         out.put("results", applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters));
         JSONArray parsedFollowUps = parsed.optJSONArray("follow_ups");
         if (parsedFollowUps != null && parsedFollowUps.length() > 0) {
@@ -229,11 +270,7 @@ public class VoiceConcierge {
     }
 
     private JSONArray tryDirectSimilarTraversal(String profileId, String userText) {
-        if (userText == null) return null;
-        String low = userText.toLowerCase();
-        int likeIdx = low.indexOf(" like ");
-        String seed = likeIdx >= 0 ? userText.substring(likeIdx + 6).trim()
-            : (low.startsWith("similar to ") ? userText.substring(11).trim() : "");
+        String seed = AiRecommender.extractSimilaritySeed(userText);
         if (seed.isEmpty()) return null;
         JSONArray sim = ai.traverseSimilarToWatched(profileId, seed, null);
         return (sim != null && sim.length() > 0) ? sim : null;
@@ -280,7 +317,7 @@ public class VoiceConcierge {
         }
     }
 
-    private JSONArray applyConversationalConstraints(JSONArray items, String userText, List<String> activeFilters) {
+    public static JSONArray applyConversationalConstraints(JSONArray items, String userText, List<String> activeFilters) {
         if (items == null || items.length() == 0) return new JSONArray();
         String combined = ((userText == null ? "" : userText) + " " + (activeFilters == null ? "" : activeFilters.toString())).toLowerCase();
         JSONArray filtered = new JSONArray();
@@ -288,16 +325,36 @@ public class VoiceConcierge {
             JSONObject item = items.optJSONObject(i);
             if (item != null && matchesConversationalItem(item, combined)) filtered.put(item);
         }
-        return filtered.length() >= 3 ? filtered : items;
+        boolean strictFormat = wantsMoviesOnly(combined) || wantsSeriesOnly(combined);
+        return (filtered.length() >= 3 || (strictFormat && filtered.length() > 0)) ? filtered : items;
     }
 
-    private boolean matchesConversationalItem(JSONObject item, String combined) {
+    public static boolean wantsMoviesOnly(String text) {
+        if (text == null) return false;
+        String low = text.toLowerCase();
+        return (low.contains("movie") || low.contains("film")) && !low.contains("show") && !low.contains("series");
+    }
+
+    public static boolean wantsSeriesOnly(String text) {
+        if (text == null) return false;
+        String low = text.toLowerCase();
+        return (low.contains("show") || low.contains("series")) && !low.contains("movie") && !low.contains("film");
+    }
+
+    private static boolean matchesFormatConstraint(String type, String text) {
+        if (wantsMoviesOnly(text)) return "Movie".equalsIgnoreCase(type);
+        if (wantsSeriesOnly(text)) return "Series".equalsIgnoreCase(type);
+        return true;
+    }
+
+    private static boolean matchesConversationalItem(JSONObject item, String combined) {
+        if (!matchesFormatConstraint(item.optString("type", ""), combined)) return false;
         if (!matchesPlatformConstraint(item.optString("app", "").toLowerCase(), combined)) return false;
         boolean underTwoHours = combined.contains("under 2 hours") || combined.contains("shorter") || combined.contains("< 120");
         return !underTwoHours || item.optInt("runtime_min", 100) <= 125;
     }
 
-    private boolean matchesPlatformConstraint(String app, String combined) {
+    private static boolean matchesPlatformConstraint(String app, String combined) {
         boolean fNfx = combined.contains("netflix"), fPrv = combined.contains("prime");
         boolean fJhs = combined.contains("hotstar") || combined.contains("jio"), fAtp = combined.contains("apple");
         if (!fNfx && !fPrv && !fJhs && !fAtp) return true;
@@ -367,13 +424,13 @@ public class VoiceConcierge {
     private String buildPromptRulesSection(int minModernYear, int currentYear, String todayDate) {
         int recentPriorityStart = Math.max(minModernYear, currentYear - 5);
         return "STRICT RULES:\n" +
-            "- MULTI-TURN CONVERSATION: If 'Session Flow so far' has previous user turns, treat the current query as a FOLLOW-UP REFINEMENT on that conversation (e.g. narrowing by platform, runtime, mood, rating, or pivoting from a recommended show).\n" +
-            "- If the user says they watched a title (e.g. 'watched X' or 'similar to X'), treat this as a second-hop traversal query and recommend modern titles similar to X.\n" +
-            "- MODERN RECENCY WINDOW: ONLY recommend released titles from " + minModernYear + " to " + currentYear + " (strongly prioritize " + recentPriorityStart + "–" + currentYear + ", including recent releases up to " + todayDate + "). Do NOT recommend old 1980s, 1990s, 2000s, or early-2010s titles unless explicitly requested.\n" +
-            "- NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
+            "- MULTI-TURN CONVERSATION: If 'Session Flow so far' has previous user turns, treat the current query as a FOLLOW-UP REFINEMENT on that conversation.\n" +
+            "- SIMILARITY & FRANCHISE QUERIES: If the user asks for titles 'like X' or 'similar to X' (e.g. 'movies like Avenger'), EVERY SINGLE RESULT must match the exact subgenre, tone, scale, and theme of X (e.g. superhero / comic-book / MCU / DC / ensemble sci-fi action movies). NEVER include unrelated crime dramas or thrillers from watch history.\n" +
+            "- FORMAT CONSTRAINT: If the user asks for 'movies' or 'films', ONLY recommend feature films (NEVER TV series). If they ask for 'shows' or 'series', ONLY recommend TV series.\n" +
+            "- RECENCY WINDOW: Prioritize modern " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for 'like X' queries you may also include iconic 2008\u2013" + currentYear + " franchise/genre peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +
-            "1. 'reply': Short 1-sentence conversational summary explaining how you answered or refined the previous search.\n" +
-            "2. 'results': Array of 14 unwatched modern (" + minModernYear + "–" + currentYear + ") titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their query & follow-up).\n" +
+            "1. 'reply': Short 1-sentence conversational summary explaining how you answered or refined the search.\n" +
+            "2. 'results': Array of 14 unwatched titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their query).\n" +
             "3. 'follow_ups': Array of 4 short conversational follow-up refinements (max 26 chars each, e.g. 'Only on Netflix & Prime', 'Shorter under 2 hours', 'Darker & grittier tone', 'More like <Top Result>').";
     }
 

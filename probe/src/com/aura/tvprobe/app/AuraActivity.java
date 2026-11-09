@@ -192,6 +192,7 @@ public class AuraActivity extends Activity implements
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (intent != null && intent.getBooleanExtra("aura_bring_to_front", false)) return;
         if (handleIncomingSearchIntent(intent)) return;
         resetToHomeTop();
     }
@@ -280,28 +281,31 @@ public class AuraActivity extends Activity implements
         AuraActivity inst = sActiveInstance;
         if (inst == null) return;
         inst.ui.post(() -> inst.runSearchQuery(q));
-        scheduleBringAuraToFront(inst.ui, ctx, q);
+        scheduleBringAuraToFront(inst.ui, ctx);
     }
 
     private static boolean shouldHandleGlobalVoiceQuery(String q) {
         long now = System.currentTimeMillis();
-        if (q.length() < 2 || (now - sLastActiveWallMs) > 90_000L) return false;
+        if (q.length() < 2 || (now - sLastActiveWallMs) > 600_000L) return false;
         if (q.equalsIgnoreCase(sLastGlobalVoiceQuery) && (now - sLastGlobalVoiceMs) < 3_500L) return false;
         sLastGlobalVoiceQuery = q;
         sLastGlobalVoiceMs = now;
+        sLastActiveWallMs = now;
         return true;
     }
 
-    private static void scheduleBringAuraToFront(Handler h, Context ctx, String q) {
-        bringAuraToFrontNow(ctx, q);
-        h.postDelayed(() -> bringAuraToFrontNow(ctx, q), 450L);
-        h.postDelayed(() -> bringAuraToFrontNow(ctx, q), 1150L);
+    private static void scheduleBringAuraToFront(Handler h, Context ctx) {
+        bringAuraToFrontNow(ctx);
+        h.postDelayed(() -> bringAuraToFrontNow(ctx), 650L);
+        h.postDelayed(() -> bringAuraToFrontNow(ctx), 1450L);
+        h.postDelayed(() -> bringAuraToFrontNow(ctx), 2450L);
+        h.postDelayed(() -> bringAuraToFrontNow(ctx), 3350L);
     }
 
-    private static void bringAuraToFrontNow(Context ctx, String q) {
+    private static void bringAuraToFrontNow(Context ctx) {
         try {
-            Intent i = new Intent(ctx, AuraActivity.class).setAction(Intent.ACTION_SEARCH);
-            i.putExtra(android.app.SearchManager.QUERY, q);
+            Intent i = new Intent(ctx, AuraActivity.class);
+            i.putExtra("aura_bring_to_front", true);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             ctx.startActivity(i);
         } catch (Throwable ignored) {}

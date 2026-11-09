@@ -52,7 +52,7 @@ public class JustWatchGraph {
 
     private static final String SIMILAR_QUERY =
         "query GetSimilar($searchQuery: String!, $country: Country!, $language: Language!) {" +
-        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery }, first: 3) {" +
+        "  popularTitles(country: $country, filter: { searchQuery: $searchQuery, monetizationTypes: [FLATRATE, FREE, ADS] }, first: 4) {" +
         "    edges { node { " +
         "      " + NODE_FIELDS +
         "      ... on MovieOrShow {" +
@@ -115,7 +115,7 @@ public class JustWatchGraph {
             JSONObject parsed = parseNode(edges.optJSONObject(i).optJSONObject("node"), lang);
             if (!isLookupEligible(parsed)) continue;
             if (matchesTargetTitleOrSlug(parsed, normTarget)) return parsed;
-            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, getDefaultMinModernYear() - 2, 6.8)) best = parsed;
+            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, 2000, 6.5)) best = parsed;
         }
         return best != null ? best : new JSONObject();
     }
@@ -263,7 +263,7 @@ public class JustWatchGraph {
             Set<String> seenKeys, List<String> seedGenreCodes, List<JSONObject> candidates) throws Exception {
         if (edges == null) return null;
         JSONObject seedMeta = null;
-        for (int eIdx = 0; eIdx < Math.min(2, edges.length()); eIdx++) {
+        for (int eIdx = 0; eIdx < Math.min(4, edges.length()); eIdx++) {
             JSONObject node = edges.getJSONObject(eIdx).optJSONObject("node");
             seedMeta = processSeedEdgeNode(node, normSeed, minYear, lang, seedMeta, seenKeys, seedGenreCodes, candidates);
         }
@@ -278,7 +278,7 @@ public class JustWatchGraph {
         String resolvedKey = AuraDb.normalizeTitleKey(nodeMeta.optString("title", ""));
         String slugKey = nodeMeta.optString("slug_key", "");
         if (!isCloseSeedMatch(resolvedKey, slugKey, normSeed)) return currentSeedMeta;
-        recordSeenSeedKeys(resolvedKey, slugKey, seenKeys);
+        if (currentSeedMeta == null || resolvedKey.equals(normSeed)) recordSeenSeedKeys(resolvedKey, slugKey, seenKeys);
         String coreGenres = collectCoreSeedGenres(nodeMeta.optString("genre_codes", ""), seedGenreCodes);
         extractSimilarFromNode(node.optJSONArray("similarTitles"), coreGenres, minYear, lang, seenKeys, candidates);
         return (currentSeedMeta == null || slugKey.equals(normSeed)) ? nodeMeta : currentSeedMeta;
@@ -292,8 +292,9 @@ public class JustWatchGraph {
     private static boolean isCloseSeedMatch(String resolvedKey, String slugKey, String normSeed) {
         if (normSeed.isEmpty()) return false;
         if (resolvedKey.equals(normSeed) || slugKey.equals(normSeed)) return true;
+        if (normSeed.length() >= 5 && (resolvedKey.startsWith(normSeed) || slugKey.startsWith(normSeed))) return true;
         int diff = Math.abs(resolvedKey.length() - normSeed.length());
-        return diff <= 5 && (resolvedKey.contains(normSeed) || normSeed.contains(resolvedKey));
+        return diff <= 6 && (resolvedKey.contains(normSeed) || normSeed.contains(resolvedKey));
     }
 
     private static String collectCoreSeedGenres(String rawCodes, List<String> seedGenreCodes) {
@@ -323,7 +324,7 @@ public class JustWatchGraph {
     }
 
     private static boolean isEligibleDirectNeighbor(JSONObject parsed, String seedCoreGenres, int minYear) {
-        if (!CandidateValidator.isValidCoWatchCandidate(parsed, Math.min(minYear, 2020), 7.1)) return false;
+        if (!CandidateValidator.isValidCoWatchCandidate(parsed, Math.min(minYear, 2008), 6.8)) return false;
         String candGenres = parsed.optString("genre_codes", "");
         if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, seedCoreGenres)) return false;
         return CandidateValidator.computeGenreJaccard(candGenres, seedCoreGenres) >= 0.15;
@@ -346,7 +347,7 @@ public class JustWatchGraph {
         JSONArray structured = fetchStructuredGenreCandidates(
             queryGenres, null, originCountry, Math.max(2020, minYear), getCurrentYear(), true);
         String seedCore = String.join(",", seedGenreCodes);
-        appendStructuredExpansion(structured, seedCore, seenKeys, candidates);
+        appendStructuredExpansion(structured, seedMeta, seedCore, seenKeys, candidates);
     }
 
     private static List<String> selectSpecificExpansionGenres(String cleanSeed, List<String> seedGenreCodes) {
@@ -361,16 +362,19 @@ public class JustWatchGraph {
     }
 
     private static void appendStructuredExpansion(
-            JSONArray structured, String seedCoreGenres, Set<String> seenKeys, List<JSONObject> candidates) {
+            JSONArray structured, JSONObject seedMeta, String seedCoreGenres,
+            Set<String> seenKeys, List<JSONObject> candidates) {
         for (int i = 0; i < structured.length(); i++) {
             JSONObject p = structured.optJSONObject(i);
-            if (p != null && matchesStructuredExpansion(p, seedCoreGenres)) {
+            if (p != null && matchesStructuredExpansion(p, seedMeta, seedCoreGenres)) {
                 tryAddNeighborCandidate(p, seenKeys, candidates);
             }
         }
     }
 
-    private static boolean matchesStructuredExpansion(JSONObject p, String seedCoreGenres) {
+    private static boolean matchesStructuredExpansion(JSONObject p, JSONObject seedMeta, String seedCoreGenres) {
+        String seedType = seedMeta != null ? seedMeta.optString("type", "") : "";
+        if (!seedType.isEmpty() && !seedType.equalsIgnoreCase(p.optString("type", ""))) return false;
         String candGenres = p.optString("genre_codes", "");
         if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, seedCoreGenres)) return false;
         return CandidateValidator.computeGenreJaccard(candGenres, seedCoreGenres) >= 0.28;

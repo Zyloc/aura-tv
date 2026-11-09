@@ -25,6 +25,7 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 # Grant TV permissions & notification listener access for MediaSession inspection
 "$ADB" -s "$TV_IP:5555" shell pm grant com.aura.tvprobe android.permission.READ_TV_LISTINGS || true
 "$ADB" -s "$TV_IP:5555" shell pm grant com.aura.tvprobe android.permission.RECORD_AUDIO || true
+"$ADB" -s "$TV_IP:5555" shell pm grant com.aura.tvprobe android.permission.READ_LOGS || true
 "$ADB" -s "$TV_IP:5555" shell cmd notification allow_listener com.aura.tvprobe/com.aura.tvprobe.MediaProbeService || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe GET_USAGE_STATS allow || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe SYSTEM_ALERT_WINDOW allow || true

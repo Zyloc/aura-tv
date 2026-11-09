@@ -12,6 +12,9 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
 import org.json.JSONObject;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +41,8 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private ContentObserver providerObserver;
     private boolean sessionListenerRegistered = false;
     private boolean providerObserverRegistered = false;
+    private volatile boolean katnissWatcherRunning = false;
+    private Process katnissLogProcess;
 
     public MediaEventWatcher(Context ctx, ComponentName component, AuraDb db, SessionInspector inspector) {
         this.ctx = ctx.getApplicationContext();
@@ -53,15 +58,61 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
         workerHandler.post(() -> {
             registerSessionListenerSafe();
             registerProviderObserversSafe();
+            startKatnissVoiceWatcherIfNeeded();
         });
     }
 
     public void unregisterAll() {
+        katnissWatcherRunning = false;
+        stopKatnissLogProcessSafe();
         workerHandler.post(() -> {
             unregisterSessionListenerSafe();
             unregisterProviderObserversSafe();
             clearAllControllerCallbacks();
         });
+    }
+
+    private void startKatnissVoiceWatcherIfNeeded() {
+        if (katnissWatcherRunning) return;
+        katnissWatcherRunning = true;
+        Thread t = new Thread(this::runKatnissVoiceLogLoop, "AuraKatnissVoiceWatcher");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void runKatnissVoiceLogLoop() {
+        while (katnissWatcherRunning) {
+            streamKatnissTranscriptsOnce();
+            try { Thread.sleep(2000L); } catch (InterruptedException ignored) {}
+        }
+    }
+
+    private void streamKatnissTranscriptsOnce() {
+        try {
+            katnissLogProcess = new ProcessBuilder(
+                "logcat", "-T", "1", "-s", "katniss_interactor_StreamingTextView:I").start();
+            readKatnissProcessStream(katnissLogProcess);
+        } catch (Throwable ignored) {
+        } finally {
+            stopKatnissLogProcessSafe();
+        }
+    }
+
+    private void readKatnissProcessStream(Process proc) throws Exception {
+        try (BufferedReader br = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while (katnissWatcherRunning && (line = br.readLine()) != null) {
+                String spoken = VoiceSearchHelper.extractKatnissRecognizedText(line);
+                if (!spoken.isEmpty()) AuraActivity.onGlobalVoiceSearchQuery(ctx, spoken);
+            }
+        }
+    }
+
+    private void stopKatnissLogProcessSafe() {
+        try {
+            if (katnissLogProcess != null) katnissLogProcess.destroy();
+        } catch (Throwable ignored) {}
     }
 
     private void registerSessionListenerSafe() {
