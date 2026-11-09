@@ -117,8 +117,8 @@ public final class SlateAllocator {
         q.put(BUCKET_SCIFI, 8);
         q.put(BUCKET_CRIME, 8);
         q.put(BUCKET_SPORTS, 6);
-        q.put(BUCKET_THRILLER, 6);
-        q.put(BUCKET_DRAMA, 4);
+        q.put(BUCKET_THRILLER, 8);
+        q.put(BUCKET_DRAMA, 10);
         return q;
     }
 

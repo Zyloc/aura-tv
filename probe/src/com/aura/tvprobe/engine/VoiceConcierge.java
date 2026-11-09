@@ -127,14 +127,15 @@ public class VoiceConcierge {
         String profileId, String userText, String contextualQuery,
         int minModernYear, int currentYear, AiRecommender.AgentProgressListener progress
     ) {
+        if (progress != null) progress.onStep("Planning dynamic JustWatch GraphQL filters for \"" + userText + "\"\u2026");
+        List<String> scatterGathered = ai.executeScatterGatherForSearch(profileId, contextualQuery, minModernYear);
+        if (scatterGathered.size() >= 4) return scatterGathered;
         String simSeed = resolveActiveSimilaritySeed(userText, contextualQuery);
         if (!simSeed.isEmpty()) {
             List<String> simPool = buildSimilarityCandidatePool(simSeed, userText, progress);
             if (simPool.size() >= 3) return simPool;
         }
-        if (progress != null) progress.onStep("Searching across your streaming apps for \"" + userText + "\"\u2026");
         JSONObject searchPlan = ai.buildFastSeedPlan(profileId, contextualQuery);
-        if (progress != null) progress.onStep("Traversing " + minModernYear + "\u2013" + currentYear + " streaming graph\u2026");
         return ai.executeMultiHopTraversal(profileId, searchPlan, minModernYear);
     }
 
@@ -423,14 +424,15 @@ public class VoiceConcierge {
 
     private String buildPromptRulesSection(int minModernYear, int currentYear, String todayDate) {
         int recentPriorityStart = Math.max(minModernYear, currentYear - 5);
-        return "STRICT RULES:\n" +
+        return "STRICT STAGE-3 POST-FILTER & RERANKING RULES:\n" +
+            "- SCATTER-GATHER FILTERING: Inspect the 'Multi-Hop Search & Co-Watch Graph Traversal Candidates' above (including each candidate's Type, Genres, Country, and Synopsis). Filter out and discard any candidate that is semantically irrelevant to the User Search Query.\n" +
             "- MULTI-TURN CONVERSATION: If 'Session Flow so far' has previous user turns, treat the current query as a FOLLOW-UP REFINEMENT on that conversation.\n" +
-            "- SIMILARITY & FRANCHISE QUERIES: If the user asks for titles 'like X' or 'similar to X' (e.g. 'movies like Avenger'), EVERY SINGLE RESULT must match the exact subgenre, tone, scale, and theme of X (e.g. superhero / comic-book / MCU / DC / ensemble sci-fi action movies). NEVER include unrelated crime dramas or thrillers from watch history.\n" +
-            "- FORMAT CONSTRAINT: If the user asks for 'movies' or 'films', ONLY recommend feature films (NEVER TV series). If they ask for 'shows' or 'series', ONLY recommend TV series.\n" +
-            "- RECENCY WINDOW: Prioritize modern " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for 'like X' queries you may also include iconic 2008\u2013" + currentYear + " franchise/genre peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
+            "- SIMILARITY & FRANCHISE QUERIES: If the user asks for titles 'like X' or 'similar to X', EVERY SINGLE RESULT must match the subgenre, tone, scale, and storyline of X. NEVER include unrelated crime dramas or thrillers.\n" +
+            "- FORMAT CONSTRAINT: If the user asks for 'movies' or 'films', ONLY return feature films (Type='Movie', NEVER TV series). If they ask for 'shows' or 'series', ONLY return TV series.\n" +
+            "- RECENCY WINDOW: Prioritize " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for franchise/similarity queries include iconic 2008\u2013" + currentYear + " peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +
-            "1. 'reply': Short 1-sentence conversational summary explaining how you answered or refined the search.\n" +
-            "2. 'results': Array of 14 unwatched titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why this fits their query).\n" +
+            "1. 'reply': Short 1-sentence conversational summary explaining how you filtered and ranked the results.\n" +
+            "2. 'results': Array of 14 unwatched titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5'), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why its plot & genre fit their query).\n" +
             "3. 'follow_ups': Array of 4 short conversational follow-up refinements (max 26 chars each, e.g. 'Only on Netflix & Prime', 'Shorter under 2 hours', 'Darker & grittier tone', 'More like <Top Result>').";
     }
 

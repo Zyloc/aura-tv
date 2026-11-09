@@ -102,7 +102,7 @@ public class MediaProbeService extends NotificationListenerService {
 
     private void handleClient(Socket client) {
         try (Socket s = client) {
-            s.setSoTimeout(25000);
+            s.setSoTimeout(40000);
             java.io.InputStream rawIn = s.getInputStream();
             String reqLine = readAsciiLine(rawIn);
             if (reqLine == null) return;

@@ -69,6 +69,18 @@ public class JustWatchGraph {
         "  }" +
         "}";
 
+    private static final String DYNAMIC_GRAPH_QUERY =
+        "query DynamicGraph($country: Country!, $language: Language!, $filter: TitleFilter!, $first: Int!, $includeSimilar: Boolean!) {" +
+        "  popularTitles(country: $country, filter: $filter, first: $first) {" +
+        "    edges { node { " +
+        "      " + NODE_FIELDS +
+        "      ... on MovieOrShow {" +
+        "        similarTitles(country: $country) @include(if: $includeSimilar) { " + NODE_FIELDS + " }" +
+        "      }" +
+        "    }}" +
+        "  }" +
+        "}";
+
     public static int getCurrentYear() {
         return CandidateValidator.getCurrentYear();
     }
@@ -133,6 +145,169 @@ public class JustWatchGraph {
     public static JSONArray fetchStructuredGenreCandidates(
             List<String> genreCodes, List<String> packageCodes, int minYear, int maxYear) {
         return fetchStructuredGenreCandidates(genreCodes, packageCodes, null, minYear, maxYear, false);
+    }
+
+    public static JSONArray executeScatterGatherSpecs(JSONArray specs) {
+        if (specs == null || specs.length() == 0) return new JSONArray();
+        final List<JSONObject> gathered = java.util.Collections.synchronizedList(new ArrayList<>());
+        final Set<String> seenKeys = java.util.Collections.synchronizedSet(new HashSet<>());
+        runScatterGatherPool(specs, seenKeys, gathered);
+        JSONArray out = new JSONArray();
+        for (JSONObject o : gathered) out.put(o);
+        return out;
+    }
+
+    private static void runScatterGatherPool(JSONArray specs, Set<String> seenKeys, List<JSONObject> gathered) {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(Math.min(6, specs.length()));
+        for (int i = 0; i < specs.length() && i < 6; i++) {
+            final JSONObject spec = specs.optJSONObject(i);
+            if (spec != null) pool.submit(() -> collectSpecCandidates(spec, seenKeys, gathered));
+        }
+        pool.shutdown();
+        try { pool.awaitTermination(8, TimeUnit.SECONDS); } catch (Exception ignored) {}
+    }
+
+    private static void collectSpecCandidates(JSONObject spec, Set<String> seenKeys, List<JSONObject> gathered) {
+        JSONArray hits = executeDynamicQuerySpec(spec);
+        for (int i = 0; i < hits.length(); i++) {
+            JSONObject item = hits.optJSONObject(i);
+            String key = item != null ? AuraDb.normalizeTitleKey(item.optString("title", "")) : "";
+            if (!key.isEmpty() && seenKeys.add(key)) gathered.add(item);
+        }
+    }
+
+    public static JSONArray executeDynamicQuerySpec(JSONObject spec) {
+        JSONArray out = new JSONArray();
+        if (spec == null) return out;
+        try {
+            String lang = RegionProviderRegistry.getLanguageCode(null);
+            JSONObject vars = buildDynamicSpecVars(spec, RegionProviderRegistry.getCountryCode(null), lang);
+            JSONArray edges = extractEdges(postGraphQl(DYNAMIC_GRAPH_QUERY, vars));
+            extractDynamicSpecNodes(edges, spec, lang, out);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static JSONObject buildDynamicSpecVars(JSONObject spec, String country, String lang) throws Exception {
+        boolean incSim = spec.optBoolean("includeSimilar", !spec.optString("searchQuery", "").trim().isEmpty());
+        int first = incSim && !spec.optString("searchQuery", "").trim().isEmpty() ? 4 : 18;
+        return new JSONObject().put("country", country).put("language", lang)
+            .put("first", first).put("includeSimilar", incSim)
+            .put("filter", buildDynamicTitleFilter(spec));
+    }
+
+    private static JSONObject buildDynamicTitleFilter(JSONObject spec) throws Exception {
+        JSONObject filter = new JSONObject();
+        filter.put("packages", extractSpecPackages(spec.optJSONArray("packages")));
+        filter.put("monetizationTypes", new JSONArray().put("FLATRATE").put("FREE").put("ADS"));
+        int minYr = Math.max(1995, spec.optInt("minYear", getDefaultMinModernYear() - 2));
+        int maxYr = Math.min(getCurrentYear(), spec.optInt("maxYear", getCurrentYear()));
+        filter.put("releaseYear", new JSONObject().put("min", Math.min(minYr, maxYr)).put("max", maxYr));
+        applyOptionalSpecFilterFields(spec, filter);
+        return filter;
+    }
+
+    private static void applyOptionalSpecFilterFields(JSONObject spec, JSONObject filter) throws Exception {
+        String sq = spec.optString("searchQuery", "").trim();
+        if (!sq.isEmpty()) filter.put("searchQuery", sq);
+        JSONArray objTypes = extractSpecObjectTypes(spec.optJSONArray("objectTypes"));
+        if (objTypes.length() > 0) filter.put("objectTypes", objTypes);
+        JSONArray genres = extractSpecGenres(spec.optJSONArray("genres"));
+        if (genres.length() > 0 && sq.isEmpty()) filter.put("genres", genres);
+        JSONArray countries = extractSpecCountries(spec.optJSONArray("productionCountries"));
+        if (countries.length() > 0 && sq.isEmpty()) filter.put("productionCountries", countries);
+    }
+
+    private static JSONArray extractSpecPackages(JSONArray raw) {
+        if (raw == null || raw.length() == 0) return getDefaultPackagesJson();
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < raw.length(); i++) {
+            String p = raw.optString(i, "").trim().toLowerCase(Locale.US);
+            if (RegionProviderRegistry.isAllowedProvider(p)) out.put(p);
+        }
+        return out.length() > 0 ? out : getDefaultPackagesJson();
+    }
+
+    private static JSONArray extractSpecObjectTypes(JSONArray raw) {
+        JSONArray out = new JSONArray();
+        if (raw == null) return out;
+        for (int i = 0; i < raw.length(); i++) {
+            String t = raw.optString(i, "").trim().toUpperCase(Locale.US);
+            if ("MOVIE".equals(t) || "SHOW".equals(t)) out.put(t);
+        }
+        return out;
+    }
+
+    private static JSONArray extractSpecGenres(JSONArray raw) {
+        JSONArray out = new JSONArray();
+        if (raw == null) return out;
+        for (int i = 0; i < raw.length(); i++) {
+            String g = raw.optString(i, "").trim().toLowerCase(Locale.US);
+            if (isValidGenreCode(g)) out.put(g);
+        }
+        return out;
+    }
+
+    private static JSONArray extractSpecCountries(JSONArray raw) {
+        JSONArray out = new JSONArray();
+        if (raw == null) return out;
+        for (int i = 0; i < raw.length(); i++) {
+            String c = raw.optString(i, "").trim().toUpperCase(Locale.US);
+            if (c.length() == 2) out.put(c);
+        }
+        return out;
+    }
+
+    private static void extractDynamicSpecNodes(JSONArray edges, JSONObject spec, String lang, JSONArray out) {
+        if (edges == null) return;
+        int minYr = Math.max(1995, spec.optInt("minYear", 2008));
+        String seedAnchor = spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim();
+        JSONArray objTypes = extractSpecObjectTypes(spec.optJSONArray("objectTypes"));
+        for (int i = 0; i < edges.length(); i++) {
+            JSONObject node = edges.optJSONObject(i) != null ? edges.optJSONObject(i).optJSONObject("node") : null;
+            if (node != null) collectNodeAndSimilar(node, minYr, seedAnchor, objTypes, lang, out);
+        }
+    }
+
+    private static void collectNodeAndSimilar(
+            JSONObject node, int minYr, String seedAnchor, JSONArray objTypes, String lang, JSONArray out) {
+        JSONObject primary = parseNode(node, lang);
+        if (matchesSpecObjectTypes(primary, objTypes) && CandidateValidator.isValidCoWatchCandidate(primary, minYr, 6.8)) {
+            tagDynamicHit(primary, seedAnchor, false);
+            out.put(primary);
+        }
+        collectSimilarNodesForSpec(node.optJSONArray("similarTitles"), primary, minYr, seedAnchor, objTypes, lang, out);
+    }
+
+    private static void collectSimilarNodesForSpec(
+            JSONArray sim, JSONObject primary, int minYr, String seedAnchor,
+            JSONArray objTypes, String lang, JSONArray out) {
+        if (sim == null) return;
+        String anchor = !seedAnchor.isEmpty() ? seedAnchor : primary.optString("title", "");
+        for (int j = 0; j < sim.length(); j++) {
+            JSONObject sNode = parseNode(sim.optJSONObject(j), lang);
+            if (matchesSpecObjectTypes(sNode, objTypes) && CandidateValidator.isValidCoWatchCandidate(sNode, Math.min(minYr, 2008), 6.8)) {
+                tagDynamicHit(sNode, anchor, true);
+                out.put(sNode);
+            }
+        }
+    }
+
+    private static boolean matchesSpecObjectTypes(JSONObject parsed, JSONArray objTypes) {
+        if (objTypes == null || objTypes.length() == 0) return true;
+        String want = "Movie".equalsIgnoreCase(parsed.optString("type", "")) ? "MOVIE" : "SHOW";
+        for (int i = 0; i < objTypes.length(); i++) {
+            if (want.equalsIgnoreCase(objTypes.optString(i, ""))) return true;
+        }
+        return false;
+    }
+
+    private static void tagDynamicHit(JSONObject item, String seedAnchor, boolean isSim) {
+        try {
+            if (!seedAnchor.isEmpty()) item.put("seed_anchor", seedAnchor);
+            item.put("is_direct_sim", isSim);
+            item.put("source_channel", isSim ? "co_watch" : "llm_planned");
+        } catch (Exception ignored) {}
     }
 
     public static JSONArray fetchStructuredGenreCandidates(

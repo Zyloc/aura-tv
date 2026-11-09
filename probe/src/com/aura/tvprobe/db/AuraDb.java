@@ -406,11 +406,11 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private boolean resetRecosIfEngineUpgraded(SQLiteDatabase db) {
-        if ("sota_v13".equals(getSetting("reco_engine_version", ""))) return false;
+        if ("sota_v14".equals(getSetting("reco_engine_version", ""))) return false;
         db.delete("profile_recos", null, null);
         db.delete("gti_cache", "gti LIKE 'jw_imdb_%'", null);
         setSetting("voice_session_default", "");
-        setSetting("reco_engine_version", "sota_v13");
+        setSetting("reco_engine_version", "sota_v14");
         return true;
     }
 

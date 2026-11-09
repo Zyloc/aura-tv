@@ -104,7 +104,7 @@ public class AiRecommender {
         runParallelCandidateRetrieval(taste, seedPlan, minModernYear, currentYear, seenKeys, pool);
         taste.ensureDefaultGenreWeightsIfEmpty();
         scoreAndRerankPool(pool, taste, currentYear);
-        List<JSONObject> slate = SlateAllocator.allocateBalancedSlate(pool, epoch, ImpressionTracker.loadActiveImpressions(db));
+        List<JSONObject> slate = filterAndRerankPoolWithLlm(profileId, pool, epoch);
         ImpressionTracker.recordSlateImpressions(db, epoch, slate);
         return packRankedItems(slate);
     }
@@ -122,12 +122,38 @@ public class AiRecommender {
     private void runParallelCandidateRetrieval(
             UserTasteProfile taste, JSONObject seedPlan, int minModernYear, int currentYear,
             Set<String> seenKeys, List<JSONObject> pool) {
-        ExecutorService exec = Executors.newFixedThreadPool(4);
+        ExecutorService exec = Executors.newFixedThreadPool(6);
+        submitDynamicSpecTasks(exec, taste, seedPlan, seenKeys, pool);
         submitCoWatchTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
-        submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
         submitPlannedQueryTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
+        if (seedPlan == null || seedPlan.optJSONArray("queries") == null) {
+            submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
+        }
         exec.shutdown();
         try { exec.awaitTermination(12, TimeUnit.SECONDS); } catch (Exception ignored) {}
+    }
+
+    private void submitDynamicSpecTasks(
+            ExecutorService exec, UserTasteProfile taste, JSONObject seedPlan,
+            Set<String> seenKeys, List<JSONObject> pool) {
+        JSONArray specs = seedPlan != null ? seedPlan.optJSONArray("queries") : null;
+        if (specs == null) return;
+        for (int i = 0; i < specs.length() && i < 6; i++) {
+            final JSONObject spec = specs.optJSONObject(i);
+            final double weight = Math.max(0.85, 1.15 - i * 0.05);
+            if (spec != null) exec.submit(() -> retrieveDynamicSpecHits(spec, weight, taste, seenKeys, pool));
+        }
+    }
+
+    private void retrieveDynamicSpecHits(
+            JSONObject spec, double weight, UserTasteProfile taste,
+            Set<String> seenKeys, List<JSONObject> pool) {
+        JSONArray hits = JustWatchGraph.executeDynamicQuerySpec(spec);
+        String anchor = spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim();
+        for (int k = 0; k < hits.length() && k < 10; k++) {
+            JSONObject cand = hits.optJSONObject(k);
+            if (cand != null) addSotaCandidate(cand, anchor.isEmpty() ? null : anchor, weight, taste, seenKeys, pool);
+        }
     }
 
     private void submitCoWatchTasks(
@@ -425,27 +451,123 @@ public class AiRecommender {
         }
     }
 
+    public JSONArray buildRichWatchedContext(String profileId) {
+        List<String> anchors = db.getDynamicTasteAnchors(profileId);
+        final JSONObject[] entries = new JSONObject[Math.min(6, anchors.size())];
+        ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, entries.length));
+        for (int i = 0; i < entries.length; i++) {
+            final int idx = i;
+            final String title = anchors.get(i);
+            pool.submit(() -> entries[idx] = buildRichAnchorEntry(title));
+        }
+        pool.shutdown();
+        try { pool.awaitTermination(2500, TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
+        return packNonNullEntries(entries);
+    }
+
+    private JSONArray packNonNullEntries(JSONObject[] entries) {
+        JSONArray rich = new JSONArray();
+        for (JSONObject e : entries) {
+            if (e != null) rich.put(e);
+        }
+        return rich;
+    }
+
+    private JSONObject buildRichAnchorEntry(String title) {
+        try {
+            JSONObject meta = fetchOpenMetadata(title);
+            String syn = meta.optString("synopsis", "");
+            if (syn.length() > 160) syn = syn.substring(0, 160) + "...";
+            return new JSONObject().put("title", meta.optString("title", title))
+                .put("type", meta.optString("type", "Series"))
+                .put("genres", meta.optString("genres", "Drama"))
+                .put("country", meta.optString("country", ""))
+                .put("synopsis", syn);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String buildPlannerPrompt(
         String profileId, String userQuery, List<String> watchedList, int minModernYear, int currentYear
     ) {
         String personalGuide = db.getProfileTaste(profileId);
-        return "You are Aura's Search Query Planner Agent. Current TV System Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
-            "Profile: '" + db.getProfileLabel(profileId) + "'.\n" +
-            "Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
-            "Default Guide AI: " + db.getDefaultTasteGuide() + "\n" +
+        JSONArray richHistory = buildRichWatchedContext(profileId);
+        return "You are Aura's Dynamic JustWatch GraphQL Query & Filter Planner Agent. Current Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
+            "Profile: '" + db.getProfileLabel(profileId) + "'. Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
             "User Ratings Feedback: " + db.getRatingFeedbackSummary() + "\n" +
-            "Currently Watching / Active Taste Anchors (HIGHEST PRIORITY): " + db.getDynamicTasteAnchors(profileId).toString() + "\n" +
-            "Already Watched (do not recommend): " + watchedList.toString() + "\n" +
+            "Active Filters: " + db.getActiveFilters(profileId).toString() + "\n" +
+            "User's Watched & In-Progress Shows (with Title, Type, Genres, Country, and Plot Synopsis): " + richHistory.toString() + "\n" +
+            "Already Watched Exclusion List: " + watchedList.toString() + "\n" +
             "User Search Query (if any): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
+            buildJustWatchSchemaPromptSection(minModernYear, currentYear);
+    }
+
+    private String buildJustWatchSchemaPromptSection(int minModernYear, int currentYear) {
+        return "JUSTWATCH GRAPHQL TITLEFILTER SCHEMA:\n" +
+            "Each query object in 'queries' is executed in parallel (scatter-gather) against JustWatch India GraphQL and accepts:\n" +
+            "- 'searchQuery': string (specific seed title/movie/show/franchise to match or traverse, OR \"\" for pure genre/country filter discovery)\n" +
+            "- 'includeSimilar': boolean (true to traverse JustWatch's similarTitles co-watch graph for 'searchQuery')\n" +
+            "- 'objectTypes': array of [\"MOVIE\"], [\"SHOW\"], or [\"MOVIE\", \"SHOW\"] (e.g. if user asks for movies, MUST be [\"MOVIE\"])\n" +
+            "- 'genres': array of valid JustWatch genre codes from [\"act\",\"scf\",\"fnt\",\"trl\",\"crm\",\"drm\",\"cmy\",\"rma\",\"hrr\",\"ani\",\"doc\",\"spt\",\"hst\",\"war\"]\n" +
+            "- 'packages': array of JustWatch package codes from [\"nfx\",\"prv\",\"jhs\",\"atp\",\"snl\",\"zee\"]\n" +
+            "- 'minYear': integer (e.g. " + minModernYear + " for modern discovery, or 2008-2015 when searching iconic movie franchises like Avengers/Marvel)\n" +
+            "- 'maxYear': integer (" + currentYear + ")\n" +
+            "- 'productionCountries': optional array of 2-letter ISO codes (e.g. [\"IN\"], [\"US\"], [\"KR\"], [\"JP\"], [\"GB\"])\n" +
+            "- 'seedAnchor': string naming which watched show or search intent inspired this query.\n\n" +
             buildPlannerTaskInstructions(minModernYear, currentYear);
     }
 
     private String buildPlannerTaskInstructions(int minModernYear, int currentYear) {
         return "Task:\n" +
-            "1. Plan 'primary_queries': 5 specific modern (" + minModernYear + "-" + currentYear + ") critically acclaimed show/movie titles (with 5,000+ IMDb votes) directly inspired by the user's Currently Watching / Active Taste Anchors (and User Search Query if provided), respecting Guide AI.\n" +
-            "2. Plan 'watched_traversal_seeds': 3 titles starting with the first 2 Currently Watching / Active Taste Anchors to run a co-watch graph traversal query.\n" +
-            "3. Plan 'traversal_chips': 3 short clickable search-engine traversal phrases (max 24 chars each) based on what the user is currently watching.\n" +
-            "Return ONLY a JSON object with keys: 'primary_queries' (array of strings), 'watched_traversal_seeds' (array of strings), 'traversal_chips' (array of 3 strings).";
+            "1. Plan 'queries': 6 diverse JustWatch GraphQL query spec objects for parallel scatter-gather retrieval. " +
+            "If 'User Search Query' is non-empty, ALL 6 query specs MUST directly target the user's search query intent (its seed title, sibling franchise titles, exact objectTypes MOVIE vs SHOW, genres, and era) and MUST NOT mix in unrelated watch history. " +
+            "If 'User Search Query' is empty, generate the 6 query specs from the plot synopses, genres, countries, and types of the User's Watched & In-Progress Shows.\n" +
+            "2. Plan 'primary_queries': 5 specific show/movie titles matching the request or watched history.\n" +
+            "3. Plan 'watched_traversal_seeds': 3 seed titles for co-watch traversal.\n" +
+            "4. Plan 'traversal_chips': 3 short clickable search phrases (max 24 chars each).\n" +
+            "Return ONLY a JSON object with keys: 'queries', 'primary_queries', 'watched_traversal_seeds', 'traversal_chips'.";
+    }
+
+    public List<String> executeScatterGatherForSearch(String profileId, String userQuery, int minModernYear) {
+        int currentYear = JustWatchGraph.getCurrentYear();
+        List<String> watched = collectWatchedTitles(db.listHistory(profileId));
+        JSONObject plan = planAgentSearchStrategy(profileId, userQuery, watched, minModernYear, currentYear);
+        JSONArray gathered = JustWatchGraph.executeScatterGatherSpecs(plan.optJSONArray("queries"));
+        List<String> summaries = new ArrayList<>();
+        Set<String> seenNorm = new HashSet<>();
+        appendSearchCandidateSummaries(gathered, seenNorm, summaries);
+        appendFallbackPlanCandidates(plan, minModernYear, seenNorm, summaries);
+        return summaries;
+    }
+
+    private void appendSearchCandidateSummaries(JSONArray arr, Set<String> seenNorm, List<String> summaries) {
+        if (arr == null) return;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null) addSearchCandidateSummary(o, seenNorm, summaries);
+        }
+    }
+
+    private void appendFallbackPlanCandidates(JSONObject plan, int minModernYear, Set<String> seenNorm, List<String> summaries) {
+        if (summaries.size() >= 10 || plan == null) return;
+        JSONArray pq = plan.optJSONArray("primary_queries");
+        if (pq == null) return;
+        for (int i = 0; i < pq.length() && i < 5; i++) {
+            String q = pq.optString(i).trim();
+            if (!q.isEmpty()) appendSearchCandidateSummaries(JustWatchGraph.fetchCollaborativeSimilar(q, 2008), seenNorm, summaries);
+        }
+    }
+
+    private void addSearchCandidateSummary(JSONObject o, Set<String> seenNorm, List<String> summaries) {
+        String t = o.optString("title", "").trim();
+        String norm = AuraDb.normalizeTitleKey(t);
+        if (t.isEmpty() || seenNorm.contains(norm) || db.isTitleWatched(t)) return;
+        seenNorm.add(norm);
+        db.saveCachedGti("jw_imdb_v6:" + t.toLowerCase(Locale.US), o.toString());
+        String syn = o.optString("synopsis", "");
+        if (syn.length() > 120) syn = syn.substring(0, 120) + "...";
+        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("country") + ", " + o.optString("rating") + ", " + o.optString("app") + ") — " + syn);
     }
 
     public List<String> executeMultiHopTraversal(String profileId, JSONObject searchPlan, int minModernYear) {
@@ -464,10 +586,81 @@ public class AiRecommender {
         String t = o.optString("title").trim();
         String norm = AuraDb.normalizeTitleKey(t);
         if (t.isEmpty() || seenNorm.contains(norm) || db.isTitleWatched(t)) return;
-        if (!JustWatchGraph.isValidModernStreamingCandidate(o, JustWatchGraph.getDefaultMinModernYear(), 7.1)) return;
+        if (!JustWatchGraph.isValidDirectSimilarCandidate(o, 2008, 6.8)) return;
         seenNorm.add(norm);
         db.saveCachedGti("jw_imdb_v6:" + t.toLowerCase(), o.toString());
-        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("genres") + ", " + o.optString("rating") + " [" + o.optInt("imdb_votes") + " votes], " + o.optString("app") + ")");
+        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app") + ")");
+    }
+
+    private List<JSONObject> filterAndRerankPoolWithLlm(String profileId, List<JSONObject> pool, int epoch) {
+        pool.sort((a, b) -> Double.compare(b.optDouble("sota_score", 0.0), a.optDouble("sota_score", 0.0)));
+        List<JSONObject> baseSlate = SlateAllocator.allocateBalancedSlate(pool, epoch, ImpressionTracker.loadActiveImpressions(db));
+        if (getApiKey().isEmpty() || pool.size() < 6) return baseSlate;
+        String prompt = buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(pool, 40));
+        String raw = callGeminiJson(prompt);
+        List<JSONObject> llmFiltered = applyLlmFilteredSlate(pool, raw);
+        return llmFiltered.size() >= 8 ? llmFiltered : baseSlate;
+    }
+
+    private List<String> collectCandidateSummariesForLlm(List<JSONObject> pool, int limit) {
+        List<String> list = new ArrayList<>();
+        for (int i = 0; i < pool.size() && i < limit; i++) {
+            JSONObject o = pool.get(i);
+            String syn = o.optString("synopsis", "");
+            if (syn.length() > 120) syn = syn.substring(0, 120) + "...";
+            list.add(o.optString("title") + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("country") + ", " + o.optString("rating") + ", " + o.optString("app") + ", Anchor=" + o.optString("seed_anchor", "discovery") + ") — " + syn);
+        }
+        return list;
+    }
+
+    private List<JSONObject> applyLlmFilteredSlate(List<JSONObject> pool, String rawJson) {
+        if (rawJson == null || rawJson.trim().isEmpty()) return Collections.emptyList();
+        try {
+            JSONArray arr = parseLlmRankingArray(rawJson);
+            return matchLlmPicksToPool(pool, arr);
+        } catch (Exception e) {
+            return Collections.emptyList();
+        }
+    }
+
+    private JSONArray parseLlmRankingArray(String rawJson) throws Exception {
+        String trimmed = rawJson.trim();
+        if (trimmed.startsWith("[")) return new JSONArray(trimmed);
+        JSONObject obj = new JSONObject(trimmed);
+        JSONArray res = obj.optJSONArray("results");
+        return res != null ? res : new JSONArray();
+    }
+
+    private List<JSONObject> matchLlmPicksToPool(List<JSONObject> pool, JSONArray arr) {
+        Map<String, JSONObject> byKey = new HashMap<>();
+        for (JSONObject c : pool) byKey.put(AuraDb.normalizeTitleKey(c.optString("title", "")), c);
+        List<JSONObject> out = new ArrayList<>();
+        Set<String> added = new HashSet<>();
+        for (int i = 0; i < arr.length(); i++) {
+            tryAddMatchedLlmPick(arr.optJSONObject(i), byKey, added, out);
+        }
+        appendRemainingPoolItems(pool, added, out, 28);
+        return out;
+    }
+
+    private void tryAddMatchedLlmPick(JSONObject pick, Map<String, JSONObject> byKey, Set<String> added, List<JSONObject> out) {
+        if (pick == null) return;
+        String key = AuraDb.normalizeTitleKey(pick.optString("title", ""));
+        JSONObject matched = byKey.get(key);
+        if (matched == null || !added.add(key)) return;
+        String reason = pick.optString("reason", "").trim();
+        if (!reason.isEmpty()) {
+            try { matched.put("reason", reason); } catch (Exception ignored) {}
+        }
+        out.add(matched);
+    }
+
+    private void appendRemainingPoolItems(List<JSONObject> pool, Set<String> added, List<JSONObject> out, int targetCount) {
+        for (JSONObject c : pool) {
+            if (out.size() >= targetCount) return;
+            String k = AuraDb.normalizeTitleKey(c.optString("title", ""));
+            if (!k.isEmpty() && added.add(k)) out.add(c);
+        }
     }
 
     private List<String> collectWatchedTitles(JSONArray history) {
@@ -488,34 +681,31 @@ public class AiRecommender {
         }
     }
 
-    private String buildAgentRankingPrompt(
-        String profileId, JSONObject np, List<String> watchedList,
-        List<String> verifiedCandidates, int minModernYear, int currentYear
-    ) {
+    private String buildAgentRankingPrompt(String profileId, List<String> verifiedCandidates) {
         String profileName = db.getProfileLabel(profileId);
-        List<String> tasteAnchors = db.getDynamicTasteAnchors(profileId);
-        String header = buildRankingPromptHeader(profileId, profileName, np, tasteAnchors);
-        return header + buildRankingPromptBody(profileName, tasteAnchors, watchedList, verifiedCandidates);
+        JSONArray richHistory = buildRichWatchedContext(profileId);
+        String header = buildRankingPromptHeader(profileId, profileName, richHistory);
+        return header + buildRankingPromptBody(profileName, verifiedCandidates);
     }
 
-    private String buildRankingPromptHeader(String profileId, String profileName, JSONObject np, List<String> tasteAnchors) {
+    private String buildRankingPromptHeader(String profileId, String profileName, JSONArray richHistory) {
         String personalGuide = db.getProfileTaste(profileId);
         String ratingsFeedback = db.getRatingFeedbackSummary();
         List<String> activeFilters = db.getActiveFilters(profileId);
-        String cur = np != null ? (np.optString("series_title").isEmpty() ? np.optString("title") : np.optString("series_title")) : "";
-        return "You are Aura's SOTA Ranking & Reasoning Agent for Android TV in India.\n" +
-            "Current TV System Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'.\n" +
+        return "You are Aura's Stage-3 Post-Filter & Reranking Agent for Android TV in India.\n" +
+            "Current Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'.\n" +
             "1. PERSONAL GUIDE AI: " + (personalGuide.isEmpty() ? "(Use Default Guide AI and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
             "2. DEFAULT GUIDE AI: \"" + db.getDefaultTasteGuide() + "\"\n3. USER RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
-            "4. ACTIVE FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n5. RECENTLY WATCHED ANCHORS: " + tasteAnchors.toString() + " (Latest: '" + cur + "').\n";
+            "4. ACTIVE FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
+            "5. USER'S WATCHED SHOWS (WITH PLOT SYNOPSIS, GENRES, TYPE, COUNTRY): " + richHistory.toString() + "\n";
     }
 
-    private String buildRankingPromptBody(
-            String profileName, List<String> tasteAnchors, List<String> watchedList, List<String> verifiedCandidates) {
-        return "6. STRICT WATCHED EXCLUSION LIST: " + watchedList.toString() + ".\n" +
-            "7. SOTA VERIFIED CANDIDATE POOL (ONLY pick from or closely match this verified pool): " + verifiedCandidates.toString() + ".\n\n" +
-            "Select & rank 20 titles from the SOTA Verified Candidate Pool that best match '" + profileName + "'s watched anchors (" + tasteAnchors.toString() + ").\n" +
-            "Return ONLY a JSON array of 20 objects with keys: 'title', 'app', 'genres', 'runtime_min' (integer), and 'reason' (18-28 words explaining why it connects to their watched shows).";
+    private String buildRankingPromptBody(String profileName, List<String> verifiedCandidates) {
+        return "6. SCATTER-GATHER JUSTWATCH CANDIDATE POOL: " + verifiedCandidates.toString() + "\n\n" +
+            "Task:\n" +
+            "- Filter out any candidates from the pool that are semantically irrelevant to the user's watched shows' storylines, genres, and Guide AI.\n" +
+            "- Select & rank the top 22 candidates from the pool that genuinely match what '" + profileName + "' enjoys watching.\n" +
+            "- Return ONLY a JSON object with key 'results': an array of objects, each with keys 'title' (exact title from the pool) and 'reason' (18-26 words explaining specifically how its plot/theme connects to one of their watched shows).";
     }
 
     public JSONArray enrichAll(JSONArray raw) {
@@ -736,7 +926,7 @@ public class AiRecommender {
     private String httpPost(final String urlStr, final String jsonBody) throws Exception {
         java.util.concurrent.Future<String> fut = HTTP_EXEC.submit(() -> executeHttpPost(urlStr, jsonBody));
         try {
-            return fut.get(5200, TimeUnit.MILLISECONDS);
+            return fut.get(11000, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             fut.cancel(true);
             throw e;
@@ -746,7 +936,7 @@ public class AiRecommender {
     private String executeHttpPost(String urlStr, String jsonBody) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
         conn.setConnectTimeout(3500);
-        conn.setReadTimeout(5000);
+        conn.setReadTimeout(10500);
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");

@@ -63,6 +63,13 @@ public class VoiceAndContinueWatchingIntegrationTest {
         assertEquals("Avengers: Endgame", moviesOnly.getJSONObject(0).optString("title"));
         assertEquals("Guardians of the Galaxy", moviesOnly.getJSONObject(1).optString("title"));
 
+        JSONArray dynamicSpecs = new JSONArray()
+            .put(new JSONObject().put("searchQuery", "The Avengers").put("includeSimilar", true)
+                .put("objectTypes", new JSONArray().put("MOVIE")).put("genres", new JSONArray().put("act").put("scf"))
+                .put("minYear", 2008).put("maxYear", 2026));
+        JSONArray sgHits = JustWatchGraph.executeScatterGatherSpecs(dynamicSpecs);
+        assertNotNull("Scatter-gather execution must return a valid JSONArray", sgHits);
+
         AuraVoiceSearchProvider provider = new AuraVoiceSearchProvider();
         assertTrue(provider.onCreate());
         android.database.Cursor cursor = provider.query(
