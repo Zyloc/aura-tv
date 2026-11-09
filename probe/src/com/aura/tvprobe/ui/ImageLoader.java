@@ -27,13 +27,13 @@ import java.util.concurrent.Executors;
 public class ImageLoader {
     private static volatile String sQualityMode = "ultra"; // "ultra" | "balanced" | "saver"
 
-    private static final int ULTRA_RAIL_W = 360;
-    private static final int ULTRA_RAIL_H = 508;
-    private static final int ULTRA_HERO_W = 1280;
-    private static final int ULTRA_HERO_H = 720;
+    private static final int ULTRA_RAIL_W = 280;
+    private static final int ULTRA_RAIL_H = 396;
+    private static final int ULTRA_HERO_W = 960;
+    private static final int ULTRA_HERO_H = 540;
     private static final int MAX_DISK_FILES = 180;
 
-    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(16384) {
+    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(8192) {
         @Override
         protected int sizeOf(String key, Bitmap value) {
             return Math.max(1, value.getAllocationByteCount() / 1024);
@@ -114,8 +114,8 @@ public class ImageLoader {
     public static void load(final Context ctx, final String urlStr, final ImageView iv) {
         String hdUrl = upgradePosterUrl(urlStr);
         String fbUrl = downgradeFallbackUrl(hdUrl);
-        int w = "saver".equals(sQualityMode) ? 240 : ("balanced".equals(sQualityMode) ? 340 : ULTRA_RAIL_W);
-        int h = "saver".equals(sQualityMode) ? 340 : ("balanced".equals(sQualityMode) ? 480 : ULTRA_RAIL_H);
+        int w = "saver".equals(sQualityMode) ? 200 : ("balanced".equals(sQualityMode) ? 240 : ULTRA_RAIL_W);
+        int h = "saver".equals(sQualityMode) ? 280 : ("balanced".equals(sQualityMode) ? 340 : ULTRA_RAIL_H);
         loadInternal(ctx, hdUrl, fbUrl, iv, w, h, "rail:" + sQualityMode + ":");
     }
 

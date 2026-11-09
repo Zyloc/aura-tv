@@ -95,11 +95,11 @@ public final class NavPanelBuilder {
 
     private static void expandDrawerView(PanelState st, LinearLayout drawer, float hiddenX, Context ctx) {
         prepareDrawerForExpand(drawer, hiddenX);
+        setMainDescendantFocusability(st.mainContentToAnimate, ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         drawer.animate().translationX(0f).alpha(1f).setDuration(420).setInterpolator(SLIDE_EASE).start();
         animateMainContent(st.mainContentToAnimate, dp(ctx, DRAWER_WIDTH_DP + 14), 0.955f);
         View first = findByTag(drawer, TAG_FIRST_ITEM);
         if (first != null) first.requestFocus();
-        setMainDescendantFocusability(st.mainContentToAnimate, ViewGroup.FOCUS_BLOCK_DESCENDANTS);
     }
 
     private static void prepareDrawerForExpand(LinearLayout drawer, float hiddenX) {

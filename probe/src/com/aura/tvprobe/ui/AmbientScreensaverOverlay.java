@@ -187,11 +187,16 @@ public final class AmbientScreensaverOverlay {
         if (overlay == null || !(overlay.getTag() instanceof SaverState)) return;
         SaverState st = (SaverState) overlay.getTag();
         stopTicker(st);
-        if (overlay.getVisibility() == View.VISIBLE) {
-            overlay.animate().cancel();
-            overlay.animate().alpha(0f).setDuration(220)
-                .withEndAction(() -> overlay.setVisibility(View.GONE)).start();
-        }
+        cancelSlideAnimations(st);
+        overlay.animate().cancel();
+        overlay.setAlpha(0f);
+        overlay.setVisibility(View.GONE);
+    }
+
+    private static void cancelSlideAnimations(SaverState st) {
+        if (st.bgA != null) st.bgA.animate().cancel();
+        if (st.bgB != null) st.bgB.animate().cancel();
+        if (st.infoHud != null) st.infoHud.animate().cancel();
     }
 
     private static void stopTicker(SaverState st) {

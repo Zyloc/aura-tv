@@ -38,5 +38,5 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.apps.nbu.smartconnect.tv WIFI_SCAN ignore || true
 "$ADB" -s "$TV_IP:5555" shell cmd package set-home-activity com.aura.tvprobe/.AuraActivity || true
 
-"$ADB" -s "$TV_IP:5555" shell am start -n com.aura.tvprobe/.AuraActivity
+"$ADB" -s "$TV_IP:5555" shell am start -a android.intent.action.MAIN -c android.intent.category.HOME -n com.aura.tvprobe/.AuraActivity
 echo "Deployed and launched Aura TV on $TV_IP"

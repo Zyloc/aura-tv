@@ -131,15 +131,28 @@ public class AuraActivity extends Activity implements
         lastScrollY = 0;
         dismissAllActiveOverlays();
         setBackgroundFocusBlocked(false);
+        clearCurrentFocusIfNotHero();
         if (mainScroll != null) mainScroll.scrollTo(0, 0);
         HeroSliderBuilder.requestInitialFocus(heroSlider);
     }
 
+    private void clearCurrentFocusIfNotHero() {
+        View cur = getCurrentFocus();
+        if (cur != null && cur != heroSlider) cur.clearFocus();
+    }
+
     private void dismissAllActiveOverlays() {
+        if (AmbientScreensaverOverlay.isVisible(screensaverOverlay)) {
+            AmbientScreensaverOverlay.dismiss(screensaverOverlay);
+        }
         if (modalContainer != null && modalContainer.getVisibility() == View.VISIBLE) {
             modalContainer.removeAllViews();
             modalContainer.setVisibility(View.GONE);
         }
+        dismissDetailSearchAndNav();
+    }
+
+    private void dismissDetailSearchAndNav() {
         if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
         if (SearchOverlay.isVisible(searchOverlay)) SearchOverlay.dismiss(searchOverlay);
         if (NavPanelBuilder.isExpanded(navPanel)) NavPanelBuilder.setExpanded(navPanel, false, this);

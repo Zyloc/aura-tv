@@ -39,6 +39,8 @@ public class AndroidManifestContractTest {
         String script = new String(Files.readAllBytes(deployFile.toPath()), StandardCharsets.UTF_8);
         assertTrue("deploy_tv.sh must register com.aura.tvprobe/.AuraActivity as home activity",
             script.contains("cmd package set-home-activity com.aura.tvprobe/.AuraActivity"));
+        assertTrue("deploy_tv.sh must launch AuraActivity in the HOME stack (-c android.intent.category.HOME)",
+            script.contains("-c android.intent.category.HOME -n com.aura.tvprobe/.AuraActivity"));
     }
 
     @Test
