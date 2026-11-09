@@ -113,13 +113,15 @@ public class JustWatchGraph {
         JSONObject best = null;
         for (int i = 0; i < edges.length(); i++) {
             JSONObject parsed = parseNode(edges.optJSONObject(i).optJSONObject("node"), lang);
-            if (! parsed.optBoolean("has_flatrate_offer", false) || parsed.optInt("year", 9999) > getCurrentYear()) continue;
+            if (!isLookupEligible(parsed)) continue;
             if (matchesTargetTitleOrSlug(parsed, normTarget)) return parsed;
-            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, getDefaultMinModernYear() - 2, 6.8)) {
-                best = parsed;
-            }
+            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, getDefaultMinModernYear() - 2, 6.8)) best = parsed;
         }
         return best != null ? best : new JSONObject();
+    }
+
+    private static boolean isLookupEligible(JSONObject parsed) {
+        return parsed.optBoolean("has_flatrate_offer", false) && parsed.optInt("year", 9999) <= getCurrentYear();
     }
 
     private static boolean matchesTargetTitleOrSlug(JSONObject parsed, String normTarget) {
@@ -212,16 +214,19 @@ public class JustWatchGraph {
     private static JSONArray executeDirectKeywordSearch(String query, int minYear) {
         JSONArray out = new JSONArray();
         try {
-            String country = RegionProviderRegistry.getCountryCode(null);
             String lang = RegionProviderRegistry.getLanguageCode(null);
-            JSONObject filter = new JSONObject()
-                .put("searchQuery", query)
-                .put("packages", getDefaultPackagesJson())
-                .put("monetizationTypes", new JSONArray().put("FLATRATE").put("FREE").put("ADS"));
-            JSONObject vars = new JSONObject().put("country", country).put("language", lang).put("filter", filter);
+            JSONObject vars = buildKeywordDiscoveryVars(query, RegionProviderRegistry.getCountryCode(null), lang);
             collectValidCandidates(extractEdges(postGraphQl(STRUCTURED_DISCOVERY_QUERY, vars)), out, minYear, lang, false);
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private static JSONObject buildKeywordDiscoveryVars(String query, String country, String lang) throws Exception {
+        JSONObject filter = new JSONObject()
+            .put("searchQuery", query)
+            .put("packages", getDefaultPackagesJson())
+            .put("monetizationTypes", new JSONArray().put("FLATRATE").put("FREE").put("ADS"));
+        return new JSONObject().put("country", country).put("language", lang).put("filter", filter);
     }
 
     public static JSONArray fetchCollaborativeSimilar(String seedTitle) {
@@ -234,31 +239,34 @@ public class JustWatchGraph {
         String cleanSeed = seedTitle == null ? "" : seedTitle.split("\u00B7")[0].trim();
         String normSeed = AuraDb.normalizeTitleKey(cleanSeed);
         seenKeys.add(normSeed);
-
         List<String> seedGenreCodes = new ArrayList<>();
         JSONObject seedMeta = extractDirectCoWatchNeighbors(cleanSeed, normSeed, minYear, seenKeys, seedGenreCodes, candidates);
-        if (seedMeta != null && candidates.size() < 6) {
-            expandSparseCoWatchGraph(cleanSeed, seedMeta, seedGenreCodes, minYear, seenKeys, candidates);
-        }
+        if (seedMeta != null && candidates.size() < 6) expandSparseCoWatchGraph(cleanSeed, seedMeta, seedGenreCodes, minYear, seenKeys, candidates);
         return sortAndPackSimilarCandidates(candidates, seedMeta, seedGenreCodes);
     }
 
     private static JSONObject extractDirectCoWatchNeighbors(
             String cleanSeed, String normSeed, int minYear, Set<String> seenKeys,
             List<String> seedGenreCodes, List<JSONObject> candidates) {
-        JSONObject seedMeta = null;
         try {
-            String country = RegionProviderRegistry.getCountryCode(null);
             String lang = RegionProviderRegistry.getLanguageCode(null);
-            JSONObject vars = new JSONObject().put("searchQuery", cleanSeed).put("country", country).put("language", lang);
-            JSONArray edges = extractEdges(postGraphQl(SIMILAR_QUERY, vars));
-            if (edges == null) return null;
-            int maxEdges = Math.min(2, edges.length());
-            for (int eIdx = 0; eIdx < maxEdges; eIdx++) {
-                JSONObject node = edges.getJSONObject(eIdx).optJSONObject("node");
-                seedMeta = processSeedEdgeNode(node, normSeed, minYear, lang, seedMeta, seenKeys, seedGenreCodes, candidates);
-            }
-        } catch (Exception ignored) {}
+            JSONObject vars = new JSONObject().put("searchQuery", cleanSeed)
+                .put("country", RegionProviderRegistry.getCountryCode(null)).put("language", lang);
+            return iterateSeedEdges(extractEdges(postGraphQl(SIMILAR_QUERY, vars)), normSeed, minYear, lang, seenKeys, seedGenreCodes, candidates);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static JSONObject iterateSeedEdges(
+            JSONArray edges, String normSeed, int minYear, String lang,
+            Set<String> seenKeys, List<String> seedGenreCodes, List<JSONObject> candidates) throws Exception {
+        if (edges == null) return null;
+        JSONObject seedMeta = null;
+        for (int eIdx = 0; eIdx < Math.min(2, edges.length()); eIdx++) {
+            JSONObject node = edges.getJSONObject(eIdx).optJSONObject("node");
+            seedMeta = processSeedEdgeNode(node, normSeed, minYear, lang, seedMeta, seenKeys, seedGenreCodes, candidates);
+        }
         return seedMeta;
     }
 
@@ -269,14 +277,16 @@ public class JustWatchGraph {
         JSONObject nodeMeta = parseNode(node, lang);
         String resolvedKey = AuraDb.normalizeTitleKey(nodeMeta.optString("title", ""));
         String slugKey = nodeMeta.optString("slug_key", "");
-        if (!isCloseSeedMatch(resolvedKey, slugKey, normSeed)) {
-            return currentSeedMeta;
-        }
-        if (!resolvedKey.isEmpty()) seenKeys.add(resolvedKey);
-        if (!slugKey.isEmpty()) seenKeys.add(slugKey);
+        if (!isCloseSeedMatch(resolvedKey, slugKey, normSeed)) return currentSeedMeta;
+        recordSeenSeedKeys(resolvedKey, slugKey, seenKeys);
         String coreGenres = collectCoreSeedGenres(nodeMeta.optString("genre_codes", ""), seedGenreCodes);
         extractSimilarFromNode(node.optJSONArray("similarTitles"), coreGenres, minYear, lang, seenKeys, candidates);
         return (currentSeedMeta == null || slugKey.equals(normSeed)) ? nodeMeta : currentSeedMeta;
+    }
+
+    private static void recordSeenSeedKeys(String resolvedKey, String slugKey, Set<String> seenKeys) {
+        if (!resolvedKey.isEmpty()) seenKeys.add(resolvedKey);
+        if (!slugKey.isEmpty()) seenKeys.add(slugKey);
     }
 
     private static boolean isCloseSeedMatch(String resolvedKey, String slugKey, String normSeed) {
@@ -289,14 +299,15 @@ public class JustWatchGraph {
     private static String collectCoreSeedGenres(String rawCodes, List<String> seedGenreCodes) {
         List<String> specific = new ArrayList<>();
         if (rawCodes != null && !rawCodes.isEmpty()) {
-            for (String c : rawCodes.split(",")) {
-                String t = c.trim();
-                if (t.isEmpty() || "fml".equals(t) || "msc".equals(t)) continue;
-                if (!seedGenreCodes.contains(t)) seedGenreCodes.add(t);
-                if (!"drm".equals(t)) specific.add(t);
-            }
+            for (String c : rawCodes.split(",")) addCoreGenreCode(c.trim(), seedGenreCodes, specific);
         }
         return !specific.isEmpty() ? String.join(",", specific) : String.join(",", seedGenreCodes);
+    }
+
+    private static void addCoreGenreCode(String t, List<String> seedGenreCodes, List<String> specific) {
+        if (t.isEmpty() || "fml".equals(t) || "msc".equals(t)) return;
+        if (!seedGenreCodes.contains(t)) seedGenreCodes.add(t);
+        if (!"drm".equals(t)) specific.add(t);
     }
 
     private static void extractSimilarFromNode(
@@ -305,15 +316,24 @@ public class JustWatchGraph {
         if (sim == null) return;
         for (int i = 0; i < sim.length(); i++) {
             JSONObject parsed = parseNode(sim.optJSONObject(i), lang);
-            if (!CandidateValidator.isValidCoWatchCandidate(parsed, Math.min(minYear, 2020), 7.1)) continue;
-            String candGenres = parsed.optString("genre_codes", "");
-            if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, seedCoreGenres)) continue;
-            if (CandidateValidator.computeGenreJaccard(candGenres, seedCoreGenres) < 0.15) continue;
-            String k = AuraDb.normalizeTitleKey(parsed.optString("title"));
-            if (!k.isEmpty() && seenKeys.add(k)) {
-                parsed.put("is_direct_sim", true);
-                candidates.add(parsed);
+            if (isEligibleDirectNeighbor(parsed, seedCoreGenres, minYear)) {
+                tryAddNeighborCandidate(parsed, seenKeys, candidates);
             }
+        }
+    }
+
+    private static boolean isEligibleDirectNeighbor(JSONObject parsed, String seedCoreGenres, int minYear) {
+        if (!CandidateValidator.isValidCoWatchCandidate(parsed, Math.min(minYear, 2020), 7.1)) return false;
+        String candGenres = parsed.optString("genre_codes", "");
+        if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, seedCoreGenres)) return false;
+        return CandidateValidator.computeGenreJaccard(candGenres, seedCoreGenres) >= 0.15;
+    }
+
+    private static void tryAddNeighborCandidate(JSONObject parsed, Set<String> seenKeys, List<JSONObject> candidates) {
+        String k = AuraDb.normalizeTitleKey(parsed.optString("title"));
+        if (!k.isEmpty() && seenKeys.add(k)) {
+            try { parsed.put("is_direct_sim", true); } catch (Exception ignored) {}
+            candidates.add(parsed);
         }
     }
 
@@ -344,16 +364,16 @@ public class JustWatchGraph {
             JSONArray structured, String seedCoreGenres, Set<String> seenKeys, List<JSONObject> candidates) {
         for (int i = 0; i < structured.length(); i++) {
             JSONObject p = structured.optJSONObject(i);
-            if (p == null) continue;
-            String candGenres = p.optString("genre_codes", "");
-            if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, seedCoreGenres)) continue;
-            if (CandidateValidator.computeGenreJaccard(candGenres, seedCoreGenres) < 0.28) continue;
-            String k = AuraDb.normalizeTitleKey(p.optString("title"));
-            if (!k.isEmpty() && seenKeys.add(k)) {
-                try { p.put("is_direct_sim", true); } catch (Exception ignored) {}
-                candidates.add(p);
+            if (p != null && matchesStructuredExpansion(p, seedCoreGenres)) {
+                tryAddNeighborCandidate(p, seenKeys, candidates);
             }
         }
+    }
+
+    private static boolean matchesStructuredExpansion(JSONObject p, String seedCoreGenres) {
+        String candGenres = p.optString("genre_codes", "");
+        if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, seedCoreGenres)) return false;
+        return CandidateValidator.computeGenreJaccard(candGenres, seedCoreGenres) >= 0.28;
     }
 
     private static JSONArray sortAndPackSimilarCandidates(
@@ -364,13 +384,14 @@ public class JustWatchGraph {
             HybridScorer.computeItemToItemScore(a, seedMeta, curYear)));
         String seedCtry = seedMeta != null ? seedMeta.optString("country", "") : "";
         String seedGs = String.join(",", seedGenreCodes);
+        return packTopSimilarWithSeedInfo(candidates, seedCtry, seedGs);
+    }
+
+    private static JSONArray packTopSimilarWithSeedInfo(List<JSONObject> candidates, String seedCtry, String seedGs) {
         JSONArray out = new JSONArray();
         for (int i = 0; i < candidates.size() && i < 16; i++) {
             JSONObject c = candidates.get(i);
-            try {
-                c.put("seed_country", seedCtry);
-                c.put("seed_genres", seedGs);
-            } catch (Exception ignored) {}
+            try { c.put("seed_country", seedCtry).put("seed_genres", seedGs); } catch (Exception ignored) {}
             out.put(c);
         }
         return out;
@@ -406,37 +427,45 @@ public class JustWatchGraph {
 
     private static JSONObject parseNode(JSONObject node, String lang) {
         JSONObject res = new JSONObject();
-        if (node == null) return res;
+        if (node == null || node.optJSONObject("content") == null) return res;
         try {
-            String objType = node.optString("objectType", "SHOW");
-            JSONObject content = node.optJSONObject("content");
-            if (content == null) return res;
-            populateBasicContent(content, objType, lang, res);
-            populateScoring(content.optJSONObject("scoring"), res);
-            populateArtwork(content, res);
-            JSONArray gArr = content.optJSONArray("genres");
-            res.put("genres", mapGenres(gArr));
-            res.put("genre_codes", extractGenreCodesCsv(gArr));
-            extractBestOffer(node.optJSONArray("offers"), res);
+            populateNodeMetadata(node, node.optJSONObject("content"), lang, res);
         } catch (Exception ignored) {}
         return res;
     }
 
+    private static void populateNodeMetadata(JSONObject node, JSONObject content, String lang, JSONObject res) throws Exception {
+        populateBasicContent(content, node.optString("objectType", "SHOW"), lang, res);
+        populateScoring(content.optJSONObject("scoring"), res);
+        populateArtwork(content, res);
+        JSONArray gArr = content.optJSONArray("genres");
+        res.put("genres", mapGenres(gArr));
+        res.put("genre_codes", extractGenreCodesCsv(gArr));
+        extractBestOffer(node.optJSONArray("offers"), res);
+    }
+
     private static void populateBasicContent(JSONObject content, String objType, String lang, JSONObject res) throws Exception {
-        JSONArray countries = content.optJSONArray("productionCountries");
-        String country = (countries != null && countries.length() > 0) ? countries.optString(0, "") : "";
+        String country = extractFirstCountry(content.optJSONArray("productionCountries"));
         res.put("country", country);
+        populateResolvedTitles(content, country, lang, res);
+        res.put("year", content.optInt("originalReleaseYear", getCurrentYear()));
+        res.put("type", "MOVIE".equalsIgnoreCase(objType) ? "Movie" : "Series");
+        int rt = content.optInt("runtime", "MOVIE".equalsIgnoreCase(objType) ? 115 : 48);
+        res.put("runtime_min", rt > 0 ? rt : 48);
+        res.put("synopsis", content.optString("shortDescription"));
+    }
+
+    private static String extractFirstCountry(JSONArray countries) {
+        return (countries != null && countries.length() > 0) ? countries.optString(0, "") : "";
+    }
+
+    private static void populateResolvedTitles(JSONObject content, String country, String lang, JSONObject res) throws Exception {
         String rawTitle = content.optString("title", "");
         String origTitle = content.optString("originalTitle", "");
         String fullPath = content.optString("fullPath", "");
         String slugTitle = RegionProviderRegistry.humanizeFullPathSlug(fullPath);
         res.put("slug_key", AuraDb.normalizeTitleKey(slugTitle));
         res.put("title", RegionProviderRegistry.resolveTitleFromSlugIfRomanized(rawTitle, origTitle, fullPath, country, lang));
-        res.put("year", content.optInt("originalReleaseYear", getCurrentYear()));
-        res.put("type", "MOVIE".equalsIgnoreCase(objType) ? "Movie" : "Series");
-        int rt = content.optInt("runtime", "MOVIE".equalsIgnoreCase(objType) ? 115 : 48);
-        res.put("runtime_min", rt > 0 ? rt : 48);
-        res.put("synopsis", content.optString("shortDescription"));
     }
 
     private static void populateScoring(JSONObject scoring, JSONObject res) throws Exception {
@@ -445,30 +474,29 @@ public class JustWatchGraph {
         double pop = scoring != null ? scoring.optDouble("tmdbPopularity", 0.0) : 0.0;
         if (Double.isNaN(imdb)) imdb = 0.0;
         if (Double.isNaN(pop)) pop = 0.0;
-        res.put("imdb_raw", imdb);
-        res.put("imdb_score", imdb);
-        res.put("imdb_votes", votes);
-        res.put("tmdb_popularity", pop);
-        res.put("rating", imdb > 0 ? String.format(Locale.US, "\u2605 %.1f", imdb) : "");
+        res.put("imdb_raw", imdb).put("imdb_score", imdb).put("imdb_votes", votes);
+        res.put("tmdb_popularity", pop).put("rating", imdb > 0 ? String.format(Locale.US, "\u2605 %.1f", imdb) : "");
     }
 
     private static void populateArtwork(JSONObject content, JSONObject res) throws Exception {
         String posterPath = content.optString("posterUrl");
         if (!posterPath.isEmpty()) {
-            res.put("poster_url", "https://images.justwatch.com"
-                + posterPath.replace("{profile}", "s718").replace("{format}", "jpg"));
+            res.put("poster_url", "https://images.justwatch.com" + posterPath.replace("{profile}", "s718").replace("{format}", "jpg"));
         }
-        JSONArray backdrops = content.optJSONArray("backdrops");
-        if (backdrops == null) return;
+        String backdropUrl = resolveFirstBackdropUrl(content.optJSONArray("backdrops"));
+        if (!backdropUrl.isEmpty()) res.put("backdrop_url", backdropUrl);
+    }
+
+    private static String resolveFirstBackdropUrl(JSONArray backdrops) {
+        if (backdrops == null) return "";
         for (int b = 0; b < backdrops.length(); b++) {
             JSONObject bObj = backdrops.optJSONObject(b);
             String bPath = bObj != null ? bObj.optString("backdropUrl", "") : "";
             if (!bPath.isEmpty()) {
-                res.put("backdrop_url", "https://images.justwatch.com"
-                    + bPath.replace("{profile}", "s1920").replace("{format}", "jpg"));
-                break;
+                return "https://images.justwatch.com" + bPath.replace("{profile}", "s1920").replace("{format}", "jpg");
             }
         }
+        return "";
     }
 
     private static void extractBestOffer(JSONArray offers, JSONObject res) throws Exception {
@@ -477,17 +505,16 @@ public class JustWatchGraph {
             res.put("has_flatrate_offer", false);
             return;
         }
-        JSONObject pkg = chosen.optJSONObject("package");
+        applyChosenOffer(chosen, chosen.optJSONObject("package"), res);
+    }
+
+    private static void applyChosenOffer(JSONObject chosen, JSONObject pkg, JSONObject res) throws Exception {
         String shortName = pkg != null ? pkg.optString("shortName", "").toLowerCase(Locale.US) : "";
-        String rawClear = pkg != null ? pkg.optString("clearName", "") : "";
-        String displayApp = RegionProviderRegistry.normalizeProviderName(shortName, rawClear);
+        String displayApp = RegionProviderRegistry.normalizeProviderName(shortName, pkg != null ? pkg.optString("clearName", "") : "");
         String deeplink = chosen.optString("deeplinkURL");
-        String webUrl = chosen.optString("standardWebURL");
-        res.put("has_flatrate_offer", true);
-        res.put("pkg_code", shortName);
-        res.put("app", displayApp);
-        res.put("badge", displayApp);
-        res.put("launch_uri", !deeplink.isEmpty() ? deeplink : webUrl);
+        res.put("has_flatrate_offer", true).put("pkg_code", shortName);
+        res.put("app", displayApp).put("badge", displayApp);
+        res.put("launch_uri", !deeplink.isEmpty() ? deeplink : chosen.optString("standardWebURL"));
         res.put("launch_pkg", RegionProviderRegistry.resolveAndroidPackage(displayApp));
     }
 
@@ -512,11 +539,7 @@ public class JustWatchGraph {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < gArr.length(); i++) {
             JSONObject g = gArr.optJSONObject(i);
-            String code = g != null ? g.optString("shortName", "").trim() : "";
-            if (!code.isEmpty()) {
-                if (sb.length() > 0) sb.append(",");
-                sb.append(code);
-            }
+            appendDelimitedIfNotEmpty(sb, g != null ? g.optString("shortName", "").trim() : "", ",");
         }
         return sb.toString();
     }
@@ -526,36 +549,34 @@ public class JustWatchGraph {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < gArr.length() && i < 3; i++) {
             JSONObject g = gArr.optJSONObject(i);
-            String label = g != null ? genreLabel(g.optString("shortName")) : "";
-            if (!label.isEmpty()) {
-                if (sb.length() > 0) sb.append(", ");
-                sb.append(label);
-            }
+            appendDelimitedIfNotEmpty(sb, g != null ? genreLabel(g.optString("shortName")) : "", ", ");
         }
         return sb.length() > 0 ? sb.toString() : "Drama";
     }
 
-    public static String genreLabel(String code) {
-        if (code == null) return "";
-        switch (code) {
-            case "scf": return "Sci-Fi";
-            case "trl": return "Thriller";
-            case "drm": return "Drama";
-            case "cmy": return "Comedy";
-            case "act": return "Action";
-            case "hrr": case "hor": return "Horror";
-            case "crm": return "Crime";
-            case "rma": return "Romance";
-            case "fnt": return "Fantasy";
-            case "ani": return "Animation";
-            case "doc": return "Documentary";
-            case "spt": return "Sport";
-            case "hst": return "History";
-            case "war": return "War";
-            case "wsn": return "Western";
-            case "fml": return "Family";
-            default: return "";
+    private static void appendDelimitedIfNotEmpty(StringBuilder sb, String val, String sep) {
+        if (val != null && !val.isEmpty()) {
+            if (sb.length() > 0) sb.append(sep);
+            sb.append(val);
         }
+    }
+
+    private static final java.util.Map<String, String> GENRE_LABELS = createGenreLabelMap();
+
+    private static java.util.Map<String, String> createGenreLabelMap() {
+        java.util.Map<String, String> m = new java.util.HashMap<>();
+        putGenrePairs(m, "scf", "Sci-Fi", "trl", "Thriller", "drm", "Drama", "cmy", "Comedy", "act", "Action", "hrr", "Horror");
+        putGenrePairs(m, "hor", "Horror", "crm", "Crime", "rma", "Romance", "fnt", "Fantasy", "ani", "Animation", "doc", "Documentary");
+        putGenrePairs(m, "spt", "Sport", "hst", "History", "war", "War", "wsn", "Western", "fml", "Family");
+        return java.util.Collections.unmodifiableMap(m);
+    }
+
+    private static void putGenrePairs(java.util.Map<String, String> m, String... kv) {
+        for (int i = 0; i + 1 < kv.length; i += 2) m.put(kv[i], kv[i + 1]);
+    }
+
+    public static String genreLabel(String code) {
+        return code != null ? GENRE_LABELS.getOrDefault(code, "") : "";
     }
 
     public static boolean isValidGenreCode(String code) {
@@ -566,34 +587,50 @@ public class JustWatchGraph {
         List<String> codes = new ArrayList<>();
         if (text == null || text.isEmpty()) return codes;
         String lower = text.toLowerCase(Locale.US);
+        inferPrimaryGenres(lower, codes);
+        inferSecondaryGenres(lower, codes);
+        return codes;
+    }
+
+    private static void inferPrimaryGenres(String lower, List<String> codes) {
         if (containsAny(lower, "sci-fi", "scifi", "science", "cyber", "space", "dystopia")) codes.add("scf");
         if (containsAny(lower, "thriller", "suspense", "mystery", "dark", "gritt", "mind", "psych")) codes.add("trl");
         if (containsAny(lower, "crime", "heist", "mafia", "gang", "detective", "murder", "noir")) codes.add("crm");
         if (containsAny(lower, "action", "octane", "combat", "spy", "espionage", "adventure")) codes.add("act");
         if (containsAny(lower, "horror", "scary", "supernatural", "zombie", "ghost")) codes.add("hrr");
+    }
+
+    private static void inferSecondaryGenres(String lower, List<String> codes) {
         if (containsAny(lower, "comedy", "funny", "sitcom", "laugh", "light")) codes.add("cmy");
         if (containsAny(lower, "romance", "romantic", "love")) codes.add("rma");
         if (containsAny(lower, "fantasy", "magic")) codes.add("fnt");
         if (containsAny(lower, "anime", "animation", "animated")) codes.add("ani");
         if (containsAny(lower, "drama", "emotional", "acclaimed", "prestige")) codes.add("drm");
-        return codes;
     }
 
     public static List<String> inferPackageCodesFromText(String text) {
         List<String> pkgs = new ArrayList<>();
         if (text == null || text.isEmpty()) return pkgs;
         String lower = text.toLowerCase(Locale.US);
+        inferGlobalPackageCodes(lower, pkgs);
+        inferRegionalPackageCodes(lower, pkgs);
+        return pkgs;
+    }
+
+    private static void inferGlobalPackageCodes(String lower, List<String> pkgs) {
         if (lower.contains("netflix")) pkgs.add("nfx");
         if (containsAny(lower, "prime", "amazon")) pkgs.add("prv");
         if (containsAny(lower, "hotstar", "jio")) pkgs.add("jhs");
         if (lower.contains("disney")) pkgs.add("dnp");
         if (lower.contains("apple")) pkgs.add("atp");
+    }
+
+    private static void inferRegionalPackageCodes(String lower, List<String> pkgs) {
         if (lower.contains("max") || lower.contains("hbo")) pkgs.add("mxx");
         if (lower.contains("hulu")) pkgs.add("hlu");
         if (lower.contains("crunchyroll")) pkgs.add("cru");
         if (lower.contains("sony")) pkgs.add("snl");
         if (lower.contains("zee")) pkgs.add("zee");
-        return pkgs;
     }
 
     private static boolean containsAny(String target, String... keywords) {
@@ -615,6 +652,16 @@ public class JustWatchGraph {
     }
 
     private static JSONObject executeGraphQlHttp(JSONObject payload) throws Exception {
+        HttpURLConnection conn = openGraphQlConnection(payload);
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line);
+            return new JSONObject(sb.toString());
+        }
+    }
+
+    private static HttpURLConnection openGraphQlConnection(JSONObject payload) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(GRAPHQL_URL).openConnection();
         conn.setConnectTimeout(3000);
         conn.setReadTimeout(3500);
@@ -625,11 +672,6 @@ public class JustWatchGraph {
         try (OutputStream os = conn.getOutputStream()) {
             os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
         }
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) sb.append(line);
-            return new JSONObject(sb.toString());
-        }
+        return conn;
     }
 }

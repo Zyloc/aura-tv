@@ -62,6 +62,7 @@ public class AuraActivity extends Activity implements
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService bgPool = Executors.newFixedThreadPool(3);
     private final Runnable idleScreensaverTask = this::activateScreensaver;
+    private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
 
     private AuraDb db;
     private AiRecommender ai;
@@ -112,6 +113,7 @@ public class AuraActivity extends Activity implements
         super.onResume();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
+        startHomeSearchHintAnimation();
         updateNavMetadata();
         resetIdleTimer();
     }
@@ -139,6 +141,7 @@ public class AuraActivity extends Activity implements
     protected void onPause() {
         super.onPause();
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        ui.removeCallbacks(homeSearchHintTask);
         ui.removeCallbacks(idleScreensaverTask);
     }
 
@@ -188,6 +191,10 @@ public class AuraActivity extends Activity implements
         voice = new VoiceConcierge(db, ai, sync);
         inspector = new SessionInspector(this, new ComponentName(this, MediaProbeService.class), db, ai);
         activeProfile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        startMediaProbeServiceSafe();
+    }
+
+    private void startMediaProbeServiceSafe() {
         try {
             startService(new Intent(this, MediaProbeService.class));
         } catch (Throwable ignored) {}
@@ -219,12 +226,25 @@ public class AuraActivity extends Activity implements
     }
 
     private LinearLayout buildMainColumn() {
+        LinearLayout col = createVerticalUnclippedColumn();
+        heroSlider = HeroSliderBuilder.build(this, this);
+        chipsRow = new LinearLayout(this);
+        col.addView(initAndBuildTopBar());
+        col.addView(heroSlider);
+        col.addView(buildStatusBannerView());
+        col.addView(buildRailsContainerView(), GlassTheme.matchWrapParams());
+        return col;
+    }
+
+    private LinearLayout createVerticalUnclippedColumn() {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setClipChildren(false);
         col.setClipToPadding(false);
-        heroSlider = HeroSliderBuilder.build(this, this);
-        chipsRow = new LinearLayout(this);
+        return col;
+    }
+
+    private View initAndBuildTopBar() {
         TopBarBuilder.TopBarViews topBar = TopBarBuilder.build(
             this, navPanel, heroSlider,
             SearchOverlay.getHintsForProfile(db, activeProfile),
@@ -232,11 +252,7 @@ public class AuraActivity extends Activity implements
         searchBox = topBar.searchBox;
         searchLabel = topBar.searchLabel;
         profileClockLabel = topBar.clockLabel;
-        col.addView(topBar.bar);
-        col.addView(heroSlider);
-        col.addView(buildStatusBannerView());
-        col.addView(buildRailsContainerView(), GlassTheme.matchWrapParams());
-        return col;
+        return topBar.bar;
     }
 
     private TextView buildStatusBannerView() {
@@ -256,22 +272,28 @@ public class AuraActivity extends Activity implements
     }
 
     private void startHomeSearchHintAnimation() {
-        ui.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (searchLabel != null && lastSearchQuery.isEmpty() && !SearchOverlay.isVisible(searchOverlay)) {
-                    List<String> hints = SearchOverlay.getHintsForProfile(db, activeProfile);
-                    homeHintIndex = (homeHintIndex + 1) % hints.size();
-                    final String nextHint = hints.get(homeHintIndex);
-                    searchLabel.animate().alpha(0.15f).translationY(-dp(3)).setDuration(220).withEndAction(() -> {
-                        searchLabel.setText(nextHint);
-                        searchLabel.setTranslationY(dp(3));
-                        searchLabel.animate().alpha(1f).translationY(0f).setDuration(260).start();
-                    }).start();
-                }
-                ui.postDelayed(this, 3800);
-            }
-        }, 3800);
+        ui.removeCallbacks(homeSearchHintTask);
+        ui.postDelayed(homeSearchHintTask, 3800);
+    }
+
+    private void runHomeSearchHintLoop() {
+        tickHomeSearchHintAnimation();
+        ui.postDelayed(homeSearchHintTask, 3800);
+    }
+
+    private void tickHomeSearchHintAnimation() {
+        if (searchLabel == null || !lastSearchQuery.isEmpty() || SearchOverlay.isVisible(searchOverlay)) return;
+        List<String> hints = SearchOverlay.getHintsForProfile(db, activeProfile);
+        homeHintIndex = (homeHintIndex + 1) % hints.size();
+        animateSearchHintLabelTo(hints.get(homeHintIndex));
+    }
+
+    private void animateSearchHintLabelTo(String nextHint) {
+        searchLabel.animate().alpha(0.15f).translationY(-dp(3)).setDuration(220).withEndAction(() -> {
+            searchLabel.setText(nextHint);
+            searchLabel.setTranslationY(dp(3));
+            searchLabel.animate().alpha(1f).translationY(0f).setDuration(260).start();
+        }).start();
     }
 
     private void openAgenticSearchStudio() {
@@ -279,7 +301,11 @@ public class AuraActivity extends Activity implements
         hideKeyboard(rootLayout);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
-        JSONObject session = db.getVoiceSession(activeProfile);
+        populateSearchStudioFromSession(db.getVoiceSession(activeProfile));
+        SearchOverlay.show(searchOverlay, this, true);
+    }
+
+    private void populateSearchStudioFromSession(JSONObject session) {
         JSONArray turns = session != null ? session.optJSONArray("turns") : null;
         JSONArray results = session != null ? session.optJSONArray("results") : null;
         if (results == null || results.length() == 0) {
@@ -287,15 +313,15 @@ public class AuraActivity extends Activity implements
         }
         SearchOverlay.setConversationTurns(searchOverlay, turns, this);
         String reply = session != null ? session.optString("reply", "") : "";
-        if (!reply.isEmpty()) {
-            SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
-        } else {
-            SearchOverlay.addMessage(searchOverlay, "assistant",
-                "Ask any question or click a follow-up chip below to refine your recommendations across your streaming apps.", this);
-        }
+        SearchOverlay.addMessage(searchOverlay, "assistant", resolveInitialStudioReply(reply), this);
         SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
         SearchOverlay.setResults(searchOverlay, results, this, this);
-        SearchOverlay.show(searchOverlay, this, true);
+    }
+
+    private String resolveInitialStudioReply(String reply) {
+        return !reply.isEmpty()
+            ? reply
+            : "Ask any question or click a follow-up chip below to refine your recommendations across your streaming apps.";
     }
 
     private void hideKeyboard(View v) {
@@ -314,37 +340,44 @@ public class AuraActivity extends Activity implements
         hsv.setClipChildren(true);
         hsv.setClipToPadding(true);
         hsv.setPadding(dp(4), dp(2), dp(4), dp(2));
+        hsv.addView(buildChipsRowLayout());
+        return hsv;
+    }
+
+    private LinearLayout buildChipsRowLayout() {
         chipsRow = new LinearLayout(this);
         chipsRow.setOrientation(LinearLayout.HORIZONTAL);
         chipsRow.setGravity(Gravity.CENTER_VERTICAL);
         chipsRow.setClipChildren(false);
-        hsv.addView(chipsRow);
-        return hsv;
+        return chipsRow;
     }
 
     private void addOverlays() {
         searchOverlay = SearchOverlay.build(this, this);
-        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        searchOverlay.setLayoutParams(slp);
-        rootLayout.addView(searchOverlay);
         detailOverlay = DetailOverlay.build(this, this);
-        rootLayout.addView(detailOverlay, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         modalContainer = new FrameLayout(this);
         modalContainer.setVisibility(View.GONE);
-        rootLayout.addView(modalContainer, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         loadingOverlay = buildGlobalLoadingOverlay();
-        rootLayout.addView(loadingOverlay, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        screensaverOverlay = AmbientScreensaverOverlay.build(this, () -> {
+        screensaverOverlay = buildScreensaverOverlayView();
+        attachAllOverlaysToRoot();
+    }
+
+    private FrameLayout buildScreensaverOverlayView() {
+        return AmbientScreensaverOverlay.build(this, () -> {
             HeroSliderBuilder.startAutoRotate(heroSlider, ui);
             HeroSliderBuilder.requestInitialFocus(heroSlider);
             resetIdleTimer();
         });
-        rootLayout.addView(screensaverOverlay, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private void attachAllOverlaysToRoot() {
+        FrameLayout.LayoutParams full = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        rootLayout.addView(searchOverlay, full);
+        rootLayout.addView(detailOverlay, full);
+        rootLayout.addView(modalContainer, full);
+        rootLayout.addView(loadingOverlay, full);
+        rootLayout.addView(screensaverOverlay, full);
     }
 
     private FrameLayout buildGlobalLoadingOverlay() {
@@ -354,12 +387,15 @@ public class AuraActivity extends Activity implements
         wrap.setBackgroundColor(Color.argb(246, 8, 11, 18));
         wrap.setClickable(true);
         wrap.setFocusable(false);
+        attachLoaderColumn(wrap);
+        return wrap;
+    }
 
+    private void attachLoaderColumn(FrameLayout wrap) {
         LinearLayout col = AgenticOrbView.buildFloatingLoaderColumn(
             this, TAG_GLOBAL_LOADER_TEXT, TAG_GLOBAL_LOADER_SUB);
         globalLoaderText = col.findViewWithTag(TAG_GLOBAL_LOADER_TEXT);
         wrap.addView(col);
-        return wrap;
     }
 
     private void setBackgroundFocusBlocked(boolean blocked) {
@@ -437,15 +473,19 @@ public class AuraActivity extends Activity implements
     private void populateTraversalChips() {
         chipsRow.removeAllViews();
         for (String chip : db.getTraversalChips(activeProfile)) {
-            TextView btn = GlassTheme.makeGlassButton(this, "\u2726 " + chip);
-            btn.setTextSize(10.5f);
-            btn.setPadding(dp(10), dp(5), dp(10), dp(5));
-            LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
-            lp.rightMargin = dp(6);
-            btn.setLayoutParams(lp);
-            btn.setOnClickListener(v -> runSearchQuery(chip));
-            chipsRow.addView(btn);
+            chipsRow.addView(buildTraversalChipButton(chip));
         }
+    }
+
+    private TextView buildTraversalChipButton(String chip) {
+        TextView btn = GlassTheme.makeGlassButton(this, "\u2726 " + chip);
+        btn.setTextSize(10.5f);
+        btn.setPadding(dp(10), dp(5), dp(10), dp(5));
+        LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
+        lp.rightMargin = dp(6);
+        btn.setLayoutParams(lp);
+        btn.setOnClickListener(v -> runSearchQuery(chip));
+        return btn;
     }
 
     private void renderHomeContent(JSONArray recos) {
@@ -481,19 +521,25 @@ public class AuraActivity extends Activity implements
     private void restoreOrInitFocus(int[] savedRailFocus, int savedScrollY) {
         if (DetailOverlay.isVisible(detailOverlay) || SearchOverlay.isVisible(searchOverlay)) return;
         initialFocusSet = true;
-        ui.post(() -> {
-            if (savedRailFocus != null && savedRailFocus[0] >= 0
-                    && savedRailFocus[0] < railsContainer.getChildCount()) {
-                if (mainScroll != null) mainScroll.scrollTo(0, savedScrollY);
-                View railView = railsContainer.getChildAt(savedRailFocus[0]);
-                if (railView instanceof LinearLayout) {
-                    RailBuilder.focusItemAt((LinearLayout) railView, savedRailFocus[1]);
-                }
-            } else {
-                if (mainScroll != null) mainScroll.scrollTo(0, 0);
-                HeroSliderBuilder.requestInitialFocus(heroSlider);
-            }
-        });
+        ui.post(() -> applySavedOrInitialFocus(savedRailFocus, savedScrollY));
+    }
+
+    private void applySavedOrInitialFocus(int[] savedRailFocus, int savedScrollY) {
+        if (savedRailFocus != null && savedRailFocus[0] >= 0
+                && savedRailFocus[0] < railsContainer.getChildCount()) {
+            focusSavedRailItem(savedRailFocus[0], savedRailFocus[1], savedScrollY);
+            return;
+        }
+        if (mainScroll != null) mainScroll.scrollTo(0, 0);
+        HeroSliderBuilder.requestInitialFocus(heroSlider);
+    }
+
+    private void focusSavedRailItem(int railIdx, int cardIdx, int savedScrollY) {
+        if (mainScroll != null) mainScroll.scrollTo(0, savedScrollY);
+        View railView = railsContainer.getChildAt(railIdx);
+        if (railView instanceof LinearLayout) {
+            RailBuilder.focusItemAt((LinearLayout) railView, cardIdx);
+        }
     }
 
     private int[] findFocusedRailAndCard() {
@@ -503,15 +549,18 @@ public class AuraActivity extends Activity implements
         for (int r = 0; r < railsContainer.getChildCount(); r++) {
             View rail = railsContainer.getChildAt(r);
             if (rail instanceof ViewGroup && isDescendantOf(focused, (ViewGroup) rail)) {
-                if (focused.getParent() instanceof ViewGroup) {
-                    ViewGroup row = (ViewGroup) focused.getParent();
-                    int c = row.indexOfChild(focused);
-                    if (c >= 0) return new int[]{r, c};
-                }
-                return new int[]{r, 0};
+                return resolveCardIndexInRail(r, focused);
             }
         }
         return null;
+    }
+
+    private int[] resolveCardIndexInRail(int railIndex, View focused) {
+        if (focused.getParent() instanceof ViewGroup) {
+            int c = ((ViewGroup) focused.getParent()).indexOfChild(focused);
+            if (c >= 0) return new int[]{railIndex, c};
+        }
+        return new int[]{railIndex, 0};
     }
 
     private void addContinueWatchingIfPresent() {
@@ -691,14 +740,12 @@ public class AuraActivity extends Activity implements
 
     private void persistSimilarVoiceSession(String seed, JSONArray sim) {
         try {
-            JSONObject session = new JSONObject();
-            JSONArray turns = new JSONArray();
-            turns.put(new JSONObject().put("role", "user").put("text", "Similar to " + seed));
-            turns.put(new JSONObject().put("role", "assistant")
-                .put("text", "Showing modern titles similar to " + seed + "."));
-            session.put("turns", turns);
-            session.put("reply", "Showing modern titles similar to " + seed + ".");
-            session.put("results", sim != null ? sim : new JSONArray());
+            String replyText = "Showing modern titles similar to " + seed + ".";
+            JSONArray turns = new JSONArray()
+                .put(new JSONObject().put("role", "user").put("text", "Similar to " + seed))
+                .put(new JSONObject().put("role", "assistant").put("text", replyText));
+            JSONObject session = new JSONObject().put("turns", turns).put("reply", replyText)
+                .put("results", sim != null ? sim : new JSONArray());
             db.saveVoiceSession(activeProfile, session);
         } catch (Exception ignored) {}
     }
@@ -769,6 +816,11 @@ public class AuraActivity extends Activity implements
     public void runSearchQuery(String query) {
         String q = query != null ? query.trim() : "";
         if (q.isEmpty()) return;
+        prepareUiForSearchQuery(q);
+        submitSearchQueryTurn(q, System.currentTimeMillis());
+    }
+
+    private void prepareUiForSearchQuery(String q) {
         lastSearchQuery = q;
         if (searchLabel != null) {
             searchLabel.setText(q);
@@ -777,24 +829,30 @@ public class AuraActivity extends Activity implements
         hideKeyboard(rootLayout);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
+        ensureSearchOverlayShowingLoading();
+    }
+
+    private void ensureSearchOverlayShowingLoading() {
         if (!SearchOverlay.isVisible(searchOverlay)) {
             SearchOverlay.show(searchOverlay, this, false);
         }
         SearchOverlay.setLoading(searchOverlay, true,
             "Analyzing query & watch history across your streaming apps\u2026");
-        final long startMs = System.currentTimeMillis();
+    }
+
+    private void submitSearchQueryTurn(String q, long startMs) {
         bgPool.submit(() -> {
-            JSONObject res = voice.handleTurn(activeProfile, q, false,
-                msg -> ui.post(() -> {
-                    if (SearchOverlay.isVisible(searchOverlay)) {
-                        SearchOverlay.setLoading(searchOverlay, true, msg);
-                    }
-                }));
-            long elapsed = System.currentTimeMillis() - startMs;
-            if (elapsed < 1600L) {
-                try { Thread.sleep(1600L - elapsed); } catch (InterruptedException ignored) {}
-            }
+            JSONObject res = voice.handleTurn(activeProfile, q, false, this::postSearchProgress);
+            enforceMinLoadingDuration(startMs, 1600L);
             ui.post(() -> displaySearchResults(res));
+        });
+    }
+
+    private void postSearchProgress(String msg) {
+        ui.post(() -> {
+            if (SearchOverlay.isVisible(searchOverlay)) {
+                SearchOverlay.setLoading(searchOverlay, true, msg);
+            }
         });
     }
 
@@ -805,14 +863,16 @@ public class AuraActivity extends Activity implements
         SearchOverlay.setConversationTurns(searchOverlay, res.optJSONArray("turns"), this);
         String reply = res.optString("reply", "");
         if (!reply.isEmpty()) SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
-        List<String> chips = new ArrayList<>();
-        JSONArray arr = res.optJSONArray("follow_ups");
-        if (arr != null) {
-            for (int i = 0; i < arr.length(); i++) chips.add(arr.optString(i));
-        }
-        SearchOverlay.setFollowUps(searchOverlay, chips, this, this);
+        SearchOverlay.setFollowUps(searchOverlay, extractFollowUpList(res.optJSONArray("follow_ups")), this, this);
         SearchOverlay.setResults(searchOverlay, res.optJSONArray("results"), this, this);
         populateTraversalChips();
+    }
+
+    private List<String> extractFollowUpList(JSONArray arr) {
+        List<String> chips = new ArrayList<>();
+        if (arr == null) return chips;
+        for (int i = 0; i < arr.length(); i++) chips.add(arr.optString(i));
+        return chips;
     }
 
     @Override
@@ -835,14 +895,16 @@ public class AuraActivity extends Activity implements
         }
         bgPool.submit(() -> {
             voice.handleTurn(activeProfile, "", true);
-            ui.post(() -> {
-                SearchOverlay.setConversationTurns(searchOverlay, new JSONArray(), this);
-                SearchOverlay.addMessage(searchOverlay, "assistant",
-                    "Started a fresh conversation topic. Type a query above or pick a chip below.", this);
-                SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
-                SearchOverlay.setResults(searchOverlay, db.getProfileRecommendations(activeProfile), this, this);
-            });
+            ui.post(this::applyResetConversationUi);
         });
+    }
+
+    private void applyResetConversationUi() {
+        SearchOverlay.setConversationTurns(searchOverlay, new JSONArray(), this);
+        SearchOverlay.addMessage(searchOverlay, "assistant",
+            "Started a fresh conversation topic. Type a query above or pick a chip below.", this);
+        SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
+        SearchOverlay.setResults(searchOverlay, db.getProfileRecommendations(activeProfile), this, this);
     }
 
     private void saveFocusBeforeOverlay() {
@@ -892,23 +954,24 @@ public class AuraActivity extends Activity implements
     }
 
     private void enrichDetailDrawerAsync(JSONObject item, String title) {
-        String curPoster = item.optString("poster_url", "");
-        if (curPoster.isEmpty() || !curPoster.contains("/s718/")) {
-            JSONObject enriched = JustWatchGraph.lookupTitleInIndia(title);
-            String freshPoster = enriched.optString("poster_url", "");
-            if (!freshPoster.isEmpty()) {
-                try { item.put("poster_url", freshPoster); } catch (Exception ignored) {}
-                ui.post(() -> {
-                    if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
-                        DetailOverlay.updatePosterUrl(detailOverlay, freshPoster, this);
-                    }
-                });
-            }
-        }
+        maybeUpgradeDetailPoster(item, title);
         JSONArray sim = db.filterOutWatched(JustWatchGraph.fetchCollaborativeSimilar(title));
         ui.post(() -> {
             if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
                 DetailOverlay.setSimilarItems(detailOverlay, sim, this, this);
+            }
+        });
+    }
+
+    private void maybeUpgradeDetailPoster(JSONObject item, String title) {
+        String curPoster = item.optString("poster_url", "");
+        if (!curPoster.isEmpty() && curPoster.contains("/s718/")) return;
+        String freshPoster = JustWatchGraph.lookupTitleInIndia(title).optString("poster_url", "");
+        if (freshPoster.isEmpty()) return;
+        try { item.put("poster_url", freshPoster); } catch (Exception ignored) {}
+        ui.post(() -> {
+            if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+                DetailOverlay.updatePosterUrl(detailOverlay, freshPoster, this);
             }
         });
     }
@@ -1019,12 +1082,15 @@ public class AuraActivity extends Activity implements
             globalLoaderText.setText(clean);
         }
         if (mainScroll != null) mainScroll.animate().alpha(0.08f).setDuration(180).start();
-        if (loadingOverlay.getVisibility() != View.VISIBLE) {
-            loadingOverlay.animate().cancel();
-            loadingOverlay.setAlpha(0f);
-            loadingOverlay.setVisibility(View.VISIBLE);
-            loadingOverlay.animate().alpha(1f).setDuration(180).setInterpolator(GlassTheme.EASE).start();
-        }
+        fadeInGlobalLoadingOverlay();
+    }
+
+    private void fadeInGlobalLoadingOverlay() {
+        if (loadingOverlay.getVisibility() == View.VISIBLE) return;
+        loadingOverlay.animate().cancel();
+        loadingOverlay.setAlpha(0f);
+        loadingOverlay.setVisibility(View.VISIBLE);
+        loadingOverlay.animate().alpha(1f).setDuration(180).setInterpolator(GlassTheme.EASE).start();
     }
 
     private void hideGlobalLoadingOverlay() {

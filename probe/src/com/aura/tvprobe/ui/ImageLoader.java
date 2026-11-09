@@ -40,16 +40,18 @@ public class ImageLoader {
         }
     };
 
-    private static final ExecutorService POOL = Executors.newFixedThreadPool(2, r -> {
+    private static final ExecutorService POOL = Executors.newFixedThreadPool(2, ImageLoader::createLoaderThread);
+
+    private static final Handler UI = new Handler(Looper.getMainLooper());
+
+    private static Thread createLoaderThread(Runnable r) {
         Thread t = new Thread(() -> {
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
             r.run();
         }, "AuraPosterLoader");
         t.setDaemon(true);
         return t;
-    });
-
-    private static final Handler UI = new Handler(Looper.getMainLooper());
+    }
 
     public static void setQualityMode(String mode) {
         if (mode != null && !mode.equalsIgnoreCase(sQualityMode)) {
@@ -119,100 +121,134 @@ public class ImageLoader {
 
     public static void loadHero(final Context ctx, final String urlStr, final ImageView iv) {
         if (urlStr == null || urlStr.isEmpty()) {
-            iv.setTag(null);
-            iv.setImageBitmap(null);
+            resetImageView(iv);
             return;
         }
         String hiResUrl = upgradePosterUrl(urlStr);
-        String fbUrl = downgradeFallbackUrl(hiResUrl);
+        if (applyCachedHeroIfAvailable(iv, hiResUrl)) return;
+        applyCachedRailPreview(iv, hiResUrl);
+        loadInternal(ctx, hiResUrl, downgradeFallbackUrl(hiResUrl), iv, ULTRA_HERO_W, ULTRA_HERO_H, "hero:" + sQualityMode + ":");
+    }
+
+    private static void resetImageView(ImageView iv) {
+        iv.setTag(null);
+        iv.setImageBitmap(null);
+    }
+
+    private static boolean applyCachedHeroIfAvailable(ImageView iv, String hiResUrl) {
         String heroKey = "hero:" + sQualityMode + ":" + hiResUrl;
         Bitmap cachedHero = MEM_CACHE.get(heroKey);
         if (cachedHero != null && !cachedHero.isRecycled()) {
             iv.setTag(heroKey);
             iv.setImageBitmap(cachedHero);
-            return;
+            return true;
         }
+        return false;
+    }
+
+    private static void applyCachedRailPreview(ImageView iv, String hiResUrl) {
         Bitmap cachedRail = MEM_CACHE.get("rail:" + sQualityMode + ":" + hiResUrl);
-        if (cachedRail != null && !cachedRail.isRecycled()) {
-            iv.setImageBitmap(cachedRail);
-        } else {
-            iv.setImageBitmap(null);
-        }
-        loadInternal(ctx, hiResUrl, fbUrl, iv, ULTRA_HERO_W, ULTRA_HERO_H, "hero:" + sQualityMode + ":");
+        iv.setImageBitmap((cachedRail != null && !cachedRail.isRecycled()) ? cachedRail : null);
     }
 
     private static void loadInternal(final Context ctx, final String primaryUrl, final String fallbackUrl,
-                                      final ImageView iv, final int reqW, final int reqH, final String prefix) {
+                                     final ImageView iv, final int reqW, final int reqH, final String prefix) {
         if (primaryUrl == null || primaryUrl.isEmpty()) {
-            iv.setTag(null);
-            iv.setImageBitmap(null);
+            resetImageView(iv);
             return;
         }
         final String cacheKey = prefix + primaryUrl;
         if (cacheKey.equals(iv.getTag()) && iv.getDrawable() != null && !prefix.startsWith("hero:")) return;
         iv.setTag(cacheKey);
+        if (applyMemCacheHit(iv, cacheKey, prefix)) return;
+        if (!prefix.startsWith("hero:")) iv.setImageBitmap(null);
+        POOL.submit(() -> executeAsyncLoad(ctx, primaryUrl, fallbackUrl, iv, reqW, reqH, prefix, cacheKey));
+    }
+
+    private static boolean applyMemCacheHit(ImageView iv, String cacheKey, String prefix) {
         Bitmap cached = MEM_CACHE.get(cacheKey);
-        if (cached != null && !cached.isRecycled()) {
-            if (!prefix.startsWith("hero:")) {
-                iv.animate().cancel();
-                iv.setAlpha(1f);
-            }
-            iv.setImageBitmap(cached);
-            return;
-        }
+        if (cached == null || cached.isRecycled()) return false;
         if (!prefix.startsWith("hero:")) {
-            iv.setImageBitmap(null);
+            iv.animate().cancel();
+            iv.setAlpha(1f);
         }
-        POOL.submit(() -> {
-            if (!cacheKey.equals(iv.getTag())) return;
-            Bitmap bmp = loadFromDiskOrNet(ctx, primaryUrl, reqW, reqH);
-            if (bmp == null && fallbackUrl != null && !fallbackUrl.equals(primaryUrl)) {
-                bmp = loadFromDiskOrNet(ctx, fallbackUrl, reqW, reqH);
-            }
-            if (bmp != null) {
-                try { bmp.prepareToDraw(); } catch (Throwable ignored) {}
-                MEM_CACHE.put(cacheKey, bmp);
-                final Bitmap finalBmp = bmp;
-                UI.post(() -> {
-                    if (cacheKey.equals(iv.getTag())) {
-                        if (!prefix.startsWith("hero:")) {
-                            iv.setAlpha(0.25f);
-                            iv.setImageBitmap(finalBmp);
-                            iv.animate().alpha(1f).setDuration(220).start();
-                        } else {
-                            iv.setImageBitmap(finalBmp);
-                        }
-                    }
-                });
-            }
-        });
+        iv.setImageBitmap(cached);
+        return true;
+    }
+
+    private static void executeAsyncLoad(Context ctx, String primaryUrl, String fallbackUrl,
+                                         ImageView iv, int reqW, int reqH, String prefix, String cacheKey) {
+        if (!cacheKey.equals(iv.getTag())) return;
+        Bitmap bmp = loadWithFallback(ctx, primaryUrl, fallbackUrl, reqW, reqH);
+        if (bmp == null) return;
+        try { bmp.prepareToDraw(); } catch (Throwable ignored) {}
+        MEM_CACHE.put(cacheKey, bmp);
+        UI.post(() -> deliverLoadedBitmap(iv, cacheKey, prefix, bmp));
+    }
+
+    private static Bitmap loadWithFallback(Context ctx, String primaryUrl, String fallbackUrl, int reqW, int reqH) {
+        Bitmap bmp = loadFromDiskOrNet(ctx, primaryUrl, reqW, reqH);
+        if (bmp == null && fallbackUrl != null && !fallbackUrl.equals(primaryUrl)) {
+            bmp = loadFromDiskOrNet(ctx, fallbackUrl, reqW, reqH);
+        }
+        return bmp;
+    }
+
+    private static void deliverLoadedBitmap(ImageView iv, String cacheKey, String prefix, Bitmap bmp) {
+        if (!cacheKey.equals(iv.getTag())) return;
+        if (!prefix.startsWith("hero:")) {
+            iv.setAlpha(0.25f);
+            iv.setImageBitmap(bmp);
+            iv.animate().alpha(1f).setDuration(220).start();
+        } else {
+            iv.setImageBitmap(bmp);
+        }
     }
 
     private static Bitmap loadFromDiskOrNet(Context ctx, String urlStr, int reqW, int reqH) {
         try {
-            File dir = new File(ctx.getCacheDir(), "posters_uhd_v3");
-            if (!dir.exists()) dir.mkdirs();
+            File dir = getOrCreateCacheDir(ctx);
             File f = new File(dir, "poster_uhd_" + Math.abs(urlStr.hashCode()) + ".jpg");
-            if (f.exists() && f.length() > 600) {
-                f.setLastModified(System.currentTimeMillis());
-                Bitmap b = decodeCrisp(f, reqW, reqH);
-                if (b != null) return b;
-            }
-            HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-            conn.setConnectTimeout(4500);
-            conn.setReadTimeout(4500);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 300) return null;
-            try (InputStream is = conn.getInputStream(); FileOutputStream fos = new FileOutputStream(f)) {
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
-            }
+            Bitmap diskBmp = loadFromDiskIfValid(f, reqW, reqH);
+            if (diskBmp != null) return diskBmp;
+            if (!downloadToFile(urlStr, f)) return null;
             evictOldCacheFiles(dir);
             return decodeCrisp(f, reqW, reqH);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    private static File getOrCreateCacheDir(Context ctx) {
+        File dir = new File(ctx.getCacheDir(), "posters_uhd_v3");
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
+    }
+
+    private static Bitmap loadFromDiskIfValid(File f, int reqW, int reqH) {
+        if (f.exists() && f.length() > 600) {
+            f.setLastModified(System.currentTimeMillis());
+            return decodeCrisp(f, reqW, reqH);
+        }
+        return null;
+    }
+
+    private static boolean downloadToFile(String urlStr, File f) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setConnectTimeout(4500);
+        conn.setReadTimeout(4500);
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+        int code = conn.getResponseCode();
+        if (code < 200 || code >= 300) return false;
+        copyConnectionStream(conn, f);
+        return true;
+    }
+
+    private static void copyConnectionStream(HttpURLConnection conn, File f) throws Exception {
+        try (InputStream is = conn.getInputStream(); FileOutputStream fos = new FileOutputStream(f)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
         }
     }
 
@@ -221,8 +257,7 @@ public class ImageLoader {
             File[] files = dir.listFiles();
             if (files == null || files.length <= MAX_DISK_FILES) return;
             Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
-            int toDelete = files.length - MAX_DISK_FILES;
-            for (int i = 0; i < toDelete; i++) {
+            for (int i = 0; i < files.length - MAX_DISK_FILES; i++) {
                 files[i].delete();
             }
         } catch (Exception ignored) {}
@@ -230,35 +265,47 @@ public class ImageLoader {
 
     private static Bitmap decodeCrisp(File f, int reqW, int reqH) {
         try {
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            BitmapFactory.decodeFile(f.getAbsolutePath(), bounds);
+            BitmapFactory.Options bounds = readImageBounds(f);
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
-
-            int sample = 1;
-            while ((bounds.outHeight / (sample * 2)) >= reqH && (bounds.outWidth / (sample * 2)) >= reqW) {
-                sample *= 2;
-            }
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inSampleSize = sample;
-            // Use full 32-bit ARGB_8888 in Ultra/Balanced modes for zero color banding and razor-sharp text
-            opts.inPreferredConfig = "saver".equals(sQualityMode)
-                ? Bitmap.Config.RGB_565
-                : Bitmap.Config.ARGB_8888;
-            opts.inScaled = false;
-            Bitmap raw = BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
-            if (raw == null) return null;
-
-            if (raw.getWidth() > reqW + 64) {
-                float scale = (float) reqW / (float) raw.getWidth();
-                int targetH = Math.max(1, Math.round(raw.getHeight() * scale));
-                Bitmap scaled = Bitmap.createScaledBitmap(raw, reqW, targetH, true);
-                if (scaled != raw) raw.recycle();
-                return scaled;
-            }
-            return raw;
+            int sample = computeSampleSize(bounds.outWidth, bounds.outHeight, reqW, reqH);
+            Bitmap raw = decodeWithSample(f, sample);
+            return scaleIfOversized(raw, reqW);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static BitmapFactory.Options readImageBounds(File f) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(f.getAbsolutePath(), bounds);
+        return bounds;
+    }
+
+    private static int computeSampleSize(int outW, int outH, int reqW, int reqH) {
+        int sample = 1;
+        while ((outH / (sample * 2)) >= reqH && (outW / (sample * 2)) >= reqW) {
+            sample *= 2;
+        }
+        return sample;
+    }
+
+    // Use full 32-bit ARGB_8888 in Ultra/Balanced modes for zero color banding and razor-sharp text
+    private static Bitmap decodeWithSample(File f, int sample) {
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inSampleSize = sample;
+        opts.inPreferredConfig = "saver".equals(sQualityMode)
+            ? Bitmap.Config.RGB_565 : Bitmap.Config.ARGB_8888;
+        opts.inScaled = false;
+        return BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
+    }
+
+    private static Bitmap scaleIfOversized(Bitmap raw, int reqW) {
+        if (raw == null || raw.getWidth() <= reqW + 64) return raw;
+        float scale = (float) reqW / (float) raw.getWidth();
+        int targetH = Math.max(1, Math.round(raw.getHeight() * scale));
+        Bitmap scaled = Bitmap.createScaledBitmap(raw, reqW, targetH, true);
+        if (scaled != raw) raw.recycle();
+        return scaled;
     }
 }

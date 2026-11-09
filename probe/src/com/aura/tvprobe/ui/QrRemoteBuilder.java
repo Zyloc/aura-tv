@@ -121,10 +121,14 @@ public final class QrRemoteBuilder {
         Bitmap bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
         c.drawColor(Color.WHITE);
+        drawModules(c, matrix, createDarkPaint(), cellSize, margin);
+        return bmp;
+    }
+
+    private static Paint createDarkPaint() {
         Paint dark = new Paint();
         dark.setColor(GlassTheme.TEXT_PRIMARY);
-        drawModules(c, matrix, dark, cellSize, margin);
-        return bmp;
+        return dark;
     }
 
     private static void drawModules(Canvas c, boolean[][] m,
@@ -141,12 +145,17 @@ public final class QrRemoteBuilder {
         Bitmap bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
         c.drawColor(Color.WHITE);
+        Paint p = createFallbackPaint(sizePx);
+        c.drawText(data, sizePx / 2f, sizePx / 2f, p);
+        return bmp;
+    }
+
+    private static Paint createFallbackPaint(int sizePx) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         p.setColor(GlassTheme.TEXT_PRIMARY);
         p.setTextSize(sizePx / 12f);
         p.setTextAlign(Paint.Align.CENTER);
-        c.drawText(data, sizePx / 2f, sizePx / 2f, p);
-        return bmp;
+        return p;
     }
 
     // ── QR encoding core ─────────────────────────────────────────────────
@@ -161,17 +170,26 @@ public final class QrRemoteBuilder {
         int size = 17 + version * 4;
         boolean[][] grid = new boolean[size][size];
         boolean[][] locked = new boolean[size][size];
+        initBasePatterns(grid, locked, version, size);
+        populateAndMaskGrid(grid, locked, bytes, version, size);
+        return grid;
+    }
+
+    private static void initBasePatterns(boolean[][] grid, boolean[][] locked, int version, int size) {
         placeFinderPatterns(grid, locked, size);
         placeAlignmentPattern(grid, locked, version, size);
         placeTimingPatterns(grid, locked, size);
         reserveFormatArea(locked, size);
+    }
+
+    private static void populateAndMaskGrid(boolean[][] grid, boolean[][] locked,
+                                            byte[] bytes, int version, int size) {
         byte[] encoded = buildDataStream(bytes, version);
         byte[] ecBytes = computeEc(encoded, version);
         byte[] full = concat(encoded, ecBytes);
         placeDataBits(grid, locked, full, size);
         int mask = applyBestMask(grid, locked, size);
         placeFormatInfo(grid, size, mask);
-        return grid;
     }
 
     private static int pickVersion(int len) {
@@ -253,15 +271,19 @@ public final class QrRemoteBuilder {
     private static byte[] buildDataStream(byte[] data, int version) {
         int totalBits = DATA_CW[version] * 8;
         int[] bits = new int[totalBits];
-        int pos = 0;
-        pos = writeBits(bits, pos, 0b0100, 4);           // byte mode
+        int pos = writePayloadBits(bits, data, version);
+        if (pos + 4 <= totalBits) pos = writeBits(bits, pos, 0, 4);
+        pos = padToByteAlign(bits, pos);
+        padCodewords(bits, pos, totalBits);
+        return bitsToBytes(bits, totalBits);
+    }
+
+    private static int writePayloadBits(int[] bits, byte[] data, int version) {
+        int pos = writeBits(bits, 0, 0b0100, 4);          // byte mode
         int lenBits = (version <= 9) ? 8 : 16;
         pos = writeBits(bits, pos, data.length, lenBits); // length
         for (byte b : data) pos = writeBits(bits, pos, b & 0xFF, 8);
-        if (pos + 4 <= totalBits) pos = writeBits(bits, pos, 0, 4);
-        pos = padToByteAlign(bits, pos);
-        pos = padCodewords(bits, pos, totalBits);
-        return bitsToBytes(bits, totalBits);
+        return pos;
     }
 
     private static int padToByteAlign(int[] bits, int pos) {
@@ -326,12 +348,15 @@ public final class QrRemoteBuilder {
     private static final int[] GF_LOG = new int[256];
 
     static {
+        initGaloisTables();
+    }
+
+    private static void initGaloisTables() {
         int val = 1;
         for (int i = 0; i < 255; i++) {
             GF_EXP[i] = val;
             GF_LOG[val] = i;
-            val <<= 1;
-            if (val >= 256) val ^= 0x11D;
+            val = (val << 1) ^ ((val >= 128) ? 0x11D : 0);
         }
         GF_EXP[255] = GF_EXP[0];
     }
@@ -347,45 +372,38 @@ public final class QrRemoteBuilder {
 
     private static void placeDataBits(boolean[][] g, boolean[][] l,
                                       byte[] data, int s) {
-        int bitIdx = 0, totalBits = data.length * 8;
-        int col = s - 1;
+        int bitIdx = 0, totalBits = data.length * 8, col = s - 1;
         boolean upward = true;
         while (col > 0) {
             if (col == 6) col--;
-            placeColumnPair(g, l, data, s, col, upward, bitIdx, totalBits);
-            bitIdx += countUnlocked(l, s, col, upward);
+            bitIdx = placeColumnPair(g, l, data, s, col, upward, bitIdx, totalBits);
             upward = !upward;
             col -= 2;
         }
     }
 
-    private static void placeColumnPair(boolean[][] g, boolean[][] l,
-                                        byte[] data, int s, int col,
-                                        boolean upward, int start, int total) {
+    private static int placeColumnPair(boolean[][] g, boolean[][] l,
+                                       byte[] data, int s, int col,
+                                       boolean upward, int start, int total) {
         int bitIdx = start;
         for (int i = 0; i < s; i++) {
             int row = upward ? (s - 1 - i) : i;
-            for (int dc = 0; dc <= 1; dc++) {
-                int c = col - dc;
-                if (c < 0 || c >= s || l[row][c]) continue;
-                if (bitIdx < total)
-                    g[row][c] = ((data[bitIdx / 8] >> (7 - bitIdx % 8)) & 1) == 1;
-                bitIdx++;
-            }
+            bitIdx = placeRowPair(g, l, data, s, row, col, bitIdx, total);
         }
+        return bitIdx;
     }
 
-    private static int countUnlocked(boolean[][] l, int s,
-                                     int col, boolean upward) {
-        int count = 0;
-        for (int i = 0; i < s; i++) {
-            int row = upward ? (s - 1 - i) : i;
-            for (int dc = 0; dc <= 1; dc++) {
-                int c = col - dc;
-                if (c >= 0 && c < s && !l[row][c]) count++;
+    private static int placeRowPair(boolean[][] g, boolean[][] l, byte[] data,
+                                    int s, int row, int col, int bitIdx, int total) {
+        for (int dc = 0; dc <= 1; dc++) {
+            int c = col - dc;
+            if (c < 0 || c >= s || l[row][c]) continue;
+            if (bitIdx < total) {
+                g[row][c] = ((data[bitIdx / 8] >> (7 - bitIdx % 8)) & 1) == 1;
             }
+            bitIdx++;
         }
-        return count;
+        return bitIdx;
     }
 
     // ── Masking ──────────────────────────────────────────────────────────

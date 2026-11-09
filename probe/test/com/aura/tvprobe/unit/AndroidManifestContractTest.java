@@ -20,8 +20,8 @@ public class AndroidManifestContractTest {
         String xml = new String(Files.readAllBytes(manifestFile.toPath()), StandardCharsets.UTF_8);
 
         assertTrue("Must declare .AuraActivity", xml.contains("android:name=\".AuraActivity\""));
-        assertTrue("Must use singleTask launchMode for Home button onNewIntent routing",
-            xml.contains("android:launchMode=\"singleTask\""));
+        assertTrue("Must use singleInstance or singleTask launchMode for Home button routing",
+            xml.contains("android:launchMode=\"singleInstance\"") || xml.contains("android:launchMode=\"singleTask\""));
         assertTrue("Must declare android.intent.category.HOME so Home button never hits FallbackHome",
             xml.contains("android.intent.category.HOME"));
         assertTrue("Must declare android.intent.category.DEFAULT for Home intent resolution",

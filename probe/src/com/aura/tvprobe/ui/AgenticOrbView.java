@@ -68,7 +68,7 @@ public final class AgenticOrbView extends View {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        startLoop();
+        if (isShown()) startLoop();
     }
 
     @Override
@@ -88,7 +88,7 @@ public final class AgenticOrbView extends View {
     }
 
     public void startLoop() {
-        if (animator != null && animator.isRunning()) return;
+        if (!isShown() || (animator != null && animator.isRunning())) return;
         animator = ValueAnimator.ofFloat(0f, (float) (Math.PI * 2.0));
         animator.setDuration(2400);
         animator.setRepeatCount(ValueAnimator.INFINITE);
@@ -98,6 +98,10 @@ public final class AgenticOrbView extends View {
     }
 
     private void onPhaseUpdate(ValueAnimator a) {
+        if (!isShown()) {
+            stopLoop();
+            return;
+        }
         phase = (float) a.getAnimatedValue();
         invalidate();
     }

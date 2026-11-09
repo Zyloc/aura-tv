@@ -168,12 +168,17 @@ public class SessionInspector {
         wdb.beginTransaction();
         try {
             // Ingest verified watch_next_program rows engaged within the last 90 days
-            ingestRows(raw.optJSONArray("watch_next"), chMap, "Watch Next");
-            ingestNetflixContinueWatching(raw.optJSONArray("preview_programs"));
-            wdb.setTransactionSuccessful();
+            ingestAllProviderRows(raw, chMap, wdb);
         } finally {
             wdb.endTransaction();
         }
+    }
+
+    private void ingestAllProviderRows(JSONObject raw, Map<Long, String> chMap,
+                                       android.database.sqlite.SQLiteDatabase wdb) {
+        ingestRows(raw.optJSONArray("watch_next"), chMap, "Watch Next");
+        ingestNetflixContinueWatching(raw.optJSONArray("preview_programs"));
+        wdb.setTransactionSuccessful();
     }
 
     private Map<Long, String> buildChannelMap(JSONArray chs) {

@@ -57,8 +57,7 @@ public final class MediaDeepLinkLauncher {
     }
 
     private static String lookupCachedGtiUri(AuraDb db, String cleanTitle, JSONObject item) {
-        String cached = db.getCachedGti("jw_imdb_v6:" + cleanTitle.toLowerCase());
-        if (cached == null) cached = db.getCachedGti("jw_imdb_v5:" + cleanTitle.toLowerCase());
+        String cached = getCachedMetadataJson(db, cleanTitle.toLowerCase());
         if (cached == null) return "";
         try {
             JSONObject cm = new JSONObject(cached);
@@ -66,9 +65,12 @@ public final class MediaDeepLinkLauncher {
                 item.put("launch_pkg", cm.optString("launch_pkg", "").trim());
             }
             return cm.optString("launch_uri", "").trim();
-        } catch (Exception ignored) {
-            return "";
-        }
+        } catch (Exception ignored) { return ""; }
+    }
+
+    private static String getCachedMetadataJson(AuraDb db, String keyLower) {
+        String cached = db.getCachedGti("jw_imdb_v6:" + keyLower);
+        return cached != null ? cached : db.getCachedGti("jw_imdb_v5:" + keyLower);
     }
 
     private static boolean tryDirectDeepLink(Context ctx, String uri, String pkg, JSONObject item) {
@@ -84,17 +86,20 @@ public final class MediaDeepLinkLauncher {
     }
 
     public static Intent buildDeepLinkIntent(String uri, String pkg) throws Exception {
-        Intent deepIntent;
-        if (uri.startsWith("intent:") || uri.contains("#Intent;")) {
-            deepIntent = Intent.parseUri(uri, Intent.URI_INTENT_SCHEME);
-        } else {
-            deepIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
-            if (pkg != null && !pkg.isEmpty()) deepIntent.setPackage(pkg);
-        }
+        Intent deepIntent = parseOrCreateViewIntent(uri, pkg);
         if (NETFLIX_PKG.equals(pkg) || NETFLIX_PKG.equals(deepIntent.getPackage())) {
             deepIntent.putExtra("source", "30");
         }
         deepIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        return deepIntent;
+    }
+
+    private static Intent parseOrCreateViewIntent(String uri, String pkg) throws Exception {
+        if (uri.startsWith("intent:") || uri.contains("#Intent;")) {
+            return Intent.parseUri(uri, Intent.URI_INTENT_SCHEME);
+        }
+        Intent deepIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
+        if (pkg != null && !pkg.isEmpty()) deepIntent.setPackage(pkg);
         return deepIntent;
     }
 
@@ -120,16 +125,13 @@ public final class MediaDeepLinkLauncher {
     private static boolean tryNetflixSearch(Context ctx, String cleanTitle) {
         if (tryActionIntent(ctx, Intent.ACTION_SEARCH, NETFLIX_PKG, cleanTitle)) return true;
         try {
-            Intent nfView = new Intent(Intent.ACTION_VIEW,
-                Uri.parse("http://www.netflix.com/search/" + Uri.encode(cleanTitle)));
-            nfView.setPackage(NETFLIX_PKG);
+            Uri uri = Uri.parse("http://www.netflix.com/search/" + Uri.encode(cleanTitle));
+            Intent nfView = new Intent(Intent.ACTION_VIEW, uri).setPackage(NETFLIX_PKG);
             nfView.putExtra("source", "30");
             nfView.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             ctx.startActivity(nfView);
             return true;
-        } catch (Exception ignored) {
-            return false;
-        }
+        } catch (Exception ignored) { return false; }
     }
 
     private static boolean tryActionIntent(Context ctx, String action, String pkg, String query) {
@@ -141,9 +143,7 @@ public final class MediaDeepLinkLauncher {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             ctx.startActivity(intent);
             return true;
-        } catch (Exception ignored) {
-            return false;
-        }
+        } catch (Exception ignored) { return false; }
     }
 
     public static void launchPackage(Context ctx, String pkg) {
@@ -181,17 +181,13 @@ public final class MediaDeepLinkLauncher {
 
     private static boolean tryResolvedMainActivity(Context ctx, PackageManager pm, String pkg) {
         try {
-            Intent main = new Intent(Intent.ACTION_MAIN).setPackage(pkg);
-            List<ResolveInfo> ris = pm.queryIntentActivities(main, 0);
+            List<ResolveInfo> ris = pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).setPackage(pkg), 0);
             if (ris == null || ris.isEmpty() || ris.get(0).activityInfo == null) return false;
-            Intent comp = new Intent(Intent.ACTION_MAIN);
-            comp.setClassName(pkg, ris.get(0).activityInfo.name);
+            Intent comp = new Intent(Intent.ACTION_MAIN).setClassName(pkg, ris.get(0).activityInfo.name);
             comp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             ctx.startActivity(comp);
             return true;
-        } catch (Exception e) {
-            return false;
-        }
+        } catch (Exception e) { return false; }
     }
 
     public static void openHdmiInput(Context ctx, int port) {

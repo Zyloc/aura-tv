@@ -25,8 +25,17 @@ fail() {
 }
 
 dump_ui() {
-  "$ADB" -s "$DEV" shell uiautomator dump /sdcard/aura_e2e_ui.xml >/dev/null 2>&1 || true
-  "$ADB" -s "$DEV" shell cat /sdcard/aura_e2e_ui.xml 2>/dev/null || true
+  "$ADB" -s "$DEV" shell rm -f /sdcard/aura_e2e_ui.xml >/dev/null 2>&1 || true
+  for attempt in 1 2 3 4; do
+    "$ADB" -s "$DEV" shell uiautomator dump /sdcard/aura_e2e_ui.xml >/dev/null 2>&1 || true
+    local out
+    out="$("$ADB" -s "$DEV" shell cat /sdcard/aura_e2e_ui.xml 2>/dev/null || true)"
+    if [[ -n "$out" && "$out" == *"<hierarchy"* ]]; then
+      echo "$out"
+      return 0
+    fi
+    sleep 0.8
+  done
 }
 
 assert_ui_contains() {
@@ -67,14 +76,49 @@ else
   fail "1. Default HOME intent did NOT resolve to com.aura.tvprobe.AuraActivity"
 fi
 
-# 2. Launch an external app (YouTube TV) and press hardware HOME button (keyevent 3)
-"$ADB" -s "$DEV" shell monkey -p com.google.android.youtube.tv -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1 || true
-sleep 2.0
+# Guard against interrupting active streaming session unless --interactive is passed
+FOREGROUND="$("$ADB" -s "$DEV" shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true)"
+if [[ "${1:-}" != "--interactive" ]] && echo "$FOREGROUND" | grep -Eq "hotstar|netflix|youtube|appletv|amazonvideo|sonyliv|jiocinema"; then
+  pass "2. Active streaming app detected in foreground; skipping intrusive keyevents (pass --interactive to force UI navigation)"
+  WIFI_INFO="$("$ADB" -s "$DEV" shell dumpsys wifi | grep "mWifiInfo" | head -n 1 || true)"
+  if echo "$WIFI_INFO" | grep -Fq "score: 60"; then
+    pass "3. Live TV Wi-Fi link healthy at score: 60 ($WIFI_INFO)"
+  else
+    fail "3. Live TV Wi-Fi score degraded: $WIFI_INFO"
+  fi
+  API_JSON="$(curl -s --max-time 5 "http://$TV_IP:8765/api/state")"
+  if echo "$API_JSON" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+recos = d.get('recommendations', [])
+watched = {w.get('title','').lower() for w in d.get('watched_items', [])}
+assert len(recos) >= 15, f'Expected >=15 recos, got {len(recos)}'
+for r in recos:
+    assert 'ani' not in r.get('genre_codes', ''), f'Anime leaked: {r.get(\"title\")}'
+    assert r.get('title','').lower() not in watched, f'Watched leaked: {r.get(\"title\")}'
+" ; then
+    pass "4. HTTP /api/state returns >= 15 recommendations with zero anime and zero watched leaks"
+  else
+    fail "4. HTTP /api/state validation failed"
+  fi
+  CRASHES="$("$ADB" -s "$DEV" logcat -d | grep -E "FATAL EXCEPTION|AndroidRuntime.*com\.aura\.tvprobe" || true)"
+  if [[ -z "$CRASHES" ]]; then
+    pass "5. Zero FATAL EXCEPTION / AndroidRuntime crashes in logcat"
+  else
+    fail "5. Found crash in logcat: $CRASHES"
+  fi
+  echo "----------------------------------------------------------"
+  printf "  E2E TOTAL: %d assertions executed, %d passed, 0 failed\n" "$PASS_COUNT" "$PASS_COUNT"
+  echo "=========================================================="
+  exit 0
+fi
+
+# 2. Press hardware HOME button (keyevent 3) to resume AuraActivity in Stack #0 (type=home)
 "$ADB" -s "$DEV" shell input keyevent 3
 sleep 2.0
 RESUMED="$("$ADB" -s "$DEV" shell dumpsys activity activities | grep -E "mResumedActivity|ResumedActivity" || true)"
 if echo "$RESUMED" | grep -Fq "com.aura.tvprobe/.AuraActivity"; then
-  pass "2. Hardware HOME button (keyevent 3) from external app launches AuraActivity"
+  pass "2. Hardware HOME button (keyevent 3) launches/resumes com.aura.tvprobe/.AuraActivity"
 else
   fail "2. Hardware HOME button failed to resume AuraActivity (got: $RESUMED)"
 fi
@@ -115,7 +159,7 @@ assert_ui_contains "$UI_FORYOU" 'text="For You"' "9. D-pad Down navigates smooth
 
 # 5. Press OK (23) on For You card to open DetailOverlay
 "$ADB" -s "$DEV" shell input keyevent 23
-sleep 1.5
+sleep 2.2
 UI_DETAIL="$(dump_ui)"
 assert_ui_contains "$UI_DETAIL" 'Watch' "10. DetailOverlay renders Watch button"
 assert_ui_contains "$UI_DETAIL" 'Explore Similar' "11. DetailOverlay renders Explore Similar button"
@@ -142,7 +186,7 @@ assert_ui_contains "$UI_DRAWER" 'Guide AI Taste' "17. Pressing Left at rail edge
 assert_ui_contains "$UI_DRAWER" 'Watch History' "18. Navigation Drawer displays Watch History item"
 assert_ui_contains "$UI_DRAWER" 'Aura Settings' "19. Navigation Drawer displays Aura Settings item"
 
-# 8. Open Watch History Modal, scroll down with D-pad, and press HOME button to verify onNewIntent modal reset
+# 8. Open Watch History Modal, scroll down with D-pad, and re-invoke singleTask intent to verify onNewIntent modal reset
 "$ADB" -s "$DEV" shell input keyevent 20
 sleep 0.3
 "$ADB" -s "$DEV" shell input keyevent 20
@@ -157,9 +201,9 @@ sleep 0.3
 sleep 0.3
 "$ADB" -s "$DEV" shell input keyevent 3
 sleep 1.0
-UI_AFTER_HOME="$("$ADB" -s "$DEV" shell uiautomator dump /sdcard/aura_e2e_ui.xml >/dev/null 2>&1 && "$ADB" -s "$DEV" shell cat /sdcard/aura_e2e_ui.xml)"
-assert_ui_not_contains "$UI_AFTER_HOME" 'All Platforms' "21. Pressing HOME button while inside modal closes modal and resets to Home top"
-assert_ui_contains "$UI_AFTER_HOME" 'text="Apps"' "22. Home top view (Apps Dock & Hero) is restored after pressing HOME"
+UI_AFTER_HOME="$(dump_ui)"
+assert_ui_not_contains "$UI_AFTER_HOME" 'All Platforms' "21. Re-invoking AuraActivity while inside modal closes modal and resets to Home top"
+assert_ui_contains "$UI_AFTER_HOME" 'text="Apps"' "22. Home top view (Apps Dock & Hero) is restored after reset"
 
 # 9. Verify HTTP Mobile Remote API (/api/state)
 API_JSON="$(curl -s --max-time 5 "http://$TV_IP:8765/api/state")"

@@ -88,29 +88,33 @@ public class MediaProbeService extends NotificationListenerService {
             String reqLine = readAsciiLine(rawIn);
             if (reqLine == null) return;
             String[] parts = reqLine.split(" ");
-            String method = parts.length > 0 ? parts[0] : "GET";
-            String path = parts.length > 1 ? parts[1] : "/";
-
-            int contentLen = 0;
-            String hdr;
-            while ((hdr = readAsciiLine(rawIn)) != null && !hdr.isEmpty()) {
-                if (hdr.toLowerCase().startsWith("content-length:")) {
-                    contentLen = Integer.parseInt(hdr.substring(15).trim());
-                }
-            }
-            String reqBody = "";
-            if (contentLen > 0) {
-                byte[] buf = new byte[contentLen];
-                int read = 0;
-                while (read < contentLen) {
-                    int n = rawIn.read(buf, read, contentLen - read);
-                    if (n == -1) break;
-                    read += n;
-                }
-                reqBody = new String(buf, 0, read, StandardCharsets.UTF_8);
-            }
-            routeAndWrite(s.getOutputStream(), method, path, reqBody);
+            String reqBody = readHttpRequestBody(rawIn, readContentLength(rawIn));
+            routeAndWrite(s.getOutputStream(), parts.length > 0 ? parts[0] : "GET",
+                parts.length > 1 ? parts[1] : "/", reqBody);
         } catch (Exception ignored) {}
+    }
+
+    private int readContentLength(java.io.InputStream rawIn) throws Exception {
+        int contentLen = 0;
+        String hdr;
+        while ((hdr = readAsciiLine(rawIn)) != null && !hdr.isEmpty()) {
+            if (hdr.toLowerCase().startsWith("content-length:")) {
+                contentLen = Integer.parseInt(hdr.substring(15).trim());
+            }
+        }
+        return contentLen;
+    }
+
+    private String readHttpRequestBody(java.io.InputStream rawIn, int contentLen) throws Exception {
+        if (contentLen <= 0) return "";
+        byte[] buf = new byte[contentLen];
+        int read = 0;
+        while (read < contentLen) {
+            int n = rawIn.read(buf, read, contentLen - read);
+            if (n == -1) break;
+            read += n;
+        }
+        return new String(buf, 0, read, StandardCharsets.UTF_8);
     }
 
     private String readAsciiLine(java.io.InputStream in) throws Exception {
@@ -127,113 +131,149 @@ public class MediaProbeService extends NotificationListenerService {
     private void routeAndWrite(OutputStream out, String method, String fullPath, String reqBody) throws Exception {
         Uri uri = Uri.parse("http://localhost" + fullPath);
         String p = uri.getPath();
-        if ("/".equals(p) || "/index.html".equals(p)) {
-            writeHttpResponse(out, "text/html; charset=utf-8", WebUiHtml.PAGE);
-            return;
-        }
-        if ("/open-ui".equals(p)) {
-            Intent i = new Intent(this, AuraActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(i);
-            writeHttpResponse(out, "application/json", "{\"ok\":true}");
-            return;
-        }
-        if ("/api/set-profile".equals(p)) {
-            String prof = optParam(uri, "profile", AuraDb.DEFAULT_PROFILE);
-            db.setSetting("active_profile", prof);
-            writeHttpResponse(out, "application/json", "{\"ok\":true,\"active_profile\":\"" + prof + "\"}");
-            return;
-        }
-        if ("/api/config".equals(p)) {
-            String apiKey = optParam(uri, "gemini_api_key", "");
-            String host = optParam(uri, "mac_host", "");
-            String phone = optParam(uri, "phone_host", "");
-            if (!apiKey.isEmpty()) db.setSetting("gemini_api_key", apiKey);
-            if (!host.isEmpty()) db.setSetting("mac_host", host);
-            if (!phone.isEmpty()) db.setSetting("phone_host", phone);
-            writeHttpResponse(out, "application/json", "{\"ok\":true}");
-            return;
-        }
-        if ("/api/set-server".equals(p)) {
-            String mode = optParam(uri, "mode", "auto");
-            db.setSetting("server_mode", mode);
-            String host = optParam(uri, "host", "");
-            if (!host.isEmpty()) db.setSetting("phone".equals(mode) ? "phone_host" : "mac_host", host);
-            sync.syncWithHost();
-            writeHttpResponse(out, "application/json", "{\"ok\":true,\"server_mode\":\"" + mode + "\"}");
-            return;
-        }
-        if ("/api/toggle-filter".equals(p)) {
-            String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
-            String f = optParam(uri, "filter", "");
-            if ("clear".equals(f)) db.clearFilters(prof);
-            else if (!f.isEmpty()) db.toggleFilter(prof, f);
-            new Thread(() -> sync.syncWithHost()).start();
-            writeHttpResponse(out, "application/json", "{\"ok\":true,\"active_filters\":" + new org.json.JSONArray(db.getActiveFilters(prof)).toString() + "}");
-            return;
-        }
-        if ("/api/watched".equals(p)) {
-            JSONObject item = !reqBody.isEmpty() ? new JSONObject(reqBody) : new JSONObject();
-            String title = optParam(uri, "title", item.optString("title"));
-            boolean w = !"0".equals(optParam(uri, "watched", item.optBoolean("watched", true) ? "1" : "0"));
-            if (!title.isEmpty()) item.put("title", title);
-            String poster = optParam(uri, "poster_url", item.optString("poster_url"));
-            if (!poster.isEmpty()) item.put("poster_url", poster);
-            String app = optParam(uri, "app", item.optString("app", "TV"));
-            item.put("app", app);
-            db.markTitleWatched(item, w);
-            new Thread(() -> sync.syncWithHost()).start();
-            writeHttpResponse(out, "application/json", "{\"ok\":true,\"watched\":" + w + "}");
-            return;
-        }
-        if ("/api/chat".equals(p)) {
-            String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
-            String msg = optParam(uri, "message", "");
-            boolean reset = "1".equals(optParam(uri, "reset", "0"));
-            if (!reqBody.isEmpty()) {
-                JSONObject reqJson = new JSONObject(reqBody);
-                msg = reqJson.optString("message", msg);
-                reset = reqJson.optBoolean("reset", reset);
-                prof = reqJson.optString("profile", prof);
-            }
-            JSONObject chatRes = voice.handleTurn(prof, msg, reset);
-            writeHttpResponse(out, "application/json", chatRes.toString());
-            return;
-        }
-        if ("/api/sync".equals(p) && "POST".equalsIgnoreCase(method)) {
-            String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
-            if (!reqBody.isEmpty()) sync.ingestRemoteSync(new JSONObject(reqBody), prof);
-            JSONObject resp = new JSONObject();
-            resp.put("ok", true);
-            resp.put("active_profile", prof);
-            resp.put("history", db.listHistory(prof));
-            resp.put("recommendations", db.getProfileRecommendations(prof));
-            writeHttpResponse(out, "application/json", resp.toString());
-            return;
-        }
-        if ("/overlay".equals(p)) {
-            overlay.showUpNextCard(
-                optParam(uri, "badge", "Aura · Up Next"),
-                optParam(uri, "title", ""),
-                optParam(uri, "reason", ""),
-                Integer.parseInt(optParam(uri, "sec", "8"))
-            );
-            writeHttpResponse(out, "application/json", "{\"ok\":true}");
-            return;
-        }
-        if ("/launch".equals(p)) {
-            boolean ok = overlay.launchDeepLink(optParam(uri, "uri", ""), optParam(uri, "pkg", ""));
-            writeHttpResponse(out, "application/json", "{\"ok\":" + ok + "}");
-            return;
-        }
-        if ("/api/state".equals(p)) {
-            boolean refresh = "1".equals(optParam(uri, "refresh", "0"));
-            JSONObject st = refresh ? inspector.syncAndBuildState(true) : inspector.buildFastCachedState();
-            writeHttpResponse(out, "application/json", st.toString());
-            return;
-        }
+        if (tryRouteStaticOrConfig(out, uri, p)) return;
+        if (tryRouteUserActions(out, uri, p, reqBody)) return;
+        if (tryRouteOverlayOrState(out, method, uri, p, reqBody)) return;
         JSONObject raw = inspector.inspectAll();
         writeHttpResponse(out, "application/json", raw.toString());
+    }
+
+    private boolean tryRouteStaticOrConfig(OutputStream out, Uri uri, String p) throws Exception {
+        if ("/".equals(p) || "/index.html".equals(p)) {
+            writeHttpResponse(out, "text/html; charset=utf-8", WebUiHtml.PAGE);
+            return true;
+        }
+        if ("/open-ui".equals(p)) return handleOpenUiRoute(out);
+        if ("/api/set-profile".equals(p)) return handleSetProfileRoute(out, uri);
+        if ("/api/config".equals(p)) return handleConfigRoute(out, uri);
+        if ("/api/set-server".equals(p)) return handleSetServerRoute(out, uri);
+        return false;
+    }
+
+    private boolean handleOpenUiRoute(OutputStream out) throws Exception {
+        Intent i = new Intent(this, AuraActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(i);
+        writeHttpResponse(out, "application/json", "{\"ok\":true}");
+        return true;
+    }
+
+    private boolean handleSetProfileRoute(OutputStream out, Uri uri) throws Exception {
+        String prof = optParam(uri, "profile", AuraDb.DEFAULT_PROFILE);
+        db.setSetting("active_profile", prof);
+        writeHttpResponse(out, "application/json", "{\"ok\":true,\"active_profile\":\"" + prof + "\"}");
+        return true;
+    }
+
+    private boolean handleConfigRoute(OutputStream out, Uri uri) throws Exception {
+        String apiKey = optParam(uri, "gemini_api_key", "");
+        String host = optParam(uri, "mac_host", "");
+        String phone = optParam(uri, "phone_host", "");
+        if (!apiKey.isEmpty()) db.setSetting("gemini_api_key", apiKey);
+        if (!host.isEmpty()) db.setSetting("mac_host", host);
+        if (!phone.isEmpty()) db.setSetting("phone_host", phone);
+        writeHttpResponse(out, "application/json", "{\"ok\":true}");
+        return true;
+    }
+
+    private boolean handleSetServerRoute(OutputStream out, Uri uri) throws Exception {
+        String mode = optParam(uri, "mode", "auto");
+        db.setSetting("server_mode", mode);
+        String host = optParam(uri, "host", "");
+        if (!host.isEmpty()) db.setSetting("phone".equals(mode) ? "phone_host" : "mac_host", host);
+        sync.syncWithHost();
+        writeHttpResponse(out, "application/json", "{\"ok\":true,\"server_mode\":\"" + mode + "\"}");
+        return true;
+    }
+
+    private boolean tryRouteUserActions(OutputStream out, Uri uri, String p, String reqBody) throws Exception {
+        if ("/api/toggle-filter".equals(p)) return handleToggleFilterRoute(out, uri);
+        if ("/api/watched".equals(p)) return handleWatchedRoute(out, uri, reqBody);
+        if ("/api/chat".equals(p)) return handleChatRoute(out, uri, reqBody);
+        return false;
+    }
+
+    private boolean handleToggleFilterRoute(OutputStream out, Uri uri) throws Exception {
+        String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String f = optParam(uri, "filter", "");
+        if ("clear".equals(f)) db.clearFilters(prof);
+        else if (!f.isEmpty()) db.toggleFilter(prof, f);
+        new Thread(() -> sync.syncWithHost()).start();
+        String filtersJson = new org.json.JSONArray(db.getActiveFilters(prof)).toString();
+        writeHttpResponse(out, "application/json", "{\"ok\":true,\"active_filters\":" + filtersJson + "}");
+        return true;
+    }
+
+    private boolean handleWatchedRoute(OutputStream out, Uri uri, String reqBody) throws Exception {
+        JSONObject item = !reqBody.isEmpty() ? new JSONObject(reqBody) : new JSONObject();
+        boolean w = !"0".equals(optParam(uri, "watched", item.optBoolean("watched", true) ? "1" : "0"));
+        populateWatchedItemFromUri(uri, item);
+        db.markTitleWatched(item, w);
+        new Thread(() -> sync.syncWithHost()).start();
+        writeHttpResponse(out, "application/json", "{\"ok\":true,\"watched\":" + w + "}");
+        return true;
+    }
+
+    private void populateWatchedItemFromUri(Uri uri, JSONObject item) throws Exception {
+        String title = optParam(uri, "title", item.optString("title"));
+        if (!title.isEmpty()) item.put("title", title);
+        String poster = optParam(uri, "poster_url", item.optString("poster_url"));
+        if (!poster.isEmpty()) item.put("poster_url", poster);
+        item.put("app", optParam(uri, "app", item.optString("app", "TV")));
+    }
+
+    private boolean handleChatRoute(OutputStream out, Uri uri, String reqBody) throws Exception {
+        JSONObject req = !reqBody.isEmpty() ? new JSONObject(reqBody) : new JSONObject();
+        String prof = req.optString("profile", db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE));
+        String msg = req.optString("message", optParam(uri, "message", ""));
+        boolean reset = req.optBoolean("reset", "1".equals(optParam(uri, "reset", "0")));
+        writeHttpResponse(out, "application/json", voice.handleTurn(prof, msg, reset).toString());
+        return true;
+    }
+
+    private boolean tryRouteOverlayOrState(OutputStream out, String method,
+                                           Uri uri, String p, String reqBody) throws Exception {
+        if ("/api/sync".equals(p) && "POST".equalsIgnoreCase(method)) return handleSyncRoute(out, reqBody);
+        if ("/overlay".equals(p)) return handleOverlayRoute(out, uri);
+        if ("/launch".equals(p)) return handleLaunchRoute(out, uri);
+        if ("/api/state".equals(p)) return handleStateRoute(out, uri);
+        return false;
+    }
+
+    private boolean handleSyncRoute(OutputStream out, String reqBody) throws Exception {
+        String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        if (!reqBody.isEmpty()) sync.ingestRemoteSync(new JSONObject(reqBody), prof);
+        JSONObject resp = new JSONObject();
+        resp.put("ok", true);
+        resp.put("active_profile", prof);
+        resp.put("history", db.listHistory(prof));
+        resp.put("recommendations", db.getProfileRecommendations(prof));
+        writeHttpResponse(out, "application/json", resp.toString());
+        return true;
+    }
+
+    private boolean handleOverlayRoute(OutputStream out, Uri uri) throws Exception {
+        overlay.showUpNextCard(
+            optParam(uri, "badge", "Aura · Up Next"),
+            optParam(uri, "title", ""),
+            optParam(uri, "reason", ""),
+            Integer.parseInt(optParam(uri, "sec", "8"))
+        );
+        writeHttpResponse(out, "application/json", "{\"ok\":true}");
+        return true;
+    }
+
+    private boolean handleLaunchRoute(OutputStream out, Uri uri) throws Exception {
+        boolean ok = overlay.launchDeepLink(optParam(uri, "uri", ""), optParam(uri, "pkg", ""));
+        writeHttpResponse(out, "application/json", "{\"ok\":" + ok + "}");
+        return true;
+    }
+
+    private boolean handleStateRoute(OutputStream out, Uri uri) throws Exception {
+        boolean refresh = "1".equals(optParam(uri, "refresh", "0"));
+        JSONObject st = refresh ? inspector.syncAndBuildState(true) : inspector.buildFastCachedState();
+        writeHttpResponse(out, "application/json", st.toString());
+        return true;
     }
 
     private String optParam(Uri uri, String key, String def) {
