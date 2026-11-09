@@ -52,6 +52,8 @@ public class VoiceAndContinueWatchingIntegrationTest {
         assertEquals("movies like Avenger", VoiceSearchHelper.extractKatnissRecognizedText(katnissLogLine));
         assertEquals("Avenger", AiRecommender.extractSimilaritySeed("movies like Avenger"));
         assertTrue(VoiceConcierge.wantsMoviesOnly("movies like Avenger"));
+        assertFalse(VoiceConcierge.isFollowUpRefinement("movies like Dhurandhar"));
+        assertTrue(VoiceConcierge.isFollowUpRefinement("Only on Netflix & Prime"));
 
         JSONArray mixedCandidates = new JSONArray()
             .put(new JSONObject().put("title", "Slow Horses").put("type", "Series").put("app", "Apple TV+").put("runtime_min", 50))

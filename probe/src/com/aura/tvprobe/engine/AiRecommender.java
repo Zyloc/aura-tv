@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -491,13 +492,14 @@ public class AiRecommender {
     private String buildPlannerPrompt(
         String profileId, String userQuery, List<String> watchedList, int minModernYear, int currentYear
     ) {
+        boolean isSearch = userQuery != null && !userQuery.trim().isEmpty();
         String personalGuide = db.getProfileTaste(profileId);
-        JSONArray richHistory = buildRichWatchedContext(profileId);
+        String richHistStr = isSearch ? "[] (Direct Search Mode)" : buildRichWatchedContext(profileId).toString();
         return "You are Aura's Dynamic JustWatch GraphQL Query & Filter Planner Agent. Current Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
             "Profile: '" + db.getProfileLabel(profileId) + "'. Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
-            "User Ratings Feedback: " + db.getRatingFeedbackSummary() + "\n" +
+            "User Ratings Feedback: " + (isSearch ? "(None)" : db.getRatingFeedbackSummary()) + "\n" +
             "Active Filters: " + db.getActiveFilters(profileId).toString() + "\n" +
-            "User's Watched & In-Progress Shows (with Title, Type, Genres, Country, and Plot Synopsis): " + richHistory.toString() + "\n" +
+            "User's Watched & In-Progress Shows (with Title, Type, Genres, Country, and Plot Synopsis): " + richHistStr + "\n" +
             "Already Watched Exclusion List: " + watchedList.toString() + "\n" +
             "User Search Query (if any): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
             buildJustWatchSchemaPromptSection(minModernYear, currentYear);
@@ -532,18 +534,32 @@ public class AiRecommender {
     public List<String> executeScatterGatherForSearch(String profileId, String userQuery, int minModernYear) {
         int currentYear = JustWatchGraph.getCurrentYear();
         List<String> watched = collectWatchedTitles(db.listHistory(profileId));
+        String directSeed = extractSimilaritySeed(userQuery);
+        Future<JSONArray> directSimFut = submitDirectSimilarFetch(!directSeed.isEmpty() ? directSeed : userQuery);
         JSONObject plan = planAgentSearchStrategy(profileId, userQuery, watched, minModernYear, currentYear);
         JSONArray gathered = JustWatchGraph.executeScatterGatherSpecs(plan.optJSONArray("queries"));
+        return mergeSearchScatterGatherResults(directSimFut, gathered, plan, minModernYear);
+    }
+
+    private Future<JSONArray> submitDirectSimilarFetch(String seedQuery) {
+        final String clean = seedQuery == null ? "" : seedQuery.trim();
+        return Executors.newSingleThreadExecutor().submit(() ->
+            clean.isEmpty() ? new JSONArray() : JustWatchGraph.fetchCollaborativeSimilar(clean, 2008));
+    }
+
+    private List<String> mergeSearchScatterGatherResults(
+            Future<JSONArray> directSimFut, JSONArray gathered, JSONObject plan, int minModernYear) {
         List<String> summaries = new ArrayList<>();
         Set<String> seenNorm = new HashSet<>();
+        try { appendSearchCandidateSummaries(directSimFut.get(1500, TimeUnit.MILLISECONDS), seenNorm, summaries); } catch (Exception ignored) {}
         appendSearchCandidateSummaries(gathered, seenNorm, summaries);
         appendFallbackPlanCandidates(plan, minModernYear, seenNorm, summaries);
         return summaries;
     }
 
     private void appendSearchCandidateSummaries(JSONArray arr, Set<String> seenNorm, List<String> summaries) {
-        if (arr == null) return;
-        for (int i = 0; i < arr.length(); i++) {
+        if (arr == null || summaries.size() >= 36) return;
+        for (int i = 0; i < arr.length() && summaries.size() < 36; i++) {
             JSONObject o = arr.optJSONObject(i);
             if (o != null) addSearchCandidateSummary(o, seenNorm, summaries);
         }
@@ -639,7 +655,7 @@ public class AiRecommender {
         for (int i = 0; i < arr.length(); i++) {
             tryAddMatchedLlmPick(arr.optJSONObject(i), byKey, added, out);
         }
-        appendRemainingPoolItems(pool, added, out, 28);
+        if (out.size() < 12) appendRemainingPoolItems(pool, added, out, 16);
         return out;
     }
 
@@ -926,7 +942,7 @@ public class AiRecommender {
     private String httpPost(final String urlStr, final String jsonBody) throws Exception {
         java.util.concurrent.Future<String> fut = HTTP_EXEC.submit(() -> executeHttpPost(urlStr, jsonBody));
         try {
-            return fut.get(11000, TimeUnit.MILLISECONDS);
+            return fut.get(15000, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             fut.cancel(true);
             throw e;
@@ -936,7 +952,7 @@ public class AiRecommender {
     private String executeHttpPost(String urlStr, String jsonBody) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
         conn.setConnectTimeout(3500);
-        conn.setReadTimeout(10500);
+        conn.setReadTimeout(14500);
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");

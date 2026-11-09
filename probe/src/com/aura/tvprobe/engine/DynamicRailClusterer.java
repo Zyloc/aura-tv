@@ -33,7 +33,7 @@ public final class DynamicRailClusterer {
 
         addRailIfNotEmpty(rails, "For You", buildForYouRail(all, usedKeys, 8));
         addRailIfNotEmpty(rails, "Sci-Fi, Crime & High-Stakes Thrillers", buildThrillerSciFiRail(all, usedKeys, 8));
-        addRailIfNotEmpty(rails, "Sports, Docuseries & True Stories", buildSportsAndDocRail(all, usedKeys, 7));
+        addRailIfMinSize(rails, "Sports, Docuseries & True Stories", buildSportsAndDocRail(all, usedKeys, 7), usedKeys, 2);
         addRailIfNotEmpty(rails, "Critically Acclaimed Across Your Apps", buildAcclaimedRail(all, usedKeys, 8));
         return rails;
     }
@@ -41,6 +41,18 @@ public final class DynamicRailClusterer {
     private static void addRailIfNotEmpty(List<RailGroup> rails, String title, List<JSONObject> items) {
         if (items != null && !items.isEmpty()) {
             rails.add(new RailGroup(title, items));
+        }
+    }
+
+    private static void addRailIfMinSize(
+            List<RailGroup> rails, String title, List<JSONObject> items, Set<String> usedKeys, int minSize) {
+        if (items == null || items.isEmpty()) return;
+        if (items.size() >= minSize) {
+            rails.add(new RailGroup(title, items));
+            return;
+        }
+        for (JSONObject item : items) {
+            usedKeys.remove(AuraDb.normalizeTitleKey(item.optString("title", "")));
         }
     }
 
@@ -86,7 +98,7 @@ public final class DynamicRailClusterer {
 
     private static boolean isSportsOrDocMatch(JSONObject item) {
         String g = item.optString("genre_codes", "");
-        return g.contains("spt") || g.contains("doc") || g.contains("hst") || g.contains("war");
+        return g.contains("spt") || g.contains("doc");
     }
 
     private static boolean tryClaimItem(JSONObject item, Set<String> usedKeys, List<JSONObject> out) {

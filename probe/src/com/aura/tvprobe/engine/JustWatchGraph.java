@@ -178,7 +178,7 @@ public class JustWatchGraph {
 
     public static JSONArray executeDynamicQuerySpec(JSONObject spec) {
         JSONArray out = new JSONArray();
-        if (spec == null) return out;
+        if (spec == null || isUnfilteredEmptySpec(spec)) return out;
         try {
             String lang = RegionProviderRegistry.getLanguageCode(null);
             JSONObject vars = buildDynamicSpecVars(spec, RegionProviderRegistry.getCountryCode(null), lang);
@@ -186,6 +186,11 @@ public class JustWatchGraph {
             extractDynamicSpecNodes(edges, spec, lang, out);
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private static boolean isUnfilteredEmptySpec(JSONObject spec) {
+        String sq = spec.optString("searchQuery", "").trim();
+        return sq.isEmpty() && extractSpecGenres(spec.optJSONArray("genres")).length() == 0;
     }
 
     private static JSONObject buildDynamicSpecVars(JSONObject spec, String country, String lang) throws Exception {
@@ -242,10 +247,17 @@ public class JustWatchGraph {
         JSONArray out = new JSONArray();
         if (raw == null) return out;
         for (int i = 0; i < raw.length(); i++) {
-            String g = raw.optString(i, "").trim().toLowerCase(Locale.US);
-            if (isValidGenreCode(g)) out.put(g);
+            String code = normalizeSpecGenreCode(raw.optString(i, ""));
+            if (!code.isEmpty()) out.put(code);
         }
         return out;
+    }
+
+    private static String normalizeSpecGenreCode(String rawGenre) {
+        String g = rawGenre == null ? "" : rawGenre.trim().toLowerCase(Locale.US);
+        if (isValidGenreCode(g)) return g;
+        List<String> inferred = inferGenreCodesFromText(g);
+        return !inferred.isEmpty() ? inferred.get(0) : "";
     }
 
     private static JSONArray extractSpecCountries(JSONArray raw) {
@@ -261,7 +273,8 @@ public class JustWatchGraph {
     private static void extractDynamicSpecNodes(JSONArray edges, JSONObject spec, String lang, JSONArray out) {
         if (edges == null) return;
         int minYr = Math.max(1995, spec.optInt("minYear", 2008));
-        String seedAnchor = spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim();
+        boolean hasSearchQuery = !spec.optString("searchQuery", "").trim().isEmpty();
+        String seedAnchor = hasSearchQuery ? spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim() : "";
         JSONArray objTypes = extractSpecObjectTypes(spec.optJSONArray("objectTypes"));
         for (int i = 0; i < edges.length(); i++) {
             JSONObject node = edges.optJSONObject(i) != null ? edges.optJSONObject(i).optJSONObject("node") : null;

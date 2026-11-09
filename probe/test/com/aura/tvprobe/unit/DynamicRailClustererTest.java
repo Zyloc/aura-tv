@@ -21,11 +21,16 @@ public class DynamicRailClustererTest {
         slate.add(make("Show 2", "SeedA", "scf,crm", 8.6));
         slate.add(make("Show 3", "SeedB", "crm,trl", 8.5));
         slate.add(make("Show 4", "SeedC", "spt,doc", 8.4));
-        slate.add(make("Show 5", "SeedD", "drm", 8.9));
+        slate.add(make("Show 5", "SeedD", "drm,trl,war", 8.9));
 
         List<DynamicRailClusterer.RailGroup> rails = DynamicRailClusterer.buildRails(slate);
         assertFalse("Rails must not be empty", rails.isEmpty());
         assertEquals("For You", rails.get(0).title);
+        for (DynamicRailClusterer.RailGroup rg : rails) {
+            if ("Sports, Docuseries & True Stories".equals(rg.title)) {
+                assertTrue("Sports rail must have at least 2 items when present", rg.items.size() >= 2);
+            }
+        }
 
         Set<String> forYouSeeds = new HashSet<>();
         for (JSONObject item : rails.get(0).items) {

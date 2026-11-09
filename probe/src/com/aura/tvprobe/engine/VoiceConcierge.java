@@ -105,7 +105,7 @@ public class VoiceConcierge {
     private JSONObject runAgenticSearchTurn(
         String profileId, String userText, List<String> activeFilters, AiRecommender.AgentProgressListener progress
     ) {
-        JSONArray turns = getOrInitTurns(profileId);
+        JSONArray turns = isFollowUpRefinement(userText) ? getOrInitTurns(profileId) : new JSONArray();
         int currentYear = JustWatchGraph.getCurrentYear();
         int minModernYear = JustWatchGraph.getDefaultMinModernYear();
         String contextualQuery = buildContextualQuery(turns, userText);
@@ -115,6 +115,14 @@ public class VoiceConcierge {
         String rawJson = ai.callGeminiJson(prompt);
         persistTurnResult(profileId, turns, userText, contextualQuery, activeFilters, rawJson, minModernYear, currentYear);
         return db.getVoiceSession(profileId);
+    }
+
+    public static boolean isFollowUpRefinement(String userText) {
+        if (userText == null || !AiRecommender.extractSimilaritySeed(userText).isEmpty()) return false;
+        String low = userText.trim().toLowerCase();
+        return low.contains("only on") || low.contains("under 2") || low.contains("shorter")
+            || low.contains("darker") || low.contains("grittier") || low.contains("more like")
+            || low.contains("top releases") || low.contains("high-pace") || low.startsWith("on ");
     }
 
     private JSONArray getOrInitTurns(String profileId) {

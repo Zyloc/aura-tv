@@ -406,11 +406,11 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private boolean resetRecosIfEngineUpgraded(SQLiteDatabase db) {
-        if ("sota_v14".equals(getSetting("reco_engine_version", ""))) return false;
+        if ("sota_v15".equals(getSetting("reco_engine_version", ""))) return false;
         db.delete("profile_recos", null, null);
         db.delete("gti_cache", "gti LIKE 'jw_imdb_%'", null);
         setSetting("voice_session_default", "");
-        setSetting("reco_engine_version", "sota_v14");
+        setSetting("reco_engine_version", "sota_v15");
         return true;
     }
 
@@ -521,7 +521,7 @@ public class AuraDb extends SQLiteOpenHelper {
     private boolean hasEligibleAnchorProgress(JSONObject h) {
         int pos = h.optInt("position_sec", 0);
         int dur = Math.max(1800, h.optInt("duration_sec", 2700));
-        return pos >= 240 && !(pos == 1350 && dur == 3000) && ((double) pos / dur) >= 0.20;
+        return pos >= 180 && !(pos == 1350 && dur == 3000);
     }
 
     private double computeHistoryHoursAgo(JSONObject h, long nowSec) {
@@ -550,7 +550,9 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private void appendRotatingLibrarySeeds(List<String> anchors, int epoch, int targetTotal) {
-        List<String> pool = collectHighRatedLibrarySeeds(listManuallyWatched());
+        JSONArray manual = listManuallyWatched();
+        List<String> pool = collectRatedLibrarySeeds(manual, 7);
+        if (pool.isEmpty() && anchors.size() < 3) pool = collectRatedLibrarySeeds(manual, 0);
         if (pool.isEmpty()) return;
         int startIdx = (Math.max(0, epoch) * 3) % pool.size();
         for (int k = 0; k < pool.size() && anchors.size() < targetTotal; k++) {
@@ -559,11 +561,11 @@ public class AuraDb extends SQLiteOpenHelper {
         }
     }
 
-    private List<String> collectHighRatedLibrarySeeds(JSONArray watched) {
+    private List<String> collectRatedLibrarySeeds(JSONArray watched, int minExplicitRating) {
         List<String> pool = new ArrayList<>();
         for (int i = 0; i < watched.length(); i++) {
             JSONObject w = watched.optJSONObject(i);
-            if (w == null || w.optInt("user_rating", 8) < 6) continue;
+            if (w == null || w.optInt("user_rating", 0) < minExplicitRating) continue;
             String t = w.optString("series_title").isEmpty() ? w.optString("title") : w.optString("series_title");
             if (t != null && t.trim().length() >= 2 && !pool.contains(t.trim())) pool.add(t.trim());
         }
