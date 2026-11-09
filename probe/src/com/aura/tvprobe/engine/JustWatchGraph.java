@@ -196,7 +196,7 @@ public class JustWatchGraph {
     private static JSONObject buildDynamicSpecVars(JSONObject spec, String country, String lang) throws Exception {
         boolean hasSq = !spec.optString("searchQuery", "").trim().isEmpty();
         boolean incSim = spec.optBoolean("includeSimilar", hasSq);
-        int first = hasSq ? (incSim ? 4 : 15) : 18;
+        int first = hasSq ? (incSim ? 4 : 25) : 18;
         return new JSONObject().put("country", country).put("language", lang)
             .put("first", first).put("includeSimilar", incSim)
             .put("filter", buildDynamicTitleFilter(spec));
@@ -311,20 +311,23 @@ public class JustWatchGraph {
         JSONObject primary = parseNode(node, lang);
         boolean castMatch = !sq.isEmpty() && primary.optString("cast", "").toLowerCase(Locale.US).contains(sq.toLowerCase(Locale.US));
         if (!sq.isEmpty() && !castMatch && !matchesQueriedSeedNode(primary, edgeIdx, sq, specGenres)) return;
-        String refGenres = castMatch ? "" : (!specGenres.isEmpty() ? specGenres : primary.optString("genre_codes", ""));
-        if (isCompatibleDynamicCandidate(primary, refGenres, objTypes, minYr)) {
+        boolean directMatch = castMatch || isDirectTitleSeedMatch(primary, sq);
+        String refGenres = !specGenres.isEmpty() ? specGenres : primary.optString("genre_codes", "");
+        if (isCompatibleDynamicCandidate(primary, directMatch ? "" : refGenres, objTypes, minYr)) {
             tagDynamicHit(primary, seedAnchor, false);
             out.put(primary);
         }
-        if (!castMatch) {
-            collectSimilarNodesForSpec(node.optJSONArray("similarTitles"), primary, refGenres, minYr, seedAnchor, objTypes, lang, out);
-        }
+        if (!castMatch) collectSimilarNodesForSpec(node.optJSONArray("similarTitles"), primary, refGenres, minYr, seedAnchor, objTypes, lang, out);
+    }
+
+    private static boolean isDirectTitleSeedMatch(JSONObject primary, String sq) {
+        if (sq == null || sq.isEmpty()) return false;
+        String key = AuraDb.normalizeTitleKey(primary.optString("title", ""));
+        return isCloseSeedMatch(key, primary.optString("slug_key", ""), AuraDb.normalizeTitleKey(sq));
     }
 
     private static boolean matchesQueriedSeedNode(JSONObject primary, int edgeIdx, String sq, String specGenres) {
-        String normSq = AuraDb.normalizeTitleKey(sq);
-        String key = AuraDb.normalizeTitleKey(primary.optString("title", ""));
-        if (isCloseSeedMatch(key, primary.optString("slug_key", ""), normSq)) return true;
+        if (isDirectTitleSeedMatch(primary, sq)) return true;
         return edgeIdx == 0 && (specGenres.isEmpty() || CandidateValidator.computeGenreJaccard(primary.optString("genre_codes", ""), specGenres) >= 0.15);
     }
 
@@ -348,7 +351,7 @@ public class JustWatchGraph {
         String candGenres = cand.optString("genre_codes", "");
         if (!CandidateValidator.isCompatibleFormatForSeed(candGenres, refGenres)) return false;
         if (!refGenres.isEmpty() && CandidateValidator.computeGenreJaccard(candGenres, refGenres) < 0.15) return false;
-        double minImdb = (refGenres.contains("cmy") || refGenres.contains("hrr") || candGenres.contains("cmy")) ? 5.8 : 6.4;
+        double minImdb = refGenres.isEmpty() ? 5.0 : ((refGenres.contains("cmy") || refGenres.contains("hrr") || candGenres.contains("cmy")) ? 5.8 : 6.4);
         return CandidateValidator.isValidCoWatchCandidate(cand, minYr, minImdb);
     }
 

@@ -162,7 +162,7 @@ public class VoiceConcierge {
     ) throws Exception {
         JSONObject out = parseGeminiTurnOrDefault(rawJson, userText, activeFilters, minModernYear, currentYear);
         JSONArray finalResults = out.getJSONArray("results");
-        if (finalResults.length() < 4) {
+        if (finalResults.length() == 0) {
             backfillWithDeterministicSearch(profileId, userText, contextualQuery, activeFilters, minModernYear, finalResults);
             if (rawJson == null) {
                 out.put("reply", "Ranked top matches for \"" + userText + "\" by taste similarity & Bayesian IMDb.");
@@ -347,7 +347,7 @@ public class VoiceConcierge {
             "- SCATTER-GATHER FILTERING: Inspect the 'Multi-Hop Search & Co-Watch Graph Traversal Candidates' above (including each candidate's Type, Genres, Country, and Synopsis). Filter out and discard any candidate that is semantically irrelevant to the User Search Query.\n" +
             "- MULTI-TURN CONVERSATION: If 'Session Flow so far' has previous user turns, treat the current query as a FOLLOW-UP REFINEMENT on that conversation.\n" +
             "- SIMILARITY & FRANCHISE QUERIES: If the user asks for titles 'like X' or 'similar to X', EVERY SINGLE RESULT must match the subgenre, tone, scale, and storyline of X. NEVER include unrelated crime dramas or thrillers.\n" +
-            "- ACTOR / DIRECTOR QUERIES: If the user searches for a specific actor or director, ONLY select candidates whose 'Cast=' includes that exact person (exclude remakes starring other actors).\n" +
+            "- ACTOR / DIRECTOR QUERIES: If the user searches for a specific actor or director (even with a genre modifier like 'Jason Statham comedy movies'), ONLY select candidates whose 'Cast=' includes that exact person (rank their exact-genre films first, followed by their most lighthearted/entertaining action-comedy or heist films from the pool; NEVER include any title without that person).\n" +
             "- FORMAT CONSTRAINT: If the user asks for 'movies' or 'films', ONLY return feature films (Type='Movie', NEVER TV series). If they ask for 'shows' or 'series', ONLY return TV series.\n" +
             "- RECENCY WINDOW: Prioritize " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for franchise/similarity queries include iconic 2008\u2013" + currentYear + " peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +

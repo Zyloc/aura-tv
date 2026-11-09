@@ -537,7 +537,7 @@ public class AiRecommender {
     private String buildPlannerTaskInstructions(int minModernYear, int currentYear) {
         return "Task:\n" +
             "1. Plan 'queries': 6 diverse JustWatch GraphQL query spec objects for parallel scatter-gather retrieval. " +
-            "If 'User Search Query' is an actor, director, or franchise query (e.g. 'Amitabh Bachchan movies'), set 'includeSimilar': false on the 6 'queries' specs (using the actor/director name and 5 of their iconic films as 'searchQuery') and list 10 of their specific movies/shows in 'primary_queries'. " +
+            "If 'User Search Query' is an actor, director, or franchise query (e.g. 'Amitabh Bachchan movies', 'Jason Statham comedy movies'), set 'includeSimilar': false on the 6 'queries' specs (using the actor/director name with 'genres': [] and 5 of their iconic films as 'searchQuery') and list 10 of their specific movies/shows in 'primary_queries' (including action-comedies, heist films, and lighthearted hits starring that person). " +
             "If 'User Search Query' is a 'like X' similarity query, set 'searchQuery' to X and 5 iconic peer titles in that exact sub-genre with 'includeSimilar': true. " +
             "If 'User Search Query' is empty, generate the 6 query specs from the plot synopses, genres, countries, and types of the User's Watched & In-Progress Shows.\n" +
             "2. Plan 'primary_queries': 10 specific show/movie titles directly matching the request or watched history.\n" +
@@ -805,7 +805,7 @@ public class AiRecommender {
         String title = p.optString("title").trim();
         if (title.isEmpty() || db.isTitleWatched(title)) return null;
         JSONObject meta = fetchOpenMetadata(title);
-        double minImdb = minAllowedYear <= 2000 ? 5.8 : 6.4;
+        double minImdb = minAllowedYear <= 2000 ? 5.0 : 6.4;
         if (!JustWatchGraph.isValidDirectSimilarCandidate(meta, minAllowedYear, minImdb)) return null;
         String verifiedApp = meta.optString("app", "");
         if (verifiedApp.isEmpty()) return null;
