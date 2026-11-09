@@ -19,6 +19,7 @@ public class MediaProbeService extends NotificationListenerService {
     private AuraDb db;
     private AiRecommender ai;
     private SessionInspector inspector;
+    private MediaEventWatcher eventWatcher;
     private TvOverlayManager overlay;
     private SyncManager sync;
     private VoiceConcierge voice;
@@ -26,19 +27,33 @@ public class MediaProbeService extends NotificationListenerService {
     @Override
     public void onCreate() {
         super.onCreate();
+        initCoreDependencies();
+        startHttpServer();
+        eventWatcher.registerAll();
+        startHourlyRecoMonitor();
+    }
+
+    private void initCoreDependencies() {
         db = AuraDb.getInstance(this);
         ai = new AiRecommender(db);
-        inspector = new SessionInspector(this, new ComponentName(this, MediaProbeService.class), db, ai);
+        ComponentName comp = new ComponentName(this, MediaProbeService.class);
+        inspector = new SessionInspector(this, comp, db, ai);
+        eventWatcher = new MediaEventWatcher(this, comp, db, inspector);
         overlay = new TvOverlayManager(this);
         sync = new SyncManager(db);
         voice = new VoiceConcierge(db, ai, sync);
-        startHttpServer();
-        startBackgroundMonitor();
+    }
+
+    @Override
+    public void onListenerConnected() {
+        super.onListenerConnected();
+        if (eventWatcher != null) eventWatcher.registerAll();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         try { requestRebind(new ComponentName(this, MediaProbeService.class)); } catch (Throwable ignored) {}
+        if (eventWatcher != null) eventWatcher.registerAll();
         startHttpServer();
         return START_STICKY;
     }
@@ -46,25 +61,24 @@ public class MediaProbeService extends NotificationListenerService {
     @Override
     public void onDestroy() {
         running = false;
+        if (eventWatcher != null) eventWatcher.unregisterAll();
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
         super.onDestroy();
     }
 
-    private void startBackgroundMonitor() {
+    private void startHourlyRecoMonitor() {
         new Thread(() -> {
-            try { Thread.sleep(45000L); } catch (Exception ignored) {}
             while (running) {
                 try {
-                    runBackgroundTick();
-                    Thread.sleep(300000L);
+                    Thread.sleep(3600000L);
+                    refreshHourlyRecosIfNeeded();
                 } catch (Exception ignored) {}
             }
-        }, "AuraBgMonitor").start();
+        }, "AuraHourlyReco").start();
     }
 
-    private void runBackgroundTick() {
+    private void refreshHourlyRecosIfNeeded() {
         String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
-        inspector.syncProvidersAndNowPlaying(prof);
         if (!db.isRecoCacheFresh(prof)) {
             inspector.syncAndBuildState(true);
         }

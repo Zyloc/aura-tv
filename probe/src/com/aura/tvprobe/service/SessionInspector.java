@@ -363,6 +363,16 @@ public class SessionInspector {
         return last;
     }
 
+    public void persistSerializedSession(JSONObject sessionJson) {
+        if (sessionJson == null) return;
+        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        sessionToNowPlaying(sessionJson, profile);
+    }
+
+    public JSONObject serializeControllerSafe(MediaController mc) {
+        try { return mc != null ? serializeController(mc) : null; } catch (Exception e) { return null; }
+    }
+
     private JSONObject sessionToNowPlaying(JSONObject s, String profile) {
         JSONObject out = new JSONObject();
         try {
@@ -425,8 +435,15 @@ public class SessionInspector {
         String t = meta.optString("android.media.metadata.TITLE",
             meta.optString("android.media.metadata.DISPLAY_TITLE", friendlyApp(pkg)));
         out.put("title", t);
-        out.put("series_title", sanitizeSeriesArtist(meta.optString("android.media.metadata.ARTIST"), t));
+        out.put("series_title", resolveSeriesFromMetadata(meta, t));
         out.put("poster_url", meta.optString("android.media.metadata.ALBUM_ART_URI"));
+    }
+
+    private String resolveSeriesFromMetadata(JSONObject meta, String title) {
+        String series = sanitizeSeriesArtist(meta.optString("android.media.metadata.ARTIST"), title);
+        if (series.isEmpty()) series = sanitizeSeriesArtist(meta.optString("android.media.metadata.ALBUM"), title);
+        if (series.isEmpty()) series = sanitizeSeriesArtist(meta.optString("android.media.metadata.DISPLAY_SUBTITLE"), title);
+        return series;
     }
 
     private String sanitizeSeriesArtist(String artist, String title) {
@@ -489,8 +506,18 @@ public class SessionInspector {
     private void populatePlaybackState(JSONObject obj, PlaybackState ps) throws Exception {
         if (ps == null) return;
         obj.put("state", ps.getState());
-        obj.put("position_ms", ps.getPosition());
+        obj.put("position_ms", computeLivePositionMs(ps));
         obj.put("speed", ps.getPlaybackSpeed());
+    }
+
+    public static long computeLivePositionMs(PlaybackState ps) {
+        if (ps == null) return 0L;
+        long pos = Math.max(0L, ps.getPosition());
+        if (ps.getState() == PlaybackState.STATE_PLAYING && ps.getLastPositionUpdateTime() > 0L) {
+            long elapsed = android.os.SystemClock.elapsedRealtime() - ps.getLastPositionUpdateTime();
+            if (elapsed > 0L && elapsed < 14_400_000L) pos += (long) (elapsed * Math.max(1.0f, ps.getPlaybackSpeed()));
+        }
+        return pos;
     }
 
     private JSONObject extractMetadata(MediaMetadata meta) throws Exception {
