@@ -33,8 +33,16 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" -s "$TV_IP:5555" shell settings put global ble_scan_always_enabled 0 || true
 "$ADB" -s "$TV_IP:5555" shell settings put global wifi_wakeup_enabled 0 || true
 "$ADB" -s "$TV_IP:5555" shell settings put global wifi_suspend_optimizations_enabled 0 || true
+"$ADB" -s "$TV_IP:5555" shell settings put global wifi_scan_throttle_enabled 1 || true
+"$ADB" -s "$TV_IP:5555" shell settings put secure location_mode 0 || true
+"$ADB" -s "$TV_IP:5555" shell settings put secure location_providers_allowed -gps || true
+"$ADB" -s "$TV_IP:5555" shell settings put secure location_providers_allowed -network || true
 "$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.gms WIFI_SCAN ignore || true
+"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.gms CHANGE_WIFI_STATE ignore || true
 "$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.katniss WIFI_SCAN ignore || true
+"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.katniss CHANGE_WIFI_STATE ignore || true
+"$ADB" -s "$TV_IP:5555" shell pm revoke com.google.android.katniss android.permission.ACCESS_FINE_LOCATION 2>/dev/null || true
+"$ADB" -s "$TV_IP:5555" shell pm revoke com.google.android.katniss android.permission.ACCESS_COARSE_LOCATION 2>/dev/null || true
 "$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.apps.nbu.smartconnect.tv WIFI_SCAN ignore || true
 "$ADB" -s "$TV_IP:5555" shell cmd notification disallow_listener com.google.android.tvrecommendations/com.google.android.tvrecommendations.NotificationsService || true
 "$ADB" -s "$TV_IP:5555" shell pm disable-user --user 0 com.google.android.tvrecommendations || true
