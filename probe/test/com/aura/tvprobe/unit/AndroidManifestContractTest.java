@@ -101,6 +101,17 @@ public class AndroidManifestContractTest {
             src.contains("(forceRefresh || !hadUsable)"));
     }
 
+    @Test
+    public void testVoiceSearchIntentFiltersAndActivityResultRouting() throws Exception {
+        File manifestFile = resolveFile("probe/AndroidManifest.xml", "AndroidManifest.xml");
+        File actFile = resolveFile("probe/src/com/aura/tvprobe/app/AuraActivity.java", "src/com/aura/tvprobe/app/AuraActivity.java");
+        String xml = new String(Files.readAllBytes(manifestFile.toPath()), StandardCharsets.UTF_8);
+        String src = new String(Files.readAllBytes(actFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue("Manifest must declare SEARCH_ACTION", xml.contains("com.google.android.gms.actions.SEARCH_ACTION"));
+        assertTrue("Manifest must declare MEDIA_PLAY_FROM_SEARCH", xml.contains("android.media.action.MEDIA_PLAY_FROM_SEARCH"));
+        assertTrue("AuraActivity must handle voice recognition result in onActivityResult", src.contains("extractActivityResultQuery"));
+    }
+
     private static File resolveFile(String rootRelative, String probeRelative) {
         File f1 = new File(rootRelative);
         return f1.exists() ? f1 : new File(probeRelative);

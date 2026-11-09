@@ -38,13 +38,19 @@ public final class TopBarBuilder {
 
     public static TopBarViews build(Context ctx, FrameLayout navPanel, FrameLayout heroSlider,
                                     List<String> initialHints, Runnable onSearchClicked) {
+        return build(ctx, navPanel, heroSlider, initialHints, onSearchClicked, null);
+    }
+
+    public static TopBarViews build(Context ctx, FrameLayout navPanel, FrameLayout heroSlider,
+                                    List<String> initialHints, Runnable onSearchClicked, Runnable onVoiceClicked) {
         LinearLayout bar = createBarContainer(ctx);
         TextView hamburger = NavPanelBuilder.createTopBarHamburger(navPanel, ctx);
         TextView[] labelHolder = new TextView[1];
         LinearLayout searchBox = buildSearchBox(ctx, resolveFirstHint(initialHints), labelHolder, onSearchClicked);
+        TextView micBtn = VoiceSearchHelper.buildMicButton(ctx, onVoiceClicked != null ? onVoiceClicked : onSearchClicked);
         TextView clock = buildClockLabel(ctx);
-        assembleTopBarViews(ctx, bar, hamburger, searchBox, clock);
-        bindTopBarDpad(hamburger, searchBox, heroSlider);
+        assembleTopBarViews(ctx, bar, hamburger, searchBox, micBtn, clock);
+        bindTopBarDpad(hamburger, searchBox, micBtn, heroSlider);
         return new TopBarViews(bar, hamburger, searchBox, labelHolder[0], clock);
     }
 
@@ -54,10 +60,13 @@ public final class TopBarBuilder {
     }
 
     private static void assembleTopBarViews(Context ctx, LinearLayout bar, TextView hamburger,
-                                            LinearLayout searchBox, TextView clock) {
+                                            LinearLayout searchBox, TextView micBtn, TextView clock) {
         bar.addView(hamburger);
         bar.addView(new View(ctx), GlassTheme.weightParams(1f));
         bar.addView(searchBox);
+        LinearLayout.LayoutParams micLp = new LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36));
+        micLp.leftMargin = dp(ctx, 8);
+        bar.addView(micBtn, micLp);
         bar.addView(new View(ctx), GlassTheme.weightParams(1f));
         bar.addView(clock, GlassTheme.wrapParams());
     }
@@ -174,24 +183,26 @@ public final class TopBarBuilder {
         icon.setTextColor(fg);
     }
 
-    private static void bindTopBarDpad(TextView hamburger, LinearLayout searchBox, FrameLayout heroSlider) {
+    private static void bindTopBarDpad(TextView hamburger, LinearLayout searchBox,
+                                       TextView micBtn, FrameLayout heroSlider) {
         hamburger.setOnKeyListener((v, code, ev) ->
-            handleTopBarKey(code, ev, searchBox, heroSlider, true));
+            handleTopBarNodeKey(code, ev, null, searchBox, heroSlider));
         searchBox.setOnKeyListener((v, code, ev) ->
-            handleTopBarKey(code, ev, hamburger, heroSlider, false));
+            handleTopBarNodeKey(code, ev, hamburger, micBtn, heroSlider));
+        micBtn.setOnKeyListener((v, code, ev) ->
+            handleTopBarNodeKey(code, ev, searchBox, null, heroSlider));
     }
 
-    private static boolean handleTopBarKey(int code, KeyEvent ev, View sibling,
-                                           FrameLayout heroSlider, boolean isHamburger) {
+    private static boolean handleTopBarNodeKey(int code, KeyEvent ev, View leftView,
+                                               View rightView, FrameLayout heroSlider) {
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
-        int siblingKey = isHamburger ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
-        if (code == siblingKey) return sibling.requestFocus();
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) return leftView == null || leftView.requestFocus();
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) return rightView == null || rightView.requestFocus();
         if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
             HeroSliderBuilder.requestInitialFocus(heroSlider);
             return true;
         }
-        int blockKey = isHamburger ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
-        return code == blockKey || code == KeyEvent.KEYCODE_DPAD_UP;
+        return code == KeyEvent.KEYCODE_DPAD_UP;
     }
 
     private static int dp(Context ctx, float v) {

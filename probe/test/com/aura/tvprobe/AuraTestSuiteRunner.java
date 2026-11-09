@@ -23,6 +23,7 @@ public final class AuraTestSuiteRunner {
         LlmRankingBenchmarkTest.class,
         // Integration Tests
         RecommendationPipelineIntegrationTest.class,
+        VoiceAndContinueWatchingIntegrationTest.class,
         LiveJustWatchGraphIntegrationTest.class
     };
 

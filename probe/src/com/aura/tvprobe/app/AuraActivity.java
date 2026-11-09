@@ -120,6 +120,7 @@ public class AuraActivity extends Activity implements
         startHomeSearchHintAnimation();
         resetIdleTimer();
         refreshAllData(false);
+        handleIncomingSearchIntent(getIntent());
     }
 
     private void registerHomeKeyReceiverSafe() {
@@ -183,7 +184,30 @@ public class AuraActivity extends Activity implements
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (handleIncomingSearchIntent(intent)) return;
         resetToHomeTop();
+    }
+
+    private boolean handleIncomingSearchIntent(Intent intent) {
+        String q = VoiceSearchHelper.extractAssistantSearchQuery(intent);
+        if (q.isEmpty()) return false;
+        ui.post(() -> runSearchQuery(q));
+        return true;
+    }
+
+    @Override
+    public boolean onSearchRequested() {
+        startVoiceSearch();
+        return true;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        String spoken = VoiceSearchHelper.extractActivityResultQuery(requestCode, resultCode, data);
+        if (!spoken.isEmpty()) {
+            ui.post(() -> runSearchQuery(spoken));
+        }
     }
 
     private void resetToHomeTop() {
@@ -255,6 +279,10 @@ public class AuraActivity extends Activity implements
                 HeroSliderBuilder.startAutoRotate(heroSlider, ui);
                 HeroSliderBuilder.requestInitialFocus(heroSlider);
             }
+            return true;
+        }
+        if (event.getAction() == KeyEvent.ACTION_DOWN && VoiceSearchHelper.isRemoteVoiceOrSearchKey(event.getKeyCode())) {
+            startVoiceSearch();
             return true;
         }
         return super.dispatchKeyEvent(event);
@@ -339,11 +367,23 @@ public class AuraActivity extends Activity implements
         TopBarBuilder.TopBarViews topBar = TopBarBuilder.build(
             this, navPanel, heroSlider,
             SearchOverlay.getHintsForProfile(db, activeProfile),
-            this::openAgenticSearchStudio);
+            this::openAgenticSearchStudio,
+            this::startVoiceSearch);
         searchBox = topBar.searchBox;
         searchLabel = topBar.searchLabel;
         profileClockLabel = topBar.clockLabel;
         return topBar.bar;
+    }
+
+    private void startVoiceSearch() {
+        if (!VoiceSearchHelper.startVoiceRecognition(this)) {
+            openAgenticSearchStudio();
+        }
+    }
+
+    @Override
+    public void onVoiceSearchClicked() {
+        startVoiceSearch();
     }
 
     private TextView buildStatusBannerView() {
