@@ -138,50 +138,8 @@ public class VoiceConcierge {
         if (progress != null) progress.onStep("Planning dynamic JustWatch GraphQL filters for \"" + userText + "\"\u2026");
         List<String> scatterGathered = ai.executeScatterGatherForSearch(profileId, contextualQuery, minModernYear);
         if (scatterGathered.size() >= 4) return scatterGathered;
-        String simSeed = resolveActiveSimilaritySeed(userText, contextualQuery);
-        if (!simSeed.isEmpty()) {
-            List<String> simPool = buildSimilarityCandidatePool(simSeed, userText, progress);
-            if (simPool.size() >= 3) return simPool;
-        }
         JSONObject searchPlan = ai.buildFastSeedPlan(profileId, contextualQuery);
         return ai.executeMultiHopTraversal(profileId, searchPlan, minModernYear);
-    }
-
-    private String resolveActiveSimilaritySeed(String userText, String contextualQuery) {
-        String direct = AiRecommender.extractSimilaritySeed(userText);
-        return !direct.isEmpty() ? direct : AiRecommender.extractSimilaritySeed(contextualQuery);
-    }
-
-    private List<String> buildSimilarityCandidatePool(
-        String simSeed, String userText, AiRecommender.AgentProgressListener progress
-    ) {
-        if (progress != null) progress.onStep("Traversing co-watch & franchise graph for \"" + simSeed + "\"\u2026");
-        List<String> summaries = new ArrayList<>();
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        appendSimilarityCandidates(JustWatchGraph.fetchCollaborativeSimilar(simSeed, 2008), userText, seen, summaries);
-        appendSimilarityCandidates(JustWatchGraph.fetchDeterministicSearchCandidates(simSeed, 2008), userText, seen, summaries);
-        return summaries;
-    }
-
-    private void appendSimilarityCandidates(
-        JSONArray arr, String userText, java.util.Set<String> seen, List<String> summaries
-    ) {
-        if (arr == null) return;
-        for (int i = 0; i < arr.length(); i++) {
-            JSONObject o = arr.optJSONObject(i);
-            if (o != null) tryAddSimilaritySummary(o, userText, seen, summaries);
-        }
-    }
-
-    private void tryAddSimilaritySummary(
-        JSONObject o, String userText, java.util.Set<String> seen, List<String> summaries
-    ) {
-        String t = o.optString("title", "").trim();
-        String norm = AuraDb.normalizeTitleKey(t);
-        if (t.isEmpty() || db.isTitleWatched(t) || !matchesFormatConstraint(o.optString("type", ""), userText)) return;
-        if (!seen.add(norm)) return;
-        db.saveCachedGti("jw_imdb_v6:" + t.toLowerCase(), o.toString());
-        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("rating") + ", " + o.optString("app") + ")");
     }
 
     private void persistTurnResult(
@@ -269,61 +227,13 @@ public class VoiceConcierge {
     }
 
     private JSONArray buildDeterministicSotaSearch(String profileId, String userText, String contextualQuery, int minModernYear) {
-        JSONArray directSim = tryDirectSimilarTraversal(profileId, userText);
-        if (directSim != null) return directSim;
-        List<JSONObject> pool = retrieveDeterministicPool(userText, contextualQuery, minModernYear);
-        pool.sort((a, b) -> Double.compare(JustWatchGraph.computeBayesianImdb(b), JustWatchGraph.computeBayesianImdb(a)));
-        JSONArray out = new JSONArray();
-        for (int i = 0; i < Math.min(16, pool.size()); i++) out.put(pool.get(i));
-        return out.length() > 0 ? out : db.getProfileRecommendations(profileId);
-    }
-
-    private JSONArray tryDirectSimilarTraversal(String profileId, String userText) {
         String seed = AiRecommender.extractSimilaritySeed(userText);
-        if (seed.isEmpty()) return null;
-        JSONArray sim = ai.traverseSimilarToWatched(profileId, seed, null);
-        return (sim != null && sim.length() > 0) ? sim : null;
-    }
-
-    private List<JSONObject> retrieveDeterministicPool(String userText, String contextualQuery, int minModernYear) {
-        String low = userText == null ? "" : userText.toLowerCase();
-        boolean allowAnime = low.contains("anime") || low.contains("animation");
-        List<String> genres = extractConversationalGenres(low);
-        List<JSONObject> pool = new ArrayList<>();
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        if (!genres.isEmpty()) {
-            int startYr = Math.max(minModernYear, JustWatchGraph.getCurrentYear() - 3);
-            addUniqueCandidatesToPool(JustWatchGraph.fetchStructuredGenreCandidates(genres, null, startYr, JustWatchGraph.getCurrentYear()), seen, allowAnime, pool);
+        if (!seed.isEmpty()) {
+            JSONArray sim = ai.traverseSimilarToWatched(profileId, seed, null);
+            if (sim != null && sim.length() > 0) return sim;
         }
-        addUniqueCandidatesToPool(JustWatchGraph.fetchDeterministicSearchCandidates(contextualQuery, minModernYear), seen, allowAnime, pool);
-        return pool;
-    }
-
-    private List<String> extractConversationalGenres(String low) {
-        List<String> genres = new ArrayList<>();
-        if (low.contains("sci-fi") || low.contains("scifi") || low.contains("science")) genres.add("scf");
-        if (low.contains("thriller") || low.contains("suspense") || low.contains("mystery") || low.contains("dark")) genres.add("trl");
-        if (low.contains("crime") || low.contains("detective")) genres.add("crm");
-        if (low.contains("action") || low.contains("fast")) genres.add("act");
-        if (low.contains("horror") || low.contains("scary")) genres.add("hrr");
-        appendSecondaryConversationalGenres(low, genres);
-        return genres;
-    }
-
-    private void appendSecondaryConversationalGenres(String low, List<String> genres) {
-        if (low.contains("comedy") || low.contains("funny")) genres.add("cmy");
-        if (low.contains("romance") || low.contains("romantic")) genres.add("rma");
-        if (low.contains("drama")) genres.add("drm");
-        if (low.contains("anime") || low.contains("animation")) genres.add("ani");
-    }
-
-    private void addUniqueCandidatesToPool(JSONArray arr, java.util.Set<String> seen, boolean allowAnime, List<JSONObject> pool) {
-        if (arr == null) return;
-        for (int i = 0; i < arr.length(); i++) {
-            JSONObject o = arr.optJSONObject(i);
-            if (o == null || CandidateValidator.isUnwantedAnimation(o.optString("genre_codes", ""), allowAnime)) continue;
-            if (seen.add(AuraDb.normalizeTitleKey(o.optString("title", "")))) pool.add(o);
-        }
+        JSONObject plan = ai.buildFastSeedPlan(profileId, contextualQuery);
+        return ai.buildSotaRecommendations(profileId, plan, minModernYear, JustWatchGraph.getCurrentYear());
     }
 
     public static JSONArray applyConversationalConstraints(JSONArray items, String userText, List<String> activeFilters) {

@@ -15,7 +15,7 @@ import java.util.Map;
  */
 public final class ImpressionTracker {
 
-    private static final long IMPRESSION_TTL_SEC = 48L * 3600L; // 48-hour recycle TTL
+    private static final long IMPRESSION_TTL_SEC = 72L * 3600L; // 72-hour (3-day) recycle TTL
     private static final int COOLDOWN_EPOCHS = 3; // Must differ from last 3 batches
 
     public static final class ImpressionRecord {
@@ -98,6 +98,15 @@ public final class ImpressionTracker {
         if (history == null || !history.containsKey(titleKey)) return false;
         ImpressionRecord rec = history.get(titleKey);
         return (currentEpoch - rec.lastEpoch) < COOLDOWN_EPOCHS;
+    }
+
+    public static List<String> getRecentCooldownKeys(AuraDb auraDb, int currentEpoch) {
+        Map<String, ImpressionRecord> active = loadActiveImpressions(auraDb);
+        List<String> keys = new java.util.ArrayList<>();
+        for (String k : active.keySet()) {
+            if (isRecentlyShown(k, currentEpoch, active) && keys.size() < 60) keys.add(k);
+        }
+        return keys;
     }
 
     public static void recordSlateImpressions(AuraDb auraDb, int epoch, List<JSONObject> slate) {

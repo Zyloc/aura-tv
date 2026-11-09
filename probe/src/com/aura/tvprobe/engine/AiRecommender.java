@@ -68,12 +68,11 @@ public class AiRecommender {
     private JSONArray executeRefreshPipeline(String profileId, JSONArray history, AgentProgressListener progress) {
         int currentYear = JustWatchGraph.getCurrentYear();
         int minModernYear = JustWatchGraph.getDefaultMinModernYear();
-        // Stage 1: Build Temporal Taste Vector & Anchor Plan
+        int epoch = ImpressionTracker.advanceEpoch(db, profileId);
         if (progress != null) progress.onStep("Modeling temporal taste vector from your recent watch history\u2026");
         JSONObject seedPlan = resolveSeedPlan(profileId, collectWatchedTitles(history), minModernYear, currentYear);
-        // Stage 2: 4-Channel Parallel Retrieval + Stage 3 Hybrid Scoring + Stage 4 MMR Diversity
         if (progress != null) progress.onStep("Retrieving & scoring verified candidates across your streaming apps\u2026");
-        return buildSotaRecommendations(profileId, seedPlan, minModernYear, currentYear);
+        return buildSotaRecommendationsForEpoch(profileId, seedPlan, minModernYear, currentYear, epoch);
     }
 
     private JSONObject resolveSeedPlan(String profileId, List<String> watchedList, int minModernYear, int currentYear) {
@@ -93,13 +92,14 @@ public class AiRecommender {
         return seedCatalog;
     }
 
-    /**
-     * Executes Stages 1–4 of the SOTA Recommendation Pipeline via modular UserTasteProfile,
-     * CandidateValidator, HybridScorer, SlateAllocator, and ImpressionTracker.
-     */
     public JSONArray buildSotaRecommendations(String profileId, JSONObject seedPlan, int minModernYear, int currentYear) {
+        int epoch = ImpressionTracker.advanceEpoch(db, profileId);
+        return buildSotaRecommendationsForEpoch(profileId, seedPlan, minModernYear, currentYear, epoch);
+    }
+
+    private JSONArray buildSotaRecommendationsForEpoch(
+            String profileId, JSONObject seedPlan, int minModernYear, int currentYear, int epoch) {
         final List<JSONObject> pool = Collections.synchronizedList(new ArrayList<>());
-        final int epoch = ImpressionTracker.advanceEpoch(db, profileId);
         final UserTasteProfile taste = new UserTasteProfile(db, profileId, epoch);
         final Set<String> seenKeys = initSeenTitleKeys(profileId, taste);
         runParallelCandidateRetrieval(taste, seedPlan, minModernYear, currentYear, seenKeys, pool);
@@ -493,16 +493,30 @@ public class AiRecommender {
         String profileId, String userQuery, List<String> watchedList, int minModernYear, int currentYear
     ) {
         boolean isSearch = userQuery != null && !userQuery.trim().isEmpty();
+        int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
+        List<String> recentSuggested = ImpressionTracker.getRecentCooldownKeys(db, epoch);
         String personalGuide = db.getProfileTaste(profileId);
         String richHistStr = isSearch ? "[] (Direct Search Mode)" : buildRichWatchedContext(profileId).toString();
-        return "You are Aura's Dynamic JustWatch GraphQL Query & Filter Planner Agent. Current Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
+        return "You are Aura's Unified Dynamic JustWatch GraphQL Query & Filter Planner Agent. Current Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
             "Profile: '" + db.getProfileLabel(profileId) + "'. Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
             "User Ratings Feedback: " + (isSearch ? "(None)" : db.getRatingFeedbackSummary()) + "\n" +
             "Active Filters: " + db.getActiveFilters(profileId).toString() + "\n" +
+            "Refresh Epoch #" + epoch + " Freshness Angle: " + getEpochExplorationAngle(epoch) + "\n" +
             "User's Watched & In-Progress Shows (with Title, Type, Genres, Country, and Plot Synopsis): " + richHistStr + "\n" +
-            "Already Watched Exclusion List: " + watchedList.toString() + "\n" +
-            "User Search Query (if any): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
+            "Already Watched & Rated Exclusion List (NEVER suggest): " + watchedList.toString() + "\n" +
+            "Recently Suggested in Last 3 Days / Last 3 Refreshes (AVOID repeating; explore fresh peer titles): " + recentSuggested.toString() + "\n" +
+            "User Search Query (empty = Refresh Home Picks): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
             buildJustWatchSchemaPromptSection(minModernYear, currentYear);
+    }
+
+    private String getEpochExplorationAngle(int epoch) {
+        String[] angles = {
+            "Explore fresh high-concept mysteries, espionage thrillers, and international breakout series.",
+            "Explore mind-bending sci-fi, speculative fantasy, and dark psychological investigations.",
+            "Explore pulse-pounding survival dramas, crime procedurals, and sharp character-driven dramas.",
+            "Explore critically acclaimed recent releases, supernatural thrillers, and witty high-stakes series."
+        };
+        return angles[Math.abs(epoch) % angles.length];
     }
 
     private String buildJustWatchSchemaPromptSection(int minModernYear, int currentYear) {
@@ -609,13 +623,27 @@ public class AiRecommender {
     }
 
     private List<JSONObject> filterAndRerankPoolWithLlm(String profileId, List<JSONObject> pool, int epoch) {
-        pool.sort((a, b) -> Double.compare(b.optDouble("sota_score", 0.0), a.optDouble("sota_score", 0.0)));
-        List<JSONObject> baseSlate = SlateAllocator.allocateBalancedSlate(pool, epoch, ImpressionTracker.loadActiveImpressions(db));
+        Map<String, ImpressionTracker.ImpressionRecord> impressions = ImpressionTracker.loadActiveImpressions(db);
+        List<JSONObject> baseSlate = SlateAllocator.allocateBalancedSlate(pool, epoch, impressions);
         if (getApiKey().isEmpty() || pool.size() < 6) return baseSlate;
-        String prompt = buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(pool, 40));
+        List<JSONObject> freshPool = selectFreshPoolForLlm(pool, epoch, impressions, 38);
+        String prompt = buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(freshPool, 38), epoch);
         String raw = callGeminiJson(prompt);
-        List<JSONObject> llmFiltered = applyLlmFilteredSlate(pool, raw);
+        List<JSONObject> llmFiltered = applyLlmFilteredSlate(freshPool, raw);
         return llmFiltered.size() >= 8 ? llmFiltered : baseSlate;
+    }
+
+    private List<JSONObject> selectFreshPoolForLlm(
+            List<JSONObject> pool, int epoch, Map<String, ImpressionTracker.ImpressionRecord> impressions, int limit) {
+        List<JSONObject> fresh = new ArrayList<>();
+        List<JSONObject> recycled = new ArrayList<>();
+        for (JSONObject item : pool) {
+            String key = AuraDb.normalizeTitleKey(item.optString("title", ""));
+            if (ImpressionTracker.isRecentlyShown(key, epoch, impressions)) recycled.add(item);
+            else fresh.add(item);
+        }
+        for (int i = 0; i < recycled.size() && fresh.size() < 20; i++) fresh.add(recycled.get(i));
+        return fresh.size() > limit ? fresh.subList(0, limit) : fresh;
     }
 
     private List<String> collectCandidateSummariesForLlm(List<JSONObject> pool, int limit) {
@@ -697,23 +725,25 @@ public class AiRecommender {
         }
     }
 
-    private String buildAgentRankingPrompt(String profileId, List<String> verifiedCandidates) {
+    private String buildAgentRankingPrompt(String profileId, List<String> verifiedCandidates, int epoch) {
         String profileName = db.getProfileLabel(profileId);
         JSONArray richHistory = buildRichWatchedContext(profileId);
-        String header = buildRankingPromptHeader(profileId, profileName, richHistory);
+        String header = buildRankingPromptHeader(profileId, profileName, richHistory, epoch);
         return header + buildRankingPromptBody(profileName, verifiedCandidates);
     }
 
-    private String buildRankingPromptHeader(String profileId, String profileName, JSONArray richHistory) {
+    private String buildRankingPromptHeader(String profileId, String profileName, JSONArray richHistory, int epoch) {
         String personalGuide = db.getProfileTaste(profileId);
         String ratingsFeedback = db.getRatingFeedbackSummary();
         List<String> activeFilters = db.getActiveFilters(profileId);
+        List<String> recentSuggested = ImpressionTracker.getRecentCooldownKeys(db, epoch);
         return "You are Aura's Stage-3 Post-Filter & Reranking Agent for Android TV in India.\n" +
-            "Current Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'.\n" +
+            "Current Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'. Refresh Epoch #" + epoch + " (" + getEpochExplorationAngle(epoch) + ")\n" +
             "1. PERSONAL GUIDE AI: " + (personalGuide.isEmpty() ? "(Use Default Guide AI and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
             "2. DEFAULT GUIDE AI: \"" + db.getDefaultTasteGuide() + "\"\n3. USER RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
             "4. ACTIVE FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
-            "5. USER'S WATCHED SHOWS (WITH PLOT SYNOPSIS, GENRES, TYPE, COUNTRY): " + richHistory.toString() + "\n";
+            "5. RECENTLY SUGGESTED IN LAST 3 DAYS (DO NOT REPEAT THESE): " + recentSuggested.toString() + "\n" +
+            "6. USER'S WATCHED SHOWS (WITH PLOT SYNOPSIS, GENRES, TYPE, COUNTRY): " + richHistory.toString() + "\n";
     }
 
     private String buildRankingPromptBody(String profileName, List<String> verifiedCandidates) {
@@ -891,7 +921,7 @@ public class AiRecommender {
     private JSONObject buildGeminiRequestBody(String prompt) throws Exception {
         JSONArray parts = new JSONArray().put(new JSONObject().put("text", prompt));
         JSONArray contents = new JSONArray().put(new JSONObject().put("parts", parts));
-        JSONObject genCfg = new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.4);
+        JSONObject genCfg = new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.65);
         return new JSONObject().put("contents", contents).put("generationConfig", genCfg);
     }
 
