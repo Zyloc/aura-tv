@@ -89,6 +89,18 @@ public class AndroidManifestContractTest {
         assertTrue("BootReceiver must handle MY_PACKAGE_REPLACED", xml.contains("android.intent.action.MY_PACKAGE_REPLACED"));
     }
 
+    @Test
+    public void testBackgroundRecommendationRefreshRendersWhenStale() throws Exception {
+        File actFile = resolveFile(
+            "probe/src/com/aura/tvprobe/app/AuraActivity.java",
+            "src/com/aura/tvprobe/app/AuraActivity.java");
+        String src = new String(Files.readAllBytes(actFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue("applyBackgroundRefreshResult must render when cache was stale (!hadFresh)",
+            src.contains("(forceRefresh || !hadFresh)"));
+        assertFalse("applyBackgroundRefreshResult must not block stale refresh with !hadUsable",
+            src.contains("(forceRefresh || !hadUsable)"));
+    }
+
     private static File resolveFile(String rootRelative, String probeRelative) {
         File f1 = new File(rootRelative);
         return f1.exists() ? f1 : new File(probeRelative);

@@ -275,6 +275,7 @@ public final class NavPanelBuilder {
         addNavItem(wrapper, content, ctx, "\u2726", "Guide AI Taste", false, v -> closeAndRun(wrapper, ctx, false, () -> cb.onNavigate("guide_ai")));
         addNavItem(wrapper, content, ctx, "\u2699", "Aura Settings", false, v -> closeAndRun(wrapper, ctx, false, cb::onSettingsOpen));
         addNavItem(wrapper, content, ctx, "\u229E", "Phone Remote (QR)", false, v -> closeAndRun(wrapper, ctx, false, cb::onQrOpen));
+        addNavItem(wrapper, content, ctx, "\u21BB", "Refresh Picks", false, v -> closeAndRun(wrapper, ctx, true, () -> cb.onNavigate("refresh_recos")));
     }
 
     private static void addInputsSection(FrameLayout wrapper, LinearLayout content,

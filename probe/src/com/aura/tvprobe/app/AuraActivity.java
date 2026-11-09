@@ -132,6 +132,7 @@ public class AuraActivity extends Activity implements
         startHomeSearchHintAnimation();
         updateNavMetadata();
         resetIdleTimer();
+        if (initialFocusSet && !db.isRecoCacheFresh(activeProfile)) refreshAllData(false);
     }
 
     @Override
@@ -471,25 +472,23 @@ public class AuraActivity extends Activity implements
     // ── Data Loading & Rendering ─────────────────────────────────────────
 
     private void refreshAllData(boolean forceRefresh) {
-        db.purgePromotionalNoiseFromHistory();
-        db.purgeUnreleasedFromRecos();
         updateNavMetadata();
         populateTraversalChips();
+        if (forceRefresh) setBannerText("Refreshing personalized recommendations for you\u2026", true);
         JSONArray cached = db.getProfileRecommendations(activeProfile);
-        boolean hadUsable = cached.length() >= 8;
         boolean hadFresh = cached.length() >= 12 && db.isRecoCacheFresh(activeProfile);
         renderHomeContent(cached.length() > 0 ? cached : ai.getBuiltInSotaSeedCatalog(activeProfile));
-        submitBackgroundRefresh(forceRefresh, hadUsable, hadFresh);
+        submitBackgroundRefresh(forceRefresh, hadFresh);
     }
 
-    private void submitBackgroundRefresh(boolean forceRefresh, boolean hadUsable, boolean hadFresh) {
+    private void submitBackgroundRefresh(boolean forceRefresh, boolean hadFresh) {
         bgPool.submit(() -> {
             JSONObject np = syncNowPlayingSafe();
             if (!forceRefresh && hadFresh) return;
             JSONArray history = db.listHistory(activeProfile);
             if (np == null && history.length() > 0) np = history.optJSONObject(0);
             JSONArray fresh = ai.getOrRefreshForProfile(activeProfile, np, history, forceRefresh, null);
-            ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, hadUsable));
+            ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, hadFresh));
         });
     }
 
@@ -497,9 +496,9 @@ public class AuraActivity extends Activity implements
         try { return inspector.syncProvidersAndNowPlaying(activeProfile); } catch (Exception e) { return null; }
     }
 
-    private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh, boolean hadUsable) {
+    private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh, boolean hadFresh) {
         setBannerText("", false);
-        if (fresh != null && fresh.length() > 0 && (forceRefresh || !hadUsable)) {
+        if (fresh != null && fresh.length() > 0 && (forceRefresh || !hadFresh)) {
             renderHomeContent(fresh);
         }
     }
@@ -644,6 +643,7 @@ public class AuraActivity extends Activity implements
     @Override
     public void onNavigate(String destination) {
         if ("home".equals(destination)) refreshAllData(false);
+        else if ("refresh_recos".equals(destination)) refreshAllData(true);
         else if ("guide_ai".equals(destination)) showGuideAiDialog();
         else if ("watched".equals(destination)) showWatchHistoryDialog();
         else if (destination.startsWith("sys_")) openSystemSetting(destination);
@@ -744,7 +744,7 @@ public class AuraActivity extends Activity implements
     public void onWatchedClicked(JSONObject item) {
         db.markTitleWatched(item, true);
         Toast.makeText(this, "Marked watched: " + item.optString("title"), Toast.LENGTH_SHORT).show();
-        refreshAllData(false);
+        refreshAllData(true);
     }
 
     @Override
@@ -979,7 +979,7 @@ public class AuraActivity extends Activity implements
         setBackgroundFocusBlocked(false);
         if (watchedChangedWhileInDetail) {
             watchedChangedWhileInDetail = false;
-            refreshAllData(false);
+            refreshAllData(true);
             return;
         }
         restoreFocusAfterOverlay();
@@ -1033,6 +1033,7 @@ public class AuraActivity extends Activity implements
     public void onRated(JSONObject item, int score) {
         String title = item.optString("title");
         db.rateTitle(item, score);
+        watchedChangedWhileInDetail = true;
         Toast.makeText(this, "Rated " + score + "/10", Toast.LENGTH_SHORT).show();
         boolean watched = db.isTitleWatched(title);
         DetailOverlay.updateUserFeedback(detailOverlay, item, watched, score, this, this);

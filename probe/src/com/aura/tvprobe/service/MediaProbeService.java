@@ -63,6 +63,10 @@ public class MediaProbeService extends NotificationListenerService {
 
     private void runBackgroundTick() {
         inspector.recordActivePlaybackOnly();
+        String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        if (!db.isRecoCacheFresh(prof)) {
+            inspector.syncAndBuildState(false);
+        }
     }
 
     private void startHttpServer() {
