@@ -391,7 +391,7 @@ public final class SearchOverlay {
         LinearLayout.LayoutParams abLp = GlassTheme.wrapParams();
         abLp.rightMargin = dp(ctx, 10);
         inputBox.addView(aiBadge, abLp);
-        inputBox.addView(et, new LinearLayout.LayoutParams(dp(ctx, 340), ViewGroup.LayoutParams.WRAP_CONTENT));
+        inputBox.addView(et, new LinearLayout.LayoutParams(dp(ctx, 288), ViewGroup.LayoutParams.WRAP_CONTENT));
         inputBox.addView(createInlineSearchSpinner(ctx));
         inputBox.addView(icon, new LinearLayout.LayoutParams(dp(ctx, 26), dp(ctx, 26)));
     }

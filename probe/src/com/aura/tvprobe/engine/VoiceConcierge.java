@@ -229,24 +229,27 @@ public class VoiceConcierge {
     }
 
     private JSONArray tryDirectSimilarTraversal(String profileId, String userText) {
-        String low = userText == null ? "" : userText.toLowerCase();
-        if (!low.startsWith("more like ") && !low.startsWith("similar to ")) return null;
-        String seed = userText.replaceFirst("(?i)^(more like|similar to)\\s+", "").trim();
+        if (userText == null) return null;
+        String low = userText.toLowerCase();
+        int likeIdx = low.indexOf(" like ");
+        String seed = likeIdx >= 0 ? userText.substring(likeIdx + 6).trim()
+            : (low.startsWith("similar to ") ? userText.substring(11).trim() : "");
         if (seed.isEmpty()) return null;
         JSONArray sim = ai.traverseSimilarToWatched(profileId, seed, null);
         return (sim != null && sim.length() > 0) ? sim : null;
     }
 
     private List<JSONObject> retrieveDeterministicPool(String userText, String contextualQuery, int minModernYear) {
-        List<String> genres = extractConversationalGenres(userText == null ? "" : userText.toLowerCase());
+        String low = userText == null ? "" : userText.toLowerCase();
+        boolean allowAnime = low.contains("anime") || low.contains("animation");
+        List<String> genres = extractConversationalGenres(low);
         List<JSONObject> pool = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
         if (!genres.isEmpty()) {
             int startYr = Math.max(minModernYear, JustWatchGraph.getCurrentYear() - 3);
-            JSONArray structured = JustWatchGraph.fetchStructuredGenreCandidates(genres, null, startYr, JustWatchGraph.getCurrentYear());
-            addUniqueCandidatesToPool(structured, seen, pool);
+            addUniqueCandidatesToPool(JustWatchGraph.fetchStructuredGenreCandidates(genres, null, startYr, JustWatchGraph.getCurrentYear()), seen, allowAnime, pool);
         }
-        addUniqueCandidatesToPool(JustWatchGraph.fetchDeterministicSearchCandidates(contextualQuery, minModernYear), seen, pool);
+        addUniqueCandidatesToPool(JustWatchGraph.fetchDeterministicSearchCandidates(contextualQuery, minModernYear), seen, allowAnime, pool);
         return pool;
     }
 
@@ -268,11 +271,12 @@ public class VoiceConcierge {
         if (low.contains("anime") || low.contains("animation")) genres.add("ani");
     }
 
-    private void addUniqueCandidatesToPool(JSONArray arr, java.util.Set<String> seen, List<JSONObject> pool) {
+    private void addUniqueCandidatesToPool(JSONArray arr, java.util.Set<String> seen, boolean allowAnime, List<JSONObject> pool) {
         if (arr == null) return;
         for (int i = 0; i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
-            if (o != null && seen.add(AuraDb.normalizeTitleKey(o.optString("title", "")))) pool.add(o);
+            if (o == null || CandidateValidator.isUnwantedAnimation(o.optString("genre_codes", ""), allowAnime)) continue;
+            if (seen.add(AuraDb.normalizeTitleKey(o.optString("title", "")))) pool.add(o);
         }
     }
 
