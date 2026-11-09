@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
  */
 public class ImageLoader {
     private static volatile String sQualityMode = "ultra"; // "ultra" | "balanced" | "saver"
+    public static final int TAG_CACHE_KEY = 0x7F0B_0010;
 
     private static final int ULTRA_RAIL_W = 280;
     private static final int ULTRA_RAIL_H = 396;
@@ -105,7 +106,7 @@ public class ImageLoader {
     public static void clear(final ImageView iv) {
         if (iv == null) return;
         iv.animate().cancel();
-        iv.setTag(null);
+        iv.setTag(TAG_CACHE_KEY, null);
         iv.setImageBitmap(null);
         iv.setImageDrawable(null);
         iv.setAlpha(1f);
@@ -131,7 +132,7 @@ public class ImageLoader {
     }
 
     private static void resetImageView(ImageView iv) {
-        iv.setTag(null);
+        iv.setTag(TAG_CACHE_KEY, null);
         iv.setImageBitmap(null);
     }
 
@@ -139,7 +140,7 @@ public class ImageLoader {
         String heroKey = "hero:" + sQualityMode + ":" + hiResUrl;
         Bitmap cachedHero = MEM_CACHE.get(heroKey);
         if (cachedHero != null && !cachedHero.isRecycled()) {
-            iv.setTag(heroKey);
+            iv.setTag(TAG_CACHE_KEY, heroKey);
             iv.setImageBitmap(cachedHero);
             return true;
         }
@@ -158,8 +159,8 @@ public class ImageLoader {
             return;
         }
         final String cacheKey = prefix + primaryUrl;
-        if (cacheKey.equals(iv.getTag()) && iv.getDrawable() != null && !prefix.startsWith("hero:")) return;
-        iv.setTag(cacheKey);
+        if (cacheKey.equals(iv.getTag(TAG_CACHE_KEY)) && iv.getDrawable() != null && !prefix.startsWith("hero:")) return;
+        iv.setTag(TAG_CACHE_KEY, cacheKey);
         if (applyMemCacheHit(iv, cacheKey, prefix)) return;
         if (!prefix.startsWith("hero:")) iv.setImageBitmap(null);
         POOL.submit(() -> executeAsyncLoad(ctx, primaryUrl, fallbackUrl, iv, reqW, reqH, prefix, cacheKey));
@@ -178,7 +179,7 @@ public class ImageLoader {
 
     private static void executeAsyncLoad(Context ctx, String primaryUrl, String fallbackUrl,
                                          ImageView iv, int reqW, int reqH, String prefix, String cacheKey) {
-        if (!cacheKey.equals(iv.getTag())) return;
+        if (!cacheKey.equals(iv.getTag(TAG_CACHE_KEY))) return;
         Bitmap bmp = loadWithFallback(ctx, primaryUrl, fallbackUrl, reqW, reqH);
         if (bmp == null) return;
         try { bmp.prepareToDraw(); } catch (Throwable ignored) {}
@@ -195,7 +196,7 @@ public class ImageLoader {
     }
 
     private static void deliverLoadedBitmap(ImageView iv, String cacheKey, String prefix, Bitmap bmp) {
-        if (!cacheKey.equals(iv.getTag())) return;
+        if (!cacheKey.equals(iv.getTag(TAG_CACHE_KEY))) return;
         if (!prefix.startsWith("hero:")) {
             iv.setAlpha(0.25f);
             iv.setImageBitmap(bmp);

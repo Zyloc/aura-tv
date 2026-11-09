@@ -36,6 +36,8 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.gms WIFI_SCAN ignore || true
 "$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.katniss WIFI_SCAN ignore || true
 "$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.apps.nbu.smartconnect.tv WIFI_SCAN ignore || true
+"$ADB" -s "$TV_IP:5555" shell cmd notification disallow_listener com.google.android.tvrecommendations/com.google.android.tvrecommendations.NotificationsService || true
+"$ADB" -s "$TV_IP:5555" shell pm disable-user --user 0 com.google.android.tvrecommendations || true
 "$ADB" -s "$TV_IP:5555" shell cmd package set-home-activity com.aura.tvprobe/.AuraActivity || true
 
 FOREGROUND="$("$ADB" -s "$TV_IP:5555" shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true)"

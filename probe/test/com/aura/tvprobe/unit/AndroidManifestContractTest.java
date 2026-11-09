@@ -65,6 +65,18 @@ public class AndroidManifestContractTest {
             src.contains("protected void onNewIntent(Intent intent)") && src.contains("resetToHomeTop()"));
     }
 
+    @Test
+    public void testImageLoaderUsesKeyedTagSoDetailOverlayPosterTagIsPreserved() throws Exception {
+        File loaderFile = resolveFile(
+            "probe/src/com/aura/tvprobe/ui/ImageLoader.java",
+            "src/com/aura/tvprobe/ui/ImageLoader.java");
+        String src = new String(Files.readAllBytes(loaderFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue("ImageLoader must define keyed TAG_CACHE_KEY with 0x7F prefix",
+            src.contains("TAG_CACHE_KEY = 0x7F0B_0010"));
+        assertFalse("ImageLoader must not clobber unkeyed View.setTag(Object) used by DetailOverlay",
+            src.contains("iv.setTag(cacheKey)") || src.contains("iv.setTag(null)"));
+    }
+
     private static File resolveFile(String rootRelative, String probeRelative) {
         File f1 = new File(rootRelative);
         return f1.exists() ? f1 : new File(probeRelative);
