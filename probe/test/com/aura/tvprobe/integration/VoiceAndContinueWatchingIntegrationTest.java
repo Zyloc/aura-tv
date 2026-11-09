@@ -43,6 +43,22 @@ public class VoiceAndContinueWatchingIntegrationTest {
             "android.intent.action.MAIN", "Silo", null, null);
         assertEquals("Non-search actions must not trigger search handoff", "", ignoredMainIntent);
 
+        // 3b. Global Searchable ContentProvider (katniss physical remote mic button KEYCODE_ASSIST=219)
+        String providerQueryFromArgs = VoiceSearchHelper.extractProviderQuery(
+            null, new String[]{"  movies like Avenger  "});
+        assertEquals("movies like Avenger", providerQueryFromArgs);
+
+        AuraVoiceSearchProvider provider = new AuraVoiceSearchProvider();
+        assertTrue(provider.onCreate());
+        android.database.Cursor cursor = provider.query(
+            null, null, " ?", new String[]{"movies like Avenger"}, null);
+        assertNotNull("AuraVoiceSearchProvider must return a valid suggestions Cursor", cursor);
+        assertTrue("Suggestions cursor must include at least the direct Aura AI Agentic Search row", cursor.getCount() >= 1);
+        assertTrue(cursor.moveToFirst());
+        assertEquals("movies like Avenger", cursor.getString(1));
+        assertEquals("Aura AI Agentic Search", cursor.getString(2));
+        cursor.close();
+
         // 4. Feed extracted voice query into JustWatch Graph (with deterministic fallback if host clock is ahead of TLS cert)
         JSONArray liveHits = JustWatchGraph.fetchDeterministicSearchCandidates(spokenQuery, 2020);
         JSONObject topHit = liveHits.length() > 0 ? liveHits.optJSONObject(0) : new JSONObject()

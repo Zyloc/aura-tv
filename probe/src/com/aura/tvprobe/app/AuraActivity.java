@@ -60,6 +60,10 @@ public class AuraActivity extends Activity implements
     private static final long HOURLY_REFRESH_MS = 3_600_000L; // 1 hour auto-refresh interval
     private static final int TAG_GLOBAL_LOADER_TEXT = 0xAA_0101;
     private static final int TAG_GLOBAL_LOADER_SUB  = 0xAA_0102;
+    private static volatile AuraActivity sActiveInstance;
+    private static volatile long sLastActiveWallMs = 0L;
+    private static volatile String sLastGlobalVoiceQuery = "";
+    private static volatile long sLastGlobalVoiceMs = 0L;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService bgPool = Executors.newFixedThreadPool(
         Math.max(4, Runtime.getRuntime().availableProcessors() * 2));
@@ -111,6 +115,8 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sActiveInstance = this;
+        sLastActiveWallMs = System.currentTimeMillis();
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         initServices();
@@ -132,6 +138,8 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onResume() {
         super.onResume();
+        sActiveInstance = this;
+        sLastActiveWallMs = System.currentTimeMillis();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
         startHomeSearchHintAnimation();
@@ -246,6 +254,7 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onPause() {
         super.onPause();
+        sLastActiveWallMs = System.currentTimeMillis();
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         ui.removeCallbacks(homeSearchHintTask);
         ui.removeCallbacks(idleScreensaverTask);
@@ -260,8 +269,42 @@ public class AuraActivity extends Activity implements
 
     @Override
     protected void onDestroy() {
+        if (sActiveInstance == this) sActiveInstance = null;
         try { unregisterReceiver(homeKeyReceiver); } catch (Exception ignored) {}
         super.onDestroy();
+    }
+
+    public static void onGlobalVoiceSearchQuery(Context ctx, String rawQuery) {
+        String q = rawQuery != null ? rawQuery.trim() : "";
+        if (!shouldHandleGlobalVoiceQuery(q)) return;
+        AuraActivity inst = sActiveInstance;
+        if (inst == null) return;
+        inst.ui.post(() -> inst.runSearchQuery(q));
+        scheduleBringAuraToFront(inst.ui, ctx, q);
+    }
+
+    private static boolean shouldHandleGlobalVoiceQuery(String q) {
+        long now = System.currentTimeMillis();
+        if (q.length() < 2 || (now - sLastActiveWallMs) > 90_000L) return false;
+        if (q.equalsIgnoreCase(sLastGlobalVoiceQuery) && (now - sLastGlobalVoiceMs) < 3_500L) return false;
+        sLastGlobalVoiceQuery = q;
+        sLastGlobalVoiceMs = now;
+        return true;
+    }
+
+    private static void scheduleBringAuraToFront(Handler h, Context ctx, String q) {
+        bringAuraToFrontNow(ctx, q);
+        h.postDelayed(() -> bringAuraToFrontNow(ctx, q), 450L);
+        h.postDelayed(() -> bringAuraToFrontNow(ctx, q), 1150L);
+    }
+
+    private static void bringAuraToFrontNow(Context ctx, String q) {
+        try {
+            Intent i = new Intent(ctx, AuraActivity.class).setAction(Intent.ACTION_SEARCH);
+            i.putExtra(android.app.SearchManager.QUERY, q);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            ctx.startActivity(i);
+        } catch (Throwable ignored) {}
     }
 
     @Override
@@ -984,6 +1027,7 @@ public class AuraActivity extends Activity implements
     public void runSearchQuery(String query) {
         String q = query != null ? query.trim() : "";
         if (q.isEmpty()) return;
+        if (q.equalsIgnoreCase(lastSearchQuery) && SearchOverlay.isVisible(searchOverlay)) return;
         prepareUiForSearchQuery(q);
         submitSearchQueryTurn(q, System.currentTimeMillis());
     }
