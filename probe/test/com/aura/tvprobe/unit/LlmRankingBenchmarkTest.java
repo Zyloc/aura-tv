@@ -38,9 +38,12 @@ public class LlmRankingBenchmarkTest {
     public void testHourlyAutoRefreshContractInAuraActivityAndService() throws Exception {
         String actSrc = readFileText("probe/src/com/aura/tvprobe/app/AuraActivity.java", "src/com/aura/tvprobe/app/AuraActivity.java");
         String svcSrc = readFileText("probe/src/com/aura/tvprobe/service/MediaProbeService.java", "src/com/aura/tvprobe/service/MediaProbeService.java");
+        String aiSrc = readFileText("probe/src/com/aura/tvprobe/engine/AiRecommender.java", "src/com/aura/tvprobe/engine/AiRecommender.java");
         assertTrue("AuraActivity must define 1-hour HOURLY_REFRESH_MS = 3_600_000L", actSrc.contains("HOURLY_REFRESH_MS = 3_600_000L"));
         assertTrue("AuraActivity must schedule hourlyRecoRefreshTask", actSrc.contains("scheduleHourlyRecoRefresh()"));
         assertTrue("MediaProbeService must force refresh when 1h cache expires", svcSrc.contains("inspector.syncAndBuildState(true)"));
+        assertTrue("AiRecommender must use gemini-flash-lite-latest and gemini-flash-latest",
+            aiSrc.contains("\"gemini-flash-lite-latest\"") && aiSrc.contains("\"gemini-flash-latest\""));
     }
 
     private static UserTasteProfile buildBenchmarkProfile() {

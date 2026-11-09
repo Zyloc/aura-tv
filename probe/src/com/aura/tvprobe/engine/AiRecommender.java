@@ -38,8 +38,7 @@ public class AiRecommender {
 
     private static final String[] MODELS = {
         "gemini-flash-lite-latest",
-        "gemini-3.1-flash-lite-preview",
-        "gemini-3-flash-preview"
+        "gemini-flash-latest"
     };
     private final AuraDb db;
 
