@@ -94,6 +94,14 @@ public class AuraActivity extends Activity implements
     private int[] lastRailFocus;
     private int lastScrollY;
     private boolean watchedChangedWhileInDetail = false;
+    private final android.content.BroadcastReceiver homeKeyReceiver = new android.content.BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if ("homekey".equals(intent.getStringExtra("reason"))) {
+                ui.post(() -> resetToHomeTop());
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -103,9 +111,16 @@ public class AuraActivity extends Activity implements
         initServices();
         buildUi();
         setupGlobalFocusRouting();
+        registerHomeKeyReceiverSafe();
         startHomeSearchHintAnimation();
         resetIdleTimer();
         refreshAllData(false);
+    }
+
+    private void registerHomeKeyReceiverSafe() {
+        try {
+            registerReceiver(homeKeyReceiver, new android.content.IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -170,6 +185,12 @@ public class AuraActivity extends Activity implements
     protected void onStop() {
         super.onStop();
         ImageLoader.trimMemory();
+    }
+
+    @Override
+    protected void onDestroy() {
+        try { unregisterReceiver(homeKeyReceiver); } catch (Exception ignored) {}
+        super.onDestroy();
     }
 
     @Override

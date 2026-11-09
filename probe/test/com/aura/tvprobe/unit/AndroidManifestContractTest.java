@@ -53,6 +53,18 @@ public class AndroidManifestContractTest {
             src.contains("TAG_HINT_IDX  = 0x7F0B_000B"));
     }
 
+    @Test
+    public void testAuraActivityHandlesHardwareHomeKeyBroadcastAndNewIntent() throws Exception {
+        File actFile = resolveFile(
+            "probe/src/com/aura/tvprobe/app/AuraActivity.java",
+            "src/com/aura/tvprobe/app/AuraActivity.java");
+        String src = new String(Files.readAllBytes(actFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue("AuraActivity must listen for ACTION_CLOSE_SYSTEM_DIALOGS homekey",
+            src.contains("ACTION_CLOSE_SYSTEM_DIALOGS") && src.contains("\"homekey\""));
+        assertTrue("AuraActivity must override onNewIntent and call resetToHomeTop()",
+            src.contains("protected void onNewIntent(Intent intent)") && src.contains("resetToHomeTop()"));
+    }
+
     private static File resolveFile(String rootRelative, String probeRelative) {
         File f1 = new File(rootRelative);
         return f1.exists() ? f1 : new File(probeRelative);
