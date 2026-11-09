@@ -29,6 +29,7 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe GET_USAGE_STATS allow || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe SYSTEM_ALERT_WINDOW allow || true
 "$ADB" -s "$TV_IP:5555" shell settings put global wifi_score_params "rssi2=-90:-88:-75:-60,rssi5=-90:-88:-84:-72,pps=0:1:100,horizon=15,nud=8,expid=0" || true
+"$ADB" -s "$TV_IP:5555" shell cmd package set-home-activity com.aura.tvprobe/.AuraActivity || true
 
 "$ADB" -s "$TV_IP:5555" shell am start -n com.aura.tvprobe/.AuraActivity
 echo "Deployed and launched Aura TV on $TV_IP"
