@@ -830,12 +830,14 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     public long getRecoCacheAgeSec(String profileId) {
+        long updated = getRecoUpdatedAt(profileId);
+        return updated > 0L ? Math.max(0L, (System.currentTimeMillis() / 1000L) - updated) : -1L;
+    }
+
+    public long getRecoUpdatedAt(String profileId) {
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.rawQuery("SELECT updated_at FROM profile_recos WHERE profile_id = ?", new String[]{profileId})) {
-            if (c.moveToFirst()) {
-                long updated = c.getLong(0);
-                return Math.max(0L, (System.currentTimeMillis() / 1000L) - updated);
-            }
+            if (c.moveToFirst()) return c.getLong(0);
         } catch (Exception ignored) {}
         return -1L;
     }

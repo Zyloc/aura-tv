@@ -65,7 +65,7 @@ public class MediaProbeService extends NotificationListenerService {
         inspector.recordActivePlaybackOnly();
         String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
         if (!db.isRecoCacheFresh(prof)) {
-            inspector.syncAndBuildState(false);
+            inspector.syncAndBuildState(true);
         }
     }
 

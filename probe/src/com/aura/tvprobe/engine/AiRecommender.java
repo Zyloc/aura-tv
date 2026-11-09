@@ -37,9 +37,9 @@ public class AiRecommender {
     }
 
     private static final String[] MODELS = {
-        "gemini-3.1-flash-lite-preview",
         "gemini-flash-lite-latest",
-        "gemini-2.5-flash"
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3-flash-preview"
     };
     private final AuraDb db;
 
@@ -124,7 +124,7 @@ public class AiRecommender {
             UserTasteProfile taste, JSONObject seedPlan, int minModernYear, int currentYear,
             Set<String> seenKeys, List<JSONObject> pool) {
         ExecutorService exec = Executors.newFixedThreadPool(4);
-        submitCoWatchTasks(exec, taste, minModernYear, seenKeys, pool);
+        submitCoWatchTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
         submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
         submitPlannedQueryTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
         exec.shutdown();
@@ -132,14 +132,25 @@ public class AiRecommender {
     }
 
     private void submitCoWatchTasks(
-            ExecutorService exec, UserTasteProfile taste, int minModernYear,
+            ExecutorService exec, UserTasteProfile taste, JSONObject seedPlan, int minModernYear,
             Set<String> seenKeys, List<JSONObject> pool) {
-        List<String> anchors = taste.getAnchors();
+        List<String> anchors = mergePlannedTraversalSeeds(taste.getAnchors(), seedPlan);
         for (int i = 0; i < anchors.size() && i < 6; i++) {
             final String anchor = anchors.get(i);
             final double weight = Math.max(0.75, 1.15 - i * 0.06);
             exec.submit(() -> retrieveAnchorNeighbors(anchor, weight, taste, minModernYear, seenKeys, pool));
         }
+    }
+
+    private List<String> mergePlannedTraversalSeeds(List<String> baseAnchors, JSONObject seedPlan) {
+        List<String> merged = new ArrayList<>(baseAnchors);
+        JSONArray planned = seedPlan != null ? seedPlan.optJSONArray("watched_traversal_seeds") : null;
+        if (planned == null) return merged;
+        for (int i = 0; i < planned.length(); i++) {
+            String s = planned.optString(i).trim();
+            if (!s.isEmpty() && !merged.contains(s)) merged.add(s);
+        }
+        return merged;
     }
 
     private void retrieveAnchorNeighbors(
@@ -190,20 +201,31 @@ public class AiRecommender {
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray pq = seedPlan != null ? seedPlan.optJSONArray("primary_queries") : null;
         if (pq == null) return;
-        for (int i = 0; i < pq.length() && i < 4; i++) {
+        for (int i = 0; i < pq.length() && i < 5; i++) {
+            final int rankIdx = i;
             final String q = pq.optString(i).trim();
             if (!q.isEmpty() && !taste.getAnchors().contains(q)) {
-                exec.submit(() -> retrievePlannedQueryHits(q, minModernYear, taste, seenKeys, pool));
+                exec.submit(() -> retrievePlannedQueryHits(q, rankIdx, minModernYear, taste, seenKeys, pool));
             }
         }
     }
 
     private void retrievePlannedQueryHits(
-            String query, int minModernYear, UserTasteProfile taste, Set<String> seenKeys, List<JSONObject> pool) {
+            String query, int rankIdx, int minModernYear, UserTasteProfile taste,
+            Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray hits = JustWatchGraph.fetchDeterministicSearchCandidates(query, minModernYear);
-        for (int k = 0; k < hits.length() && k < 6; k++) {
-            addSotaCandidate(hits.optJSONObject(k), null, 0.9, taste, seenKeys, pool);
+        for (int k = 0; k < hits.length() && k < 2; k++) {
+            JSONObject hit = hits.optJSONObject(k);
+            if (hit != null && k == 0) markAsLlmPlannedCandidate(hit, rankIdx);
+            addSotaCandidate(hit, null, Math.max(0.85, 1.10 - rankIdx * 0.05), taste, seenKeys, pool);
         }
+    }
+
+    private void markAsLlmPlannedCandidate(JSONObject hit, int rankIdx) {
+        try {
+            hit.put("source_channel", "llm_planned");
+            hit.put("llm_rank", rankIdx);
+        } catch (Exception ignored) {}
     }
 
     private void scoreAndRerankPool(List<JSONObject> pool, UserTasteProfile taste, int currentYear) {
@@ -277,6 +299,8 @@ public class AiRecommender {
         if (seedAnchor != null && !seedAnchor.isEmpty()) {
             o.put("seed_anchor", seedAnchor).put("anchor_weight", anchorWeight);
             o.put("source_channel", "co_watch").put("is_direct_sim", true).put("sim_score", anchorWeight * 10.0);
+        } else if ("llm_planned".equals(o.optString("source_channel"))) {
+            o.put("anchor_weight", anchorWeight).put("sim_score", anchorWeight * 9.5);
         } else {
             o.put("source_channel", "structured").put("sim_score", anchorWeight * 5.0);
         }

@@ -57,6 +57,7 @@ public class AuraActivity extends Activity implements
 
     private static final int REMOTE_PORT = 8765;
     private static final long SCREENSAVER_IDLE_MS = 120_000L; // 2 minutes idle -> Ambient Screensaver
+    private static final long HOURLY_REFRESH_MS = 3_600_000L; // 1 hour auto-refresh interval
     private static final int TAG_GLOBAL_LOADER_TEXT = 0xAA_0101;
     private static final int TAG_GLOBAL_LOADER_SUB  = 0xAA_0102;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -64,6 +65,8 @@ public class AuraActivity extends Activity implements
         Math.max(4, Runtime.getRuntime().availableProcessors() * 2));
     private final Runnable idleScreensaverTask = this::activateScreensaver;
     private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
+    private final Runnable hourlyRecoRefreshTask = this::runHourlyRecoRefreshLoop;
+    private long lastRenderedRecoSec = 0L;
 
     private AuraDb db;
     private AiRecommender ai;
@@ -130,9 +133,27 @@ public class AuraActivity extends Activity implements
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
         startHomeSearchHintAnimation();
+        scheduleHourlyRecoRefresh();
         updateNavMetadata();
         resetIdleTimer();
-        if (initialFocusSet && !db.isRecoCacheFresh(activeProfile)) refreshAllData(false);
+        maybeRefreshOnResume();
+    }
+
+    private void maybeRefreshOnResume() {
+        if (!initialFocusSet) return;
+        boolean stale = !db.isRecoCacheFresh(activeProfile);
+        boolean updatedInBg = db.getRecoUpdatedAt(activeProfile) > lastRenderedRecoSec;
+        if (stale || updatedInBg) refreshAllData(stale);
+    }
+
+    private void scheduleHourlyRecoRefresh() {
+        ui.removeCallbacks(hourlyRecoRefreshTask);
+        ui.postDelayed(hourlyRecoRefreshTask, HOURLY_REFRESH_MS);
+    }
+
+    private void runHourlyRecoRefreshLoop() {
+        refreshAllData(true);
+        scheduleHourlyRecoRefresh();
     }
 
     @Override
@@ -181,6 +202,7 @@ public class AuraActivity extends Activity implements
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         ui.removeCallbacks(homeSearchHintTask);
         ui.removeCallbacks(idleScreensaverTask);
+        ui.removeCallbacks(hourlyRecoRefreshTask);
     }
 
     @Override
@@ -531,6 +553,7 @@ public class AuraActivity extends Activity implements
     }
 
     private void renderHomeContent(JSONArray recos) {
+        lastRenderedRecoSec = Math.max(System.currentTimeMillis() / 1000L, db.getRecoUpdatedAt(activeProfile));
         final int savedScrollY = mainScroll != null ? mainScroll.getScrollY() : 0;
         final int[] savedRailFocus = findFocusedRailAndCard();
         List<JSONObject> all = toJsonList(recos);

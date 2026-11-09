@@ -16,12 +16,19 @@ public final class HybridScorer {
     public static double computeHybridScore(JSONObject item, UserTasteProfile profile, int currentYear) {
         double bayes = CandidateValidator.computeBayesianImdb(item);
         double qualityMult = "prestige".equalsIgnoreCase(profile.getRankMode()) ? 1.35 : 1.15;
-        double coWatch = computeCoWatchBoost(item, profile.getTopAnchor());
+        double coWatch = computeCoWatchBoost(item, profile.getTopAnchor()) + computeLlmPlanBoost(item);
         double genreAff = profile.computeGenreAffinity(item.optString("genre_codes", ""));
         double recency = computeRecencyScore(item, currentYear, profile.getRankMode());
         double originAff = computeOriginBoost(item, profile);
         double platformAff = RegionProviderRegistry.isPrimaryTierProvider(item.optString("pkg_code", "")) ? 0.45 : 0.15;
         return (bayes * qualityMult) + coWatch + genreAff + recency + originAff + platformAff;
+    }
+
+    private static double computeLlmPlanBoost(JSONObject item) {
+        if (!"llm_planned".equals(item.optString("source_channel"))) return 0.0;
+        int rank = Math.max(0, item.optInt("llm_rank", 0));
+        double aw = item.optDouble("anchor_weight", 1.0);
+        return Math.max(1.25, 2.05 - rank * 0.12) * aw;
     }
 
     private static double computeCoWatchBoost(JSONObject item, String topAnchor) {
@@ -43,7 +50,8 @@ public final class HybridScorer {
         String country = item.optString("country", "");
         int votes = item.optInt("imdb_votes", 0);
         double pop = item.optDouble("tmdb_popularity", 0.0);
-        boolean hasSeed = !item.optString("seed_anchor", "").isEmpty();
+        boolean hasSeed = !item.optString("seed_anchor", "").isEmpty()
+            || "llm_planned".equals(item.optString("source_channel"));
         return profile.computeOriginAffinity(country, votes, pop, hasSeed);
     }
 
@@ -114,9 +122,10 @@ public final class HybridScorer {
     public static String formatReason(JSONObject item, String seedAnchor, double imdb, int votes) {
         String genres = item.optString("genres", "Drama");
         String voteStr = votes >= 1000 ? String.format(Locale.US, " (%.1fk votes)", votes / 1000.0) : "";
+        boolean isLlm = "llm_planned".equals(item.optString("source_channel"));
         String prefix = (seedAnchor != null && !seedAnchor.isEmpty())
             ? ("Because you watched " + seedAnchor)
-            : ("Acclaimed " + item.optInt("year"));
+            : (isLlm ? "AI Curated for You" : ("Acclaimed " + item.optInt("year")));
         return prefix + " \u00B7 " + genres + " \u00B7 \u2605 " + String.format(Locale.US, "%.1f", imdb) + voteStr;
     }
 }
