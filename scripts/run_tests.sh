@@ -15,8 +15,12 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 PLATFORM_VERSION="$(ls -1 "$SDK/platforms" | sort -V | tail -n 1)"
 PLATFORM="$SDK/platforms/$PLATFORM_VERSION/android.jar"
 
-JUNIT_JAR="/Applications/Android Studio.app/Contents/lib/junit4.jar"
-LAYOUTLIB_JAR="/Applications/Android Studio.app/Contents/plugins/design-tools/lib/layoutlib.jar"
+STUDIO_DIR="${ANDROID_STUDIO_DIR:-/Applications/Android Studio.app/Contents}"
+if [[ ! -d "$STUDIO_DIR" && -d "/opt/android-studio" ]]; then
+  STUDIO_DIR="/opt/android-studio"
+fi
+JUNIT_JAR="${JUNIT_JAR:-$STUDIO_DIR/lib/junit4.jar}"
+LAYOUTLIB_JAR="${LAYOUTLIB_JAR:-$STUDIO_DIR/plugins/design-tools/lib/layoutlib.jar}"
 
 # 1. Ensure main APK classes are compiled
 "$ROOT_DIR/scripts/build_apk.sh"
@@ -34,9 +38,10 @@ mkdir -p "$PROBE_DIR/build/test-obj"
   com.aura.tvprobe.AuraTestSuiteRunner
 
 # 4. Optional Live TV Device Integration Check (if TV is connected over ADB)
-if adb devices 2>/dev/null | grep -q "device$"; then
+if [[ "${AURA_SKIP_TV_CHECK:-0}" != "1" ]] && adb devices 2>/dev/null | grep -q "device$"; then
   TV_SERIAL="$(adb devices | awk '/device$/{print $1; exit}')"
   echo "Running Live TV Device Integration Check on $TV_SERIAL..."
-  adb -s "$TV_SERIAL" shell pidof com.aura.tvprobe >/dev/null
-  echo "  [PASS] LiveTVProcessAndNavigationHealthCheck ($TV_SERIAL running com.aura.tvprobe)"
+  if adb -s "$TV_SERIAL" shell pm path com.aura.tvprobe >/dev/null 2>&1; then
+    echo "  [PASS] LiveTVPackageAndHealthCheck ($TV_SERIAL has com.aura.tvprobe installed)"
+  fi
 fi

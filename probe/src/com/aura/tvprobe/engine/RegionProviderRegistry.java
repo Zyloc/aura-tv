@@ -18,7 +18,7 @@ import java.util.Set;
 public final class RegionProviderRegistry {
 
     private static final String[] GLOBAL_PROVIDER_CODES = {
-        "nfx", "prv", "dnp", "jhs", "atp", "mxx", "hlu", "pmp", "pck", "cru", "snl", "zee"
+        "nfx", "prv", "dnp", "jhs", "atp", "mxx", "hlu", "pmp", "pck", "cru", "snl", "zee", "bbc", "itv", "unx", "abm"
     };
 
     private static final Set<String> ALLOWED_CODES = Collections.unmodifiableSet(
@@ -39,6 +39,7 @@ public final class RegionProviderRegistry {
         putPairs(m, "nfx", "Netflix", "prv", "Prime Video", "dnp", "Disney+", "jhs", "Disney+ Hotstar");
         putPairs(m, "atp", "Apple TV+", "mxx", "Max", "hlu", "Hulu", "pmp", "Paramount+");
         putPairs(m, "pck", "Peacock", "cru", "Crunchyroll", "snl", "SonyLIV", "zee", "ZEE5");
+        putPairs(m, "bbc", "BBC iPlayer", "itv", "ITVX", "unx", "U-NEXT", "abm", "ABEMA");
         return Collections.unmodifiableMap(m);
     }
 
@@ -50,6 +51,8 @@ public final class RegionProviderRegistry {
             "hulu", "com.hulu.livingroomplus", "crunchyroll", "com.crunchyroll.crunchyroid");
         putPairs(m, "sony", "com.sonyliv", "zee", "com.graymatrix.did", "xstream", "tv.airtel.xstream.tvapp",
             "airtel", "tv.airtel.xstream.tvapp", "youtube", "com.google.android.youtube.tv", "smarttube", "org.smarttube.stable");
+        putPairs(m, "iplayer", "bbc.iplayer.android", "itvx", "air.ITVMobilePlayer",
+            "u-next", "jp.unext.mediaplayer", "abema", "tv.abema");
         return Collections.unmodifiableMap(m);
     }
 
@@ -112,6 +115,14 @@ public final class RegionProviderRegistry {
 
     public static List<String> getDefaultPackageList() {
         return Arrays.asList(GLOBAL_PROVIDER_CODES);
+    }
+
+    public static List<String> getProvidersForCountry(String countryCode) {
+        String c = countryCode != null ? countryCode.trim().toUpperCase(Locale.US) : "US";
+        if ("IN".equals(c)) return Arrays.asList("nfx", "prv", "jhs", "atp", "snl", "zee", "cru");
+        if ("GB".equals(c)) return Arrays.asList("nfx", "prv", "dnp", "atp", "bbc", "itv", "pmp", "cru");
+        if ("JP".equals(c)) return Arrays.asList("nfx", "prv", "dnp", "atp", "unx", "abm", "hlu", "cru");
+        return Arrays.asList("nfx", "prv", "dnp", "atp", "mxx", "hlu", "pmp", "pck", "cru");
     }
 
     public static boolean isEnglishPrimaryCountry(String countryCode) {

@@ -60,7 +60,8 @@ public class AuraActivity extends Activity implements
     private static final int TAG_GLOBAL_LOADER_TEXT = 0xAA_0101;
     private static final int TAG_GLOBAL_LOADER_SUB  = 0xAA_0102;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final ExecutorService bgPool = Executors.newFixedThreadPool(3);
+    private final ExecutorService bgPool = Executors.newFixedThreadPool(
+        Math.max(4, Runtime.getRuntime().availableProcessors() * 2));
     private final Runnable idleScreensaverTask = this::activateScreensaver;
     private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
 
@@ -226,7 +227,7 @@ public class AuraActivity extends Activity implements
 
     private void initServices() {
         db = AuraDb.getInstance(this);
-        db.purgePromotionalNoiseFromHistory();
+        bgPool.submit(() -> db.purgePromotionalNoiseFromHistory());
         ImageLoader.setQualityMode(db.getSetting("image_quality", "ultra"));
         ai = new AiRecommender(db);
         sync = new SyncManager(db);

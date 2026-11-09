@@ -5,7 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${AURA_TV_IP:-}" && -f "$ROOT_DIR/.env" ]]; then
   AURA_TV_IP="$(grep -E '^AURA_TV_IP=' "$ROOT_DIR/.env" | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs || true)"
 fi
-TV_IP="${AURA_TV_IP:-192.168.1.4}"
+TV_IP="${AURA_TV_IP:-}"
+if [[ -z "$TV_IP" ]]; then
+  echo "Error: Set AURA_TV_IP in .env or environment before running e2e_tv_test.sh"
+  exit 1
+fi
 DEV="$TV_IP:5555"
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 ADB="${ADB:-$SDK/platform-tools/adb}"

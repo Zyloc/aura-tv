@@ -26,6 +26,8 @@ TV_PROBE_URL = f"http://{TV_IP}:{TV_PORT}"
 HOST_URL = os.getenv("AURA_HOST_URL", "")
 PHONE_URL = os.getenv("AURA_PHONE_URL", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+REGION_COUNTRY = os.getenv("AURA_REGION_COUNTRY", "IN").strip().upper() or "IN"
+REGION_LANG = os.getenv("AURA_REGION_LANG", "en").strip().lower() or "en"
 
 DEFAULT_PROFILE = os.getenv("AURA_DEFAULT_PROFILE", "member1")
 PROFILE_LABELS: Dict[str, str] = {

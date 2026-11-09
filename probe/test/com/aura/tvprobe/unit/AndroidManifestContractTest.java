@@ -77,6 +77,18 @@ public class AndroidManifestContractTest {
             src.contains("iv.setTag(cacheKey)") || src.contains("iv.setTag(null)"));
     }
 
+    @Test
+    public void testOpenSourceHygieneAndPackageReplacedReceiver() throws Exception {
+        File license = resolveFile("LICENSE", "../LICENSE");
+        File buildScript = resolveFile("scripts/build_apk.sh", "../scripts/build_apk.sh");
+        File manifestFile = resolveFile("probe/AndroidManifest.xml", "AndroidManifest.xml");
+        String buildSrc = new String(Files.readAllBytes(buildScript.toPath()), StandardCharsets.UTF_8);
+        String xml = new String(Files.readAllBytes(manifestFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue("LICENSE file must exist for open-source readiness", license.exists());
+        assertTrue("build_apk.sh must clean up assets/aura.env after linking", buildSrc.contains("rm -f assets/aura.env"));
+        assertTrue("BootReceiver must handle MY_PACKAGE_REPLACED", xml.contains("android.intent.action.MY_PACKAGE_REPLACED"));
+    }
+
     private static File resolveFile(String rootRelative, String probeRelative) {
         File f1 = new File(rootRelative);
         return f1.exists() ? f1 : new File(probeRelative);

@@ -16,7 +16,7 @@ fi
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 ADB="${ADB:-$SDK/platform-tools/adb}"
 
-"$ROOT_DIR/scripts/build_apk.sh"
+AURA_BUNDLE_ENV="${AURA_BUNDLE_ENV:-1}" "$ROOT_DIR/scripts/build_apk.sh"
 
 echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" connect "$TV_IP:5555"
@@ -28,24 +28,11 @@ echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" -s "$TV_IP:5555" shell cmd notification allow_listener com.aura.tvprobe/com.aura.tvprobe.MediaProbeService || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe GET_USAGE_STATS allow || true
 "$ADB" -s "$TV_IP:5555" shell appops set com.aura.tvprobe SYSTEM_ALERT_WINDOW allow || true
-"$ADB" -s "$TV_IP:5555" shell settings put global wifi_score_params "rssi2=-95:-92:-85:-70,rssi5=-95:-92:-88:-78,pps=0:1:100,horizon=15,nud=8,expid=0" || true
-"$ADB" -s "$TV_IP:5555" shell settings put global wifi_scan_always_enabled 0 || true
-"$ADB" -s "$TV_IP:5555" shell settings put global ble_scan_always_enabled 0 || true
-"$ADB" -s "$TV_IP:5555" shell settings put global wifi_wakeup_enabled 0 || true
-"$ADB" -s "$TV_IP:5555" shell settings put global wifi_suspend_optimizations_enabled 0 || true
-"$ADB" -s "$TV_IP:5555" shell settings put global wifi_scan_throttle_enabled 1 || true
-"$ADB" -s "$TV_IP:5555" shell settings put secure location_mode 0 || true
-"$ADB" -s "$TV_IP:5555" shell settings put secure location_providers_allowed -gps || true
-"$ADB" -s "$TV_IP:5555" shell settings put secure location_providers_allowed -network || true
-"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.gms WIFI_SCAN ignore || true
-"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.gms CHANGE_WIFI_STATE ignore || true
-"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.katniss WIFI_SCAN ignore || true
-"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.katniss CHANGE_WIFI_STATE ignore || true
-"$ADB" -s "$TV_IP:5555" shell pm revoke com.google.android.katniss android.permission.ACCESS_FINE_LOCATION 2>/dev/null || true
-"$ADB" -s "$TV_IP:5555" shell pm revoke com.google.android.katniss android.permission.ACCESS_COARSE_LOCATION 2>/dev/null || true
-"$ADB" -s "$TV_IP:5555" shell cmd appops set com.google.android.apps.nbu.smartconnect.tv WIFI_SCAN ignore || true
-"$ADB" -s "$TV_IP:5555" shell cmd notification disallow_listener com.google.android.tvrecommendations/com.google.android.tvrecommendations.NotificationsService || true
-"$ADB" -s "$TV_IP:5555" shell pm disable-user --user 0 com.google.android.tvrecommendations || true
+
+if [[ "${AURA_OPTIMIZE_TV_WIFI:-0}" == "1" || "${1:-}" == "--optimize-wifi" ]]; then
+  bash "$ROOT_DIR/scripts/optimize_tv_wifi.sh" "$TV_IP"
+fi
+
 "$ADB" -s "$TV_IP:5555" shell cmd package set-home-activity com.aura.tvprobe/.AuraActivity || true
 
 FOREGROUND="$("$ADB" -s "$TV_IP:5555" shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true)"

@@ -128,7 +128,7 @@ public class AiRecommender {
         submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
         submitPlannedQueryTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
         exec.shutdown();
-        try { exec.awaitTermination(9, TimeUnit.SECONDS); } catch (Exception ignored) {}
+        try { exec.awaitTermination(12, TimeUnit.SECONDS); } catch (Exception ignored) {}
     }
 
     private void submitCoWatchTasks(
@@ -239,14 +239,17 @@ public class AiRecommender {
             JSONObject o, String seedAnchor, UserTasteProfile taste, Set<String> seenKeys) {
         if (o == null || isAlreadySeenOrWatched(o, seenKeys)) return false;
         if (!passesQualityAndAnimationGate(o, seedAnchor, taste)) return false;
-        return taste.passesLocalShovelwareGate(o.optString("country", ""), o.optInt("imdb_votes", 0));
+        if (taste.isBlockedByKidsSafety(o.optString("genre_codes", ""))) return false;
+        return taste.passesLocalShovelwareGate(
+            o.optString("country", ""), o.optInt("imdb_votes", 0),
+            o.optDouble("tmdb_popularity", 0.0), o.optInt("year", 0), JustWatchGraph.getCurrentYear());
     }
 
     private boolean isAlreadySeenOrWatched(JSONObject o, Set<String> seenKeys) {
         String t = o.optString("title").trim();
         String norm = AuraDb.normalizeTitleKey(t);
         String slugKey = o.optString("slug_key", "");
-        return t.isEmpty() || seenKeys.contains(norm) || (!slugKey.isEmpty() && seenKeys.contains(slugKey)) || db.isTitleWatched(t);
+        return t.isEmpty() || seenKeys.contains(norm) || (!slugKey.isEmpty() && seenKeys.contains(slugKey));
     }
 
     private boolean passesQualityAndAnimationGate(JSONObject o, String seedAnchor, UserTasteProfile taste) {

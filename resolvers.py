@@ -3,7 +3,7 @@ import json
 import re
 from typing import Dict
 import httpx
-from config import APP_LABELS
+from config import APP_LABELS, REGION_COUNTRY, REGION_LANG
 from db import get_cached_gti, save_cached_gti
 
 HEADERS = {
@@ -202,7 +202,7 @@ def enrich_from_justwatch(query: str) -> Dict:
     try:
         r = httpx.post(
             "https://apis.justwatch.com/graphql",
-            json={"query": gql, "variables": {"searchQuery": query, "country": "IN", "language": "en"}},
+            json={"query": gql, "variables": {"searchQuery": query, "country": REGION_COUNTRY, "language": REGION_LANG}},
             headers=HEADERS,
             timeout=4.0,
         )
@@ -237,7 +237,7 @@ def fetch_justwatch_similar(seed_title: str) -> list:
     try:
         r = httpx.post(
             "https://apis.justwatch.com/graphql",
-            json={"query": gql, "variables": {"searchQuery": seed_title, "country": "IN", "language": "en"}},
+            json={"query": gql, "variables": {"searchQuery": seed_title, "country": REGION_COUNTRY, "language": REGION_LANG}},
             headers=HEADERS,
             timeout=4.5,
         )

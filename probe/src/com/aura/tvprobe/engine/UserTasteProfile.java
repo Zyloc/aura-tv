@@ -18,6 +18,7 @@ public final class UserTasteProfile {
     private final String preferredLangs;
     private final String rankMode;
     private final boolean animeEnabled;
+    private final boolean kidsMode;
     private final int currentEpoch;
     private final Map<String, Double> genreWeights = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, Double> countryWeights = Collections.synchronizedMap(new HashMap<>());
@@ -26,7 +27,8 @@ public final class UserTasteProfile {
         this(
             db.getRotatingTasteAnchors(profileId, epoch),
             RegionProviderRegistry.getCountryCode(db),
-            db.getSetting("preferred_langs", "English") + " " + db.getProfileTaste(profileId),
+            db.getSetting("preferred_langs", "English") + " " + db.getProfileTaste(profileId)
+                + ("kids".equalsIgnoreCase(profileId) ? " kids" : ""),
             db.getSetting("ranking_mode", "prestige"),
             epoch
         );
@@ -41,6 +43,7 @@ public final class UserTasteProfile {
         this.preferredLangs = preferredLangs != null ? preferredLangs.toLowerCase(Locale.US) : "english";
         this.rankMode = rankMode != null ? rankMode : "prestige";
         this.animeEnabled = this.preferredLangs.contains("anime");
+        this.kidsMode = this.preferredLangs.contains("kids") || this.preferredLangs.contains("children");
     }
 
     public List<String> getAnchors() {
@@ -61,6 +64,15 @@ public final class UserTasteProfile {
 
     public boolean isAnimeEnabled() {
         return animeEnabled;
+    }
+
+    public boolean isKidsMode() {
+        return kidsMode;
+    }
+
+    public boolean isBlockedByKidsSafety(String genreCodes) {
+        if (!kidsMode || genreCodes == null) return false;
+        return genreCodes.contains("hrr") || genreCodes.contains("crm") || genreCodes.contains("trl");
     }
 
     public int getCurrentEpoch() {
@@ -124,10 +136,15 @@ public final class UserTasteProfile {
     }
 
     public boolean passesLocalShovelwareGate(String country, int votes) {
+        return passesLocalShovelwareGate(country, votes, 0.0, 0, 0);
+    }
+
+    public boolean passesLocalShovelwareGate(String country, int votes, double pop, int releaseYear, int currentYear) {
         if (country == null || country.isEmpty()) return true;
         String c = country.toUpperCase(Locale.US);
         if (c.equals(regionCountry) && !RegionProviderRegistry.isEnglishPrimaryCountry(c)) {
-            return votes >= 25000;
+            boolean freshBreakout = currentYear > 0 && releaseYear >= currentYear - 1 && votes >= 5000 && pop >= 15.0;
+            return votes >= 25000 || freshBreakout;
         }
         return true;
     }

@@ -28,8 +28,8 @@ cd "$PROBE_DIR"
 rm -rf build assets
 mkdir -p build/gen build/obj build/dex build/res assets
 
-# Bundle .env (if present) into untracked assets/aura.env for standalone TV usage
-if [[ -f "$ROOT_DIR/.env" ]]; then
+# Optionally bundle .env into untracked assets/aura.env only when AURA_BUNDLE_ENV=1
+if [[ "${AURA_BUNDLE_ENV:-0}" == "1" && -f "$ROOT_DIR/.env" ]]; then
   cp "$ROOT_DIR/.env" assets/aura.env
 fi
 
@@ -44,6 +44,7 @@ fi
 "$BT/aapt2" compile --dir res -o build/res/compiled.zip
 "$BT/aapt2" link -o build/unaligned.apk -I "$PLATFORM" \
   --manifest AndroidManifest.xml -A assets --java build/gen build/res/compiled.zip
+rm -f assets/aura.env
 
 "${JAVA_HOME:+$JAVA_HOME/bin/}javac" -source 11 -target 11 -cp "$PLATFORM" \
   -d build/obj $(find src build/gen -name "*.java")

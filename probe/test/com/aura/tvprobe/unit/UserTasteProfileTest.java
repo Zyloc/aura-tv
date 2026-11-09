@@ -47,5 +47,18 @@ public class UserTasteProfileTest {
             profile.passesLocalShovelwareGate("IN", 1200));
         assertTrue("Acclaimed regional title with high votes passes",
             profile.passesLocalShovelwareGate("IN", 35000));
+        assertTrue("Fresh regional breakout with 6k votes and high popularity passes",
+            profile.passesLocalShovelwareGate("IN", 6000, 18.5, 2026, 2026));
+    }
+
+    @Test
+    public void testKidsModeBlocksMatureGenresAndRegionProvidersAdaptByCountry() {
+        UserTasteProfile kids = new UserTasteProfile(
+            Arrays.asList("Paddington"), "US", "English Kids", "prestige", 1);
+        assertTrue("Kids profile must enable kidsMode", kids.isKidsMode());
+        assertTrue("Kids profile must block horror/crime/thriller", kids.isBlockedByKidsSafety("hrr,trl"));
+        assertFalse("Kids profile must allow adventure/sci-fi", kids.isBlockedByKidsSafety("scf,act"));
+        assertTrue("GB providers must include BBC iPlayer", RegionProviderRegistry.getProvidersForCountry("GB").contains("bbc"));
+        assertTrue("JP providers must include U-NEXT", RegionProviderRegistry.getProvidersForCountry("JP").contains("unx"));
     }
 }

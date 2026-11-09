@@ -37,9 +37,17 @@ public class AuraDb extends SQLiteOpenHelper {
         this.appCtx = ctx.getApplicationContext();
         applyBundledEnvIfPresent();
         ensureDefaultProfileExists();
-        purgePromotionalNoiseFromHistory();
-        purgeUnreleasedFromRecos();
+        scheduleStartupCleanupAsync();
         if (sInstance == null) sInstance = this;
+    }
+
+    private void scheduleStartupCleanupAsync() {
+        Thread t = new Thread(() -> {
+            purgePromotionalNoiseFromHistory();
+            purgeUnreleasedFromRecos();
+        }, "AuraDbCleanup");
+        t.setDaemon(true);
+        t.start();
     }
 
     public void purgePromotionalNoiseFromHistory() {
@@ -96,6 +104,12 @@ public class AuraDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE IF NOT EXISTS watched_items (title_key TEXT PRIMARY KEY, payload_json TEXT, updated_at INTEGER)");
         db.execSQL("CREATE TABLE IF NOT EXISTS kv_settings (k TEXT PRIMARY KEY, v TEXT)");
         db.execSQL("CREATE TABLE IF NOT EXISTS user_profiles (profile_id TEXT PRIMARY KEY, name TEXT, interests TEXT, created_at INTEGER)");
+        createDatabaseIndices(db);
+    }
+
+    private void createDatabaseIndices(SQLiteDatabase db) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_watch_history_prof_ts ON watch_history(profile_id, updated_at DESC)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_watched_items_ts ON watched_items(updated_at DESC)");
     }
 
     private void seedDefaultSettings(SQLiteDatabase db) {
@@ -596,12 +610,18 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public boolean isTitleWatched(String title) {
         String key = normalizeTitleKey(title);
-        return !key.isEmpty() && getWatchedTitleKeys().contains(key);
+        if (key.isEmpty()) return false;
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT 1 FROM watched_items WHERE title_key = ? LIMIT 1", new String[]{key})) {
+            return c.moveToFirst();
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public Set<String> getWatchedTitleKeys() {
         Set<String> keys = new HashSet<>();
-        try (Cursor c = getReadableDatabase().rawQuery("SELECT title_key FROM watched_items", null)) {
+        String sql = "SELECT title_key FROM watched_items ORDER BY updated_at DESC LIMIT 2000";
+        try (Cursor c = getReadableDatabase().rawQuery(sql, null)) {
             while (c.moveToNext()) addWatchedKeyWithBaseVariant(c.getString(0), keys);
         } catch (Exception ignored) {}
         return keys;
@@ -629,7 +649,7 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public JSONArray listManuallyWatched() {
         JSONArray arr = new JSONArray();
-        String sql = "SELECT payload_json, updated_at FROM watched_items ORDER BY updated_at DESC";
+        String sql = "SELECT payload_json, updated_at FROM watched_items ORDER BY updated_at DESC LIMIT 500";
         try (Cursor c = getReadableDatabase().rawQuery(sql, null)) {
             while (c.moveToNext()) arr.put(parseWatchedCursorRow(c));
         } catch (Exception ignored) {}

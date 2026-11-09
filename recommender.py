@@ -4,7 +4,7 @@ import json
 import urllib.parse
 from typing import Dict, List
 import httpx
-from config import DEFAULT_PROFILE, GEMINI_API_KEY, GEMINI_MODELS, PROFILE_LABELS
+from config import DEFAULT_PROFILE, GEMINI_API_KEY, GEMINI_MODELS, PROFILE_LABELS, REGION_COUNTRY
 from db import (
     get_active_filters,
     get_profile_recos,
@@ -77,7 +77,7 @@ def build_gemini_prompt(profile: str, current: Dict, history: List[Dict]) -> str
     custom_taste = get_setting(f"profile_taste_{profile}", "")
     default_taste = get_setting(
         "default_guide_ai",
-        "Critically acclaimed released titles (IMDb 7.5+), gripping storytelling, streaming in India",
+        f"Critically acclaimed released titles (IMDb 7.5+), gripping storytelling, streaming in {REGION_COUNTRY}",
     )
     active_filters = get_active_filters(profile)
 
@@ -96,9 +96,9 @@ def build_gemini_prompt(profile: str, current: Dict, history: List[Dict]) -> str
         f"Active Filters: {active_filters}\n"
         f"Currently watching on TV: '{now_name}'.\n"
         f"Already Watched (STRICT EXCLUSION — DO NOT recommend): {seen}.\n"
-        f"Current System Date: {today_iso}. STRICT RULE: ONLY recommend modern released shows or movies from {min_year} to {cur_year} (prioritizing {priority_start}-{cur_year}, including titles released up to {today_iso}) currently streaming on subscription OTT in India. NEVER recommend old 1980s/1990s/2000s/early-2010s titles and NEVER recommend unreleased {cur_year + 1}+ titles.\n"
+        f"Current System Date: {today_iso}. STRICT RULE: ONLY recommend modern released shows or movies from {min_year} to {cur_year} (prioritizing {priority_start}-{cur_year}, including titles released up to {today_iso}) currently streaming on subscription OTT in region {REGION_COUNTRY}. NEVER recommend old 1980s/1990s/2000s/early-2010s titles and NEVER recommend unreleased {cur_year + 1}+ titles.\n"
         "Return ONLY a JSON array of 15 objects with keys: "
-        "'title', 'app' (Prime Video, Netflix, Disney+ Hotstar, Apple TV+, SonyLIV, or ZEE5), "
+        "'title', 'app' (major subscription streaming service in the user's region), "
         "'genre' (comma-separated genres), "
         "'runtime_min' (integer minutes), "
         "and 'reason' (1-2 specific sentences explaining why it fits their taste)."
