@@ -67,6 +67,7 @@ public class AuraActivity extends Activity implements
     private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
     private final Runnable hourlyRecoRefreshTask = this::runHourlyRecoRefreshLoop;
     private long lastRenderedRecoSec = 0L;
+    private String lastRenderedHistorySignature = "";
 
     private AuraDb db;
     private AiRecommender ai;
@@ -143,7 +144,29 @@ public class AuraActivity extends Activity implements
         if (!initialFocusSet) return;
         boolean stale = !db.isRecoCacheFresh(activeProfile);
         boolean updatedInBg = db.getRecoUpdatedAt(activeProfile) > lastRenderedRecoSec;
-        if (stale || updatedInBg) refreshAllData(stale);
+        if (stale || updatedInBg) {
+            refreshAllData(stale);
+        } else {
+            syncContinueWatchingOnResume();
+        }
+    }
+
+    private void syncContinueWatchingOnResume() {
+        bgPool.submit(() -> {
+            String prevTop = getTopContinueWatchingTitle();
+            syncNowPlayingSafe();
+            boolean topChanged = !getTopContinueWatchingTitle().equals(prevTop);
+            boolean sigChanged = !currentContinueWatchingSignature().equals(lastRenderedHistorySignature);
+            ui.post(() -> applyResumeContinueWatchingSync(topChanged, sigChanged));
+        });
+    }
+
+    private void applyResumeContinueWatchingSync(boolean topChanged, boolean sigChanged) {
+        if (topChanged) {
+            refreshAllData(true);
+        } else if (sigChanged) {
+            renderHomeContent(db.getProfileRecommendations(activeProfile));
+        }
     }
 
     private void scheduleHourlyRecoRefresh() {
@@ -262,6 +285,8 @@ public class AuraActivity extends Activity implements
 
     private void startMediaProbeServiceSafe() {
         try {
+            android.service.notification.NotificationListenerService.requestRebind(
+                new ComponentName(this, MediaProbeService.class));
             startService(new Intent(this, MediaProbeService.class));
         } catch (Throwable ignored) {}
     }
@@ -505,17 +530,32 @@ public class AuraActivity extends Activity implements
 
     private void submitBackgroundRefresh(boolean forceRefresh, boolean hadFresh) {
         bgPool.submit(() -> {
+            String prevTop = getTopContinueWatchingTitle();
             JSONObject np = syncNowPlayingSafe();
-            if (!forceRefresh && hadFresh) return;
-            JSONArray history = db.listHistory(activeProfile);
-            if (np == null && history.length() > 0) np = history.optJSONObject(0);
-            JSONArray fresh = ai.getOrRefreshForProfile(activeProfile, np, history, forceRefresh, null);
-            ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, hadFresh));
+            boolean topChanged = !getTopContinueWatchingTitle().equals(prevTop);
+            if (!forceRefresh && hadFresh && !topChanged) {
+                postContinueWatchingUpdateIfChanged();
+                return;
+            }
+            refreshRecommendationsInBackground(np, forceRefresh || topChanged, hadFresh);
         });
     }
 
+    private void postContinueWatchingUpdateIfChanged() {
+        if (!currentContinueWatchingSignature().equals(lastRenderedHistorySignature)) {
+            ui.post(() -> renderHomeContent(db.getProfileRecommendations(activeProfile)));
+        }
+    }
+
+    private void refreshRecommendationsInBackground(JSONObject np, boolean forceRefresh, boolean hadFresh) {
+        JSONArray history = db.listHistory(activeProfile);
+        if (np == null && history.length() > 0) np = history.optJSONObject(0);
+        JSONArray fresh = ai.getOrRefreshForProfile(activeProfile, np, history, forceRefresh, null);
+        ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, hadFresh));
+    }
+
     private JSONObject syncNowPlayingSafe() {
-        try { return inspector.syncProvidersAndNowPlaying(activeProfile); } catch (Exception e) { return null; }
+        try { return inspector.forceSyncProvidersAndNowPlaying(activeProfile); } catch (Exception e) { return null; }
     }
 
     private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh, boolean hadFresh) {
@@ -631,9 +671,31 @@ public class AuraActivity extends Activity implements
     private void addContinueWatchingIfPresent() {
         List<JSONObject> rawHistory = toJsonList(db.listHistory(activeProfile));
         List<JSONObject> diversified = ContinueWatchingSelector.selectDiversified(rawHistory, 8);
+        lastRenderedHistorySignature = buildContinueWatchingSignature(diversified);
         if (!diversified.isEmpty()) {
             railsContainer.addView(RailBuilder.buildContinueWatching(this, diversified, this));
         }
+    }
+
+    private String currentContinueWatchingSignature() {
+        List<JSONObject> rawHistory = toJsonList(db.listHistory(activeProfile));
+        return buildContinueWatchingSignature(ContinueWatchingSelector.selectDiversified(rawHistory, 8));
+    }
+
+    private String buildContinueWatchingSignature(List<JSONObject> items) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < items.size() && i < 4; i++) {
+            JSONObject o = items.get(i);
+            sb.append(o.optString("media_key", o.optString("title"))).append(':').append(o.optInt("position_sec")).append('|');
+        }
+        return sb.toString();
+    }
+
+    private String getTopContinueWatchingTitle() {
+        List<JSONObject> cw = ContinueWatchingSelector.selectDiversified(toJsonList(db.listHistory(activeProfile)), 1);
+        if (cw.isEmpty()) return "";
+        JSONObject top = cw.get(0);
+        return top.optString("series_title").isEmpty() ? top.optString("title") : top.optString("series_title");
     }
 
     private void addCategorizedRails(List<JSONObject> all) {

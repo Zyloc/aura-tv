@@ -92,6 +92,11 @@ public class SessionInspector {
         return out;
     }
 
+    public JSONObject forceSyncProvidersAndNowPlaying(String profile) {
+        lastProviderSyncMs = 0L;
+        return syncProvidersAndNowPlaying(profile);
+    }
+
     public JSONObject syncProvidersAndNowPlaying(String profile) {
         long nowMs = System.currentTimeMillis();
         JSONObject raw = new JSONObject();
@@ -218,23 +223,37 @@ public class SessionInspector {
     }
 
     private long parseNetflixUpdatedSec(String intentUri, long nowSec) {
-        long updatedSec = nowSec - 1800L;
+        long baseSec = extractNetflixExpireAtBase(intentUri, nowSec - 1800L, nowSec);
+        return baseSec - parseNetflixTileOffset(intentUri);
+    }
+
+    private long extractNetflixExpireAtBase(String intentUri, long fallbackSec, long nowSec) {
         try {
             int expIdx = intentUri.indexOf("expireAt%3D");
-            if (expIdx < 0) return updatedSec;
+            if (expIdx < 0) return fallbackSec;
             int start = expIdx + 11;
             int end = intentUri.indexOf("%26", start);
-            if (end < 0) end = Math.min(intentUri.length(), start + 10);
-            long expSec = Long.parseLong(intentUri.substring(start, end));
-            return expSec > 1700000000L ? expSec - 86400L : updatedSec;
-        } catch (Exception ignored) { return updatedSec; }
+            long expSec = Long.parseLong(intentUri.substring(start, end < 0 ? Math.min(intentUri.length(), start + 10) : end));
+            return expSec > 1700000000L ? Math.min(nowSec, expSec - 86400L) : fallbackSec;
+        } catch (Exception ignored) { return fallbackSec; }
+    }
+
+    private long parseNetflixTileOffset(String intentUri) {
+        try {
+            int idx = intentUri.indexOf("tileIndex%253D");
+            if (idx < 0) return 0L;
+            int start = idx + 14;
+            int end = intentUri.indexOf("%2526", start);
+            int tile = Integer.parseInt(intentUri.substring(start, end < 0 ? start + 1 : end));
+            return Math.max(0, tile) * 60L;
+        } catch (Exception ignored) { return 0L; }
     }
 
     private void upsertNetflixWatchItem(JSONObject r, String title, String intentUri, long updatedSec) {
         try {
             JSONObject item = buildNetflixItemBase(r, title, intentUri);
-            item.put("position_sec", 1350);
-            item.put("duration_sec", 3000);
+            item.put("position_sec", 1200);
+            item.put("duration_sec", 2700);
             item.put("updated_at", updatedSec);
             db.upsertWatchItem(item);
         } catch (Exception ignored) {}
@@ -406,8 +425,15 @@ public class SessionInspector {
         String t = meta.optString("android.media.metadata.TITLE",
             meta.optString("android.media.metadata.DISPLAY_TITLE", friendlyApp(pkg)));
         out.put("title", t);
-        out.put("series_title", meta.optString("android.media.metadata.ARTIST"));
+        out.put("series_title", sanitizeSeriesArtist(meta.optString("android.media.metadata.ARTIST"), t));
         out.put("poster_url", meta.optString("android.media.metadata.ALBUM_ART_URI"));
+    }
+
+    private String sanitizeSeriesArtist(String artist, String title) {
+        if (artist == null || artist.contains("\u2022") || artist.contains(",") || artist.equalsIgnoreCase(title)) {
+            return "";
+        }
+        return artist.trim();
     }
 
     private void enrichFromLocalCache(JSONObject out, String title) {

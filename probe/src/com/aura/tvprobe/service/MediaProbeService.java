@@ -38,6 +38,7 @@ public class MediaProbeService extends NotificationListenerService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        try { requestRebind(new ComponentName(this, MediaProbeService.class)); } catch (Throwable ignored) {}
         startHttpServer();
         return START_STICKY;
     }
@@ -62,8 +63,8 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private void runBackgroundTick() {
-        inspector.recordActivePlaybackOnly();
         String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        inspector.syncProvidersAndNowPlaying(prof);
         if (!db.isRecoCacheFresh(prof)) {
             inspector.syncAndBuildState(true);
         }

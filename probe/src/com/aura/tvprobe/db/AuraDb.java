@@ -67,9 +67,11 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private void purgeStaleRecommendationsIfNeeded(SQLiteDatabase db) {
-        if (!"1".equals(getSetting("purged_stale_wn_v3", ""))) {
-            db.execSQL("DELETE FROM watch_history WHERE app_name LIKE '%Recommended%' OR app_name LIKE '%Netflix ·%'");
-            setSetting("purged_stale_wn_v3", "1");
+        db.execSQL("UPDATE watch_history SET series_title = '' WHERE series_title LIKE '%\u2022%'");
+        if (!"1".equals(getSetting("purged_stale_wn_v4", ""))) {
+            db.execSQL("DELETE FROM watch_history WHERE app_name LIKE '%Watch Next%' AND updated_at = 1793976540");
+            db.execSQL("DELETE FROM watch_history WHERE app_name LIKE '%Recommended%' OR app_name LIKE '%Netflix \u00B7%'");
+            setSetting("purged_stale_wn_v4", "1");
         }
     }
 
@@ -460,14 +462,25 @@ public class AuraDb extends SQLiteOpenHelper {
     public List<String> getRotatingTasteAnchors(String profileId, int epoch) {
         List<JSONObject> validHistory = collectActiveHistoryAnchors(profileId);
         List<String> anchors = new ArrayList<>();
-        for (JSONObject item : validHistory) {
-            String t = item.optString("clean_anchor_title", "").trim();
-            if (t.length() >= 2 && !anchors.contains(t) && anchors.size() < 2) {
-                anchors.add(t);
-            }
-        }
+        appendDiversifiedHistoryAnchors(validHistory, anchors, 4);
         appendRotatingLibrarySeeds(anchors, epoch, 6);
         return anchors;
+    }
+
+    private void appendDiversifiedHistoryAnchors(List<JSONObject> validHistory, List<String> anchors, int maxHistory) {
+        Set<String> seenApps = new HashSet<>();
+        for (JSONObject item : validHistory) {
+            if (anchors.size() >= maxHistory) return;
+            if (seenApps.add(item.optString("app_pkg", ""))) addHistoryAnchorIfUnique(item, anchors);
+        }
+        for (JSONObject item : validHistory) {
+            if (anchors.size() < maxHistory) addHistoryAnchorIfUnique(item, anchors);
+        }
+    }
+
+    private void addHistoryAnchorIfUnique(JSONObject item, List<String> anchors) {
+        String t = item.optString("clean_anchor_title", "").trim();
+        if (t.length() >= 2 && !anchors.contains(t)) anchors.add(t);
     }
 
     private List<JSONObject> collectActiveHistoryAnchors(String profileId) {
@@ -485,16 +498,30 @@ public class AuraDb extends SQLiteOpenHelper {
     private JSONObject tryBuildActiveHistoryAnchor(JSONObject h, long nowSec) {
         if (h == null || isIgnoredHistoryApp(h) || !hasEligibleAnchorProgress(h)) return null;
         double hoursAgo = computeHistoryHoursAgo(h, nowSec);
-        if (hoursAgo > 72.0) return null; // 72-hour TTL for unprogressed watch_history anchors
-        String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
-        if (t.isEmpty() || t.equalsIgnoreCase("Netflix") || t.equalsIgnoreCase("Prime Video")) return null;
+        if (hoursAgo > 720.0) return null; // 30-day window for active watch_history shows
+        String t = extractUsableHistoryAnchorTitle(h);
+        if (t.isEmpty()) return null;
         return cloneWithEngagementWeight(h, t, hoursAgo);
+    }
+
+    private String extractUsableHistoryAnchorTitle(JSONObject h) {
+        String series = h.optString("series_title", "").trim();
+        if (series.contains("\u2022") || series.contains(",")) series = "";
+        String t = series.isEmpty() ? h.optString("title", "").trim() : series;
+        if (isInvalidHistoryAnchorTitle(h, t, series)) return "";
+        return t;
+    }
+
+    private boolean isInvalidHistoryAnchorTitle(JSONObject h, String t, String series) {
+        if (t.isEmpty() || t.equalsIgnoreCase("Netflix") || t.equalsIgnoreCase("Prime Video")) return true;
+        if (t.contains("\u2022") || t.contains("Tour of ") || t.contains("Full House With ")) return true;
+        return series.isEmpty() && h.optString("app_pkg").contains("graymatrix") && t.split("\\s+").length >= 3;
     }
 
     private boolean hasEligibleAnchorProgress(JSONObject h) {
         int pos = h.optInt("position_sec", 0);
         int dur = Math.max(1800, h.optInt("duration_sec", 2700));
-        return pos >= 240 && !(pos == 1350 && dur == 3000) && ((double) pos / dur) >= 0.25;
+        return pos >= 240 && !(pos == 1350 && dur == 3000) && ((double) pos / dur) >= 0.20;
     }
 
     private double computeHistoryHoursAgo(JSONObject h, long nowSec) {
@@ -509,7 +536,7 @@ public class AuraDb extends SQLiteOpenHelper {
             int dur = Math.max(1800, h.optInt("duration_sec", 2700));
             JSONObject copy = new JSONObject(h.toString());
             copy.put("clean_anchor_title", title);
-            return copy.put("engagement_weight", ((double) pos / dur) * Math.exp(-0.693 * hoursAgo / 24.0));
+            return copy.put("engagement_weight", ((double) pos / dur) * Math.exp(-0.693 * hoursAgo / 72.0));
         } catch (Exception e) {
             return null;
         }
@@ -707,7 +734,7 @@ public class AuraDb extends SQLiteOpenHelper {
         int newDur = item.optInt("duration_sec", 0);
         if (rawKey.isEmpty() || (newPos == 1350 && newDur == 3000)) return;
         SQLiteDatabase db = getWritableDatabase();
-        long updatedAt = resolveWatchItemTimestamp(db, rawKey, newPos, item.optLong("updated_at", System.currentTimeMillis() / 1000L));
+        long updatedAt = resolveWatchItemTimestamp(db, item, rawKey, newPos);
         ContentValues cv = buildWatchItemValues(item, rawKey, newPos, newDur, updatedAt);
         db.insertWithOnConflict("watch_history", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
@@ -737,7 +764,14 @@ public class AuraDb extends SQLiteOpenHelper {
         cv.put("updated_at", updatedAt);
     }
 
-    private long resolveWatchItemTimestamp(SQLiteDatabase db, String mediaKey, int newPos, long fallbackTs) {
+    private long resolveWatchItemTimestamp(SQLiteDatabase db, JSONObject item, String mediaKey, int newPos) {
+        long explicitTs = item.optLong("updated_at", 0L);
+        if (explicitTs > 0L) return explicitTs;
+        long nowSec = System.currentTimeMillis() / 1000L;
+        return queryExistingTimestampIfUnmoved(db, mediaKey, newPos, nowSec);
+    }
+
+    private long queryExistingTimestampIfUnmoved(SQLiteDatabase db, String mediaKey, int newPos, long fallbackTs) {
         try (Cursor c = db.rawQuery("SELECT position_sec, updated_at FROM watch_history WHERE media_key = ?", new String[]{mediaKey})) {
             if (c.moveToFirst() && Math.abs(c.getInt(0) - newPos) < 30 && c.getLong(1) > 0) {
                 return c.getLong(1);

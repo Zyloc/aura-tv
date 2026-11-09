@@ -423,7 +423,7 @@ public class AiRecommender {
             "Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
             "Default Guide AI: " + db.getDefaultTasteGuide() + "\n" +
             "User Ratings Feedback: " + db.getRatingFeedbackSummary() + "\n" +
-            "Recent Watched/Liked Anchors: " + db.getDynamicTasteAnchors(profileId).toString() + "\n" +
+            "Currently Watching / Active Taste Anchors (HIGHEST PRIORITY): " + db.getDynamicTasteAnchors(profileId).toString() + "\n" +
             "Already Watched (do not recommend): " + watchedList.toString() + "\n" +
             "User Search Query (if any): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
             buildPlannerTaskInstructions(minModernYear, currentYear);
@@ -431,9 +431,9 @@ public class AiRecommender {
 
     private String buildPlannerTaskInstructions(int minModernYear, int currentYear) {
         return "Task:\n" +
-            "1. Plan 'primary_queries': 5 specific modern (" + minModernYear + "-" + currentYear + ") critically acclaimed show/movie titles (with 5,000+ IMDb votes) that match the user's query and Guide AI.\n" +
-            "2. Plan 'watched_traversal_seeds': 3 titles from the user's watched/rated list to run a co-watch graph traversal query.\n" +
-            "3. Plan 'traversal_chips': 3 short clickable search-engine traversal phrases (max 24 chars each).\n" +
+            "1. Plan 'primary_queries': 5 specific modern (" + minModernYear + "-" + currentYear + ") critically acclaimed show/movie titles (with 5,000+ IMDb votes) directly inspired by the user's Currently Watching / Active Taste Anchors (and User Search Query if provided), respecting Guide AI.\n" +
+            "2. Plan 'watched_traversal_seeds': 3 titles starting with the first 2 Currently Watching / Active Taste Anchors to run a co-watch graph traversal query.\n" +
+            "3. Plan 'traversal_chips': 3 short clickable search-engine traversal phrases (max 24 chars each) based on what the user is currently watching.\n" +
             "Return ONLY a JSON object with keys: 'primary_queries' (array of strings), 'watched_traversal_seeds' (array of strings), 'traversal_chips' (array of 3 strings).";
     }
 

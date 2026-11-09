@@ -56,6 +56,17 @@ public class ContinueWatchingSelectorTest {
         assertEquals("Slow Horses", selected.get(0).optString("title"));
     }
 
+    @Test
+    public void testIncludesVerifiedNetflixContinueWatchingRows() throws Exception {
+        List<JSONObject> raw = new ArrayList<>();
+        raw.add(makeSession("La Brea", "Netflix", "com.netflix.ninja", 1200, 2700));
+        raw.add(makeSession("KPop Demon Hunters", "Netflix", "com.netflix.ninja", 1200, 2700));
+        List<JSONObject> selected = ContinueWatchingSelector.selectDiversified(raw, 5);
+        assertEquals(2, selected.size());
+        assertEquals("La Brea", selected.get(0).optString("title"));
+        assertEquals("KPop Demon Hunters", selected.get(1).optString("title"));
+    }
+
     private static JSONObject makeSession(String title, String app, String pkg,
                                           int pos, int dur) throws Exception {
         return new JSONObject()
