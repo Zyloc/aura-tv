@@ -537,9 +537,10 @@ public class AiRecommender {
     private String buildPlannerTaskInstructions(int minModernYear, int currentYear) {
         return "Task:\n" +
             "1. Plan 'queries': 6 diverse JustWatch GraphQL query spec objects for parallel scatter-gather retrieval. " +
-            "If 'User Search Query' is non-empty, ALL 6 query specs MUST set 'searchQuery' to a specific movie/show title (the queried title itself plus 5 iconic peer titles in that exact sub-genre and tone) with 'includeSimilar': true, exact 'objectTypes' ([\"MOVIE\"] vs [\"SHOW\"]), and matching 'genres'. " +
+            "If 'User Search Query' is an actor, director, or franchise query (e.g. 'Amitabh Bachchan movies'), set 'includeSimilar': false on the 6 'queries' specs (using the actor/director name and 5 of their iconic films as 'searchQuery') and list 10 of their specific movies/shows in 'primary_queries'. " +
+            "If 'User Search Query' is a 'like X' similarity query, set 'searchQuery' to X and 5 iconic peer titles in that exact sub-genre with 'includeSimilar': true. " +
             "If 'User Search Query' is empty, generate the 6 query specs from the plot synopses, genres, countries, and types of the User's Watched & In-Progress Shows.\n" +
-            "2. Plan 'primary_queries': 5 specific show/movie titles matching the request or watched history.\n" +
+            "2. Plan 'primary_queries': 10 specific show/movie titles directly matching the request or watched history.\n" +
             "3. Plan 'watched_traversal_seeds': 3 seed titles for co-watch traversal.\n" +
             "4. Plan 'traversal_chips': 3 short clickable search phrases (max 24 chars each).\n" +
             "Return ONLY a JSON object with keys: 'queries', 'primary_queries', 'watched_traversal_seeds', 'traversal_chips'.";
@@ -565,10 +566,33 @@ public class AiRecommender {
             Future<JSONArray> directSimFut, JSONArray gathered, JSONObject plan, int minModernYear) {
         List<String> summaries = new ArrayList<>();
         Set<String> seenNorm = new HashSet<>();
+        appendPrimaryQueryLookups(plan, seenNorm, summaries);
         try { appendSearchCandidateSummaries(directSimFut.get(1500, TimeUnit.MILLISECONDS), seenNorm, summaries); } catch (Exception ignored) {}
         appendSearchCandidateSummaries(gathered, seenNorm, summaries);
         appendFallbackPlanCandidates(plan, minModernYear, seenNorm, summaries);
         return summaries;
+    }
+
+    private void appendPrimaryQueryLookups(JSONObject plan, Set<String> seenNorm, List<String> summaries) {
+        JSONArray pq = plan != null ? plan.optJSONArray("primary_queries") : null;
+        if (pq == null || pq.length() == 0) return;
+        JSONObject[] hits = lookupTitlesInParallel(pq, Math.min(10, pq.length()));
+        for (JSONObject h : hits) {
+            if (h != null && h.optBoolean("has_flatrate_offer", false)) addSearchCandidateSummary(h, seenNorm, summaries);
+        }
+    }
+
+    private JSONObject[] lookupTitlesInParallel(JSONArray titles, int count) {
+        final JSONObject[] hits = new JSONObject[count];
+        ExecutorService exec = Executors.newFixedThreadPool(Math.max(1, Math.min(6, count)));
+        for (int i = 0; i < count; i++) {
+            final int idx = i;
+            final String q = titles.optString(i, "").trim();
+            if (!q.isEmpty()) exec.submit(() -> hits[idx] = JustWatchGraph.lookupTitleInIndia(q));
+        }
+        exec.shutdown();
+        try { exec.awaitTermination(3000, TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
+        return hits;
     }
 
     private void appendSearchCandidateSummaries(JSONArray arr, Set<String> seenNorm, List<String> summaries) {
@@ -596,8 +620,9 @@ public class AiRecommender {
         seenNorm.add(norm);
         db.saveCachedGti("jw_imdb_v6:" + t.toLowerCase(Locale.US), o.toString());
         String syn = o.optString("synopsis", "");
-        if (syn.length() > 120) syn = syn.substring(0, 120) + "...";
-        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("country") + ", " + o.optString("rating") + ", " + o.optString("app") + ") — " + syn);
+        if (syn.length() > 110) syn = syn.substring(0, 110) + "...";
+        String cast = o.optString("cast", "");
+        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("country") + ", " + o.optString("rating") + ", " + o.optString("app") + (cast.isEmpty() ? "" : ", Cast=" + cast) + ") — " + syn);
     }
 
     public List<String> executeMultiHopTraversal(String profileId, JSONObject searchPlan, int minModernYear) {

@@ -189,7 +189,7 @@ public class VoiceConcierge {
         int minModernYear, int currentYear, JSONObject out
     ) throws Exception {
         out.put("reply", parsed.optString("reply", "Updated picks for your search."));
-        int minSearchYear = !AiRecommender.extractSimilaritySeed(userText).isEmpty() ? 1995 : (minModernYear - 4);
+        int minSearchYear = (userText != null && userText.toLowerCase().contains("top releases")) ? (currentYear - 2) : 1950;
         JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minSearchYear, currentYear);
         out.put("results", applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters));
         JSONArray parsedFollowUps = parsed.optJSONArray("follow_ups");
@@ -232,8 +232,7 @@ public class VoiceConcierge {
             JSONArray sim = ai.traverseSimilarToWatched(profileId, seed, null);
             if (sim != null && sim.length() > 0) return sim;
         }
-        JSONObject plan = ai.buildFastSeedPlan(profileId, contextualQuery);
-        return ai.buildSotaRecommendations(profileId, plan, minModernYear, JustWatchGraph.getCurrentYear());
+        return JustWatchGraph.fetchDeterministicSearchCandidates(userText, 1950);
     }
 
     public static JSONArray applyConversationalConstraints(JSONArray items, String userText, List<String> activeFilters) {
@@ -348,6 +347,7 @@ public class VoiceConcierge {
             "- SCATTER-GATHER FILTERING: Inspect the 'Multi-Hop Search & Co-Watch Graph Traversal Candidates' above (including each candidate's Type, Genres, Country, and Synopsis). Filter out and discard any candidate that is semantically irrelevant to the User Search Query.\n" +
             "- MULTI-TURN CONVERSATION: If 'Session Flow so far' has previous user turns, treat the current query as a FOLLOW-UP REFINEMENT on that conversation.\n" +
             "- SIMILARITY & FRANCHISE QUERIES: If the user asks for titles 'like X' or 'similar to X', EVERY SINGLE RESULT must match the subgenre, tone, scale, and storyline of X. NEVER include unrelated crime dramas or thrillers.\n" +
+            "- ACTOR / DIRECTOR QUERIES: If the user searches for a specific actor or director, ONLY select candidates whose 'Cast=' includes that exact person (exclude remakes starring other actors).\n" +
             "- FORMAT CONSTRAINT: If the user asks for 'movies' or 'films', ONLY return feature films (Type='Movie', NEVER TV series). If they ask for 'shows' or 'series', ONLY return TV series.\n" +
             "- RECENCY WINDOW: Prioritize " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for franchise/similarity queries include iconic 2008\u2013" + currentYear + " peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +

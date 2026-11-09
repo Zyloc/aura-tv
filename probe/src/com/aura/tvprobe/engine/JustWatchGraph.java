@@ -36,7 +36,7 @@ public class JustWatchGraph {
         "content(country: $country, language: $language) { " +
         "  title originalTitle fullPath originalReleaseYear runtime shortDescription productionCountries " +
         "  genres { shortName } scoring { imdbScore imdbVotes tmdbPopularity } " +
-        "  posterUrl backdrops { backdropUrl } " +
+        "  credits { name role } posterUrl backdrops { backdropUrl } " +
         "} " +
         "offers(country: $country, platform: ANDROID_TV) { " +
         "  monetizationType standardWebURL deeplinkURL(platform: ANDROID_TV) " +
@@ -127,7 +127,7 @@ public class JustWatchGraph {
             JSONObject parsed = parseNode(edges.optJSONObject(i).optJSONObject("node"), lang);
             if (!isLookupEligible(parsed)) continue;
             if (matchesTargetTitleOrSlug(parsed, normTarget)) return parsed;
-            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, 1990, 5.8)) best = parsed;
+            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, 1950, 5.5)) best = parsed;
         }
         return best != null ? best : new JSONObject();
     }
@@ -194,8 +194,9 @@ public class JustWatchGraph {
     }
 
     private static JSONObject buildDynamicSpecVars(JSONObject spec, String country, String lang) throws Exception {
-        boolean incSim = spec.optBoolean("includeSimilar", !spec.optString("searchQuery", "").trim().isEmpty());
-        int first = incSim && !spec.optString("searchQuery", "").trim().isEmpty() ? 4 : 18;
+        boolean hasSq = !spec.optString("searchQuery", "").trim().isEmpty();
+        boolean incSim = spec.optBoolean("includeSimilar", hasSq);
+        int first = hasSq ? (incSim ? 4 : 15) : 18;
         return new JSONObject().put("country", country).put("language", lang)
             .put("first", first).put("includeSimilar", incSim)
             .put("filter", buildDynamicTitleFilter(spec));
@@ -284,7 +285,7 @@ public class JustWatchGraph {
     private static void extractDynamicSpecNodes(JSONArray edges, JSONObject spec, String lang, JSONArray out) {
         if (edges == null) return;
         String sq = spec.optString("searchQuery", "").trim();
-        int minYr = !sq.isEmpty() ? 1995 : Math.max(1995, spec.optInt("minYear", 2008));
+        int minYr = !sq.isEmpty() ? 1950 : Math.max(1950, spec.optInt("minYear", 2008));
         String seedAnchor = !sq.isEmpty() ? spec.optString("seedAnchor", sq).trim() : "";
         String specGenres = joinGenreArray(extractSpecGenres(spec.optJSONArray("genres")));
         JSONArray objTypes = extractSpecObjectTypes(spec.optJSONArray("objectTypes"));
@@ -308,13 +309,16 @@ public class JustWatchGraph {
             JSONObject node, int edgeIdx, String sq, String specGenres,
             int minYr, String seedAnchor, JSONArray objTypes, String lang, JSONArray out) {
         JSONObject primary = parseNode(node, lang);
-        if (!sq.isEmpty() && !matchesQueriedSeedNode(primary, edgeIdx, sq, specGenres)) return;
-        String refGenres = !specGenres.isEmpty() ? specGenres : primary.optString("genre_codes", "");
+        boolean castMatch = !sq.isEmpty() && primary.optString("cast", "").toLowerCase(Locale.US).contains(sq.toLowerCase(Locale.US));
+        if (!sq.isEmpty() && !castMatch && !matchesQueriedSeedNode(primary, edgeIdx, sq, specGenres)) return;
+        String refGenres = castMatch ? "" : (!specGenres.isEmpty() ? specGenres : primary.optString("genre_codes", ""));
         if (isCompatibleDynamicCandidate(primary, refGenres, objTypes, minYr)) {
             tagDynamicHit(primary, seedAnchor, false);
             out.put(primary);
         }
-        collectSimilarNodesForSpec(node.optJSONArray("similarTitles"), primary, refGenres, minYr, seedAnchor, objTypes, lang, out);
+        if (!castMatch) {
+            collectSimilarNodesForSpec(node.optJSONArray("similarTitles"), primary, refGenres, minYr, seedAnchor, objTypes, lang, out);
+        }
     }
 
     private static boolean matchesQueriedSeedNode(JSONObject primary, int edgeIdx, String sq, String specGenres) {
@@ -676,7 +680,19 @@ public class JustWatchGraph {
         JSONArray gArr = content.optJSONArray("genres");
         res.put("genres", mapGenres(gArr));
         res.put("genre_codes", extractGenreCodesCsv(gArr));
+        res.put("cast", extractTopCreditsCsv(content.optJSONArray("credits")));
         extractBestOffer(node.optJSONArray("offers"), res);
+    }
+
+    private static String extractTopCreditsCsv(JSONArray credits) {
+        if (credits == null || credits.length() == 0) return "";
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < credits.length() && names.size() < 6; i++) {
+            JSONObject c = credits.optJSONObject(i);
+            String n = c != null ? c.optString("name", "").trim() : "";
+            if (!n.isEmpty() && !names.contains(n)) names.add(n);
+        }
+        return String.join(", ", names);
     }
 
     private static void populateBasicContent(JSONObject content, String objType, String lang, JSONObject res) throws Exception {
