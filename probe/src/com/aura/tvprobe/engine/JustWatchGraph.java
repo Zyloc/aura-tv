@@ -954,28 +954,7 @@ public class JustWatchGraph {
     }
 
     public static List<String> inferPackageCodesFromText(String text) {
-        List<String> pkgs = new ArrayList<>();
-        if (text == null || text.isEmpty()) return pkgs;
-        String lower = text.toLowerCase(Locale.US);
-        inferGlobalPackageCodes(lower, pkgs);
-        inferRegionalPackageCodes(lower, pkgs);
-        return pkgs;
-    }
-
-    private static void inferGlobalPackageCodes(String lower, List<String> pkgs) {
-        if (lower.contains("netflix")) pkgs.add("nfx");
-        if (containsAny(lower, "prime", "amazon")) pkgs.add("prv");
-        if (containsAny(lower, "hotstar", "jio")) pkgs.add("jhs");
-        if (lower.contains("disney")) pkgs.add("dnp");
-        if (lower.contains("apple")) pkgs.add("atp");
-    }
-
-    private static void inferRegionalPackageCodes(String lower, List<String> pkgs) {
-        if (lower.contains("max") || lower.contains("hbo")) pkgs.add("mxx");
-        if (lower.contains("hulu")) pkgs.add("hlu");
-        if (lower.contains("crunchyroll")) pkgs.add("cru");
-        if (lower.contains("sony")) pkgs.add("snl");
-        if (lower.contains("zee")) pkgs.add("zee");
+        return RegionProviderRegistry.inferPackageCodesFromText(text);
     }
 
     private static boolean containsAny(String target, String... keywords) {

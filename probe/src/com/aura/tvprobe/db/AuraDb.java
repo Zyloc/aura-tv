@@ -271,6 +271,17 @@ public class AuraDb extends SQLiteOpenHelper {
         if ("AURA_REGION".equals(k)) setSetting("region_country", v.toUpperCase());
         else if ("AURA_LANGUAGE".equals(k)) setSetting("region_language", v.toLowerCase());
         else if ("AURA_BRAND".equals(k)) setSetting("tv_brand_override", v);
+        else applyDynamicEnvProfileKey(k, v);
+    }
+
+    private void applyDynamicEnvProfileKey(String k, String v) {
+        if (k.startsWith("AURA_PROFILE_") && k.endsWith("_NAME")) {
+            String pid = k.substring(13, k.length() - 5).toLowerCase();
+            if (!pid.isEmpty()) setSetting("profile_name_" + pid, v);
+        } else if (k.startsWith("AURA_PROFILE_") && k.endsWith("_TASTE")) {
+            String pid = k.substring(13, k.length() - 6).toLowerCase();
+            if (!pid.isEmpty()) setSetting("profile_taste_" + pid, v);
+        }
     }
 
     public String getProfileLabel(String profileId) {

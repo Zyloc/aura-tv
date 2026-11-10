@@ -383,11 +383,7 @@ public class VoiceConcierge {
     }
 
     private static boolean matchesPlatformConstraint(String app, String combined) {
-        boolean fNfx = combined.contains("netflix"), fPrv = combined.contains("prime");
-        boolean fJhs = combined.contains("hotstar") || combined.contains("jio"), fAtp = combined.contains("apple");
-        if (!fNfx && !fPrv && !fJhs && !fAtp) return true;
-        return (fNfx && app.contains("netflix")) || (fPrv && app.contains("prime"))
-            || (fJhs && (app.contains("hotstar") || app.contains("jio"))) || (fAtp && app.contains("apple"));
+        return RegionProviderRegistry.matchesSpokenPlatformFilter(app, combined);
     }
 
     private String buildContextualQuery(JSONArray turns, String currentQuery) {

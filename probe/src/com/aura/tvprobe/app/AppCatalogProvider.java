@@ -19,32 +19,6 @@ public final class AppCatalogProvider {
 
     private static final String PLAY_STORE_PKG = "com.android.vending";
 
-    private static final String[][] CORE_STREAMING_APPS = {
-        {"Netflix", "com.netflix.ninja", "#E50914"},
-        {"Prime Video", "com.amazon.amazonvideo.livingroom", "#00A8E1"},
-        {"Disney+", "com.disney.disneyplus", "#113CCF"},
-        {"JioHotstar", "in.startv.hotstar", "#2563EB"},
-        {"Apple TV+", "com.apple.atve.androidtv.appletv", "#334155"},
-        {"Max", "com.wbd.stream", "#002BE7"},
-        {"Hulu", "com.hulu.livingroomplus", "#1CE783"},
-        {"Peacock", "com.peacocktv.peacockandroid", "#0F172A"},
-        {"Paramount+", "com.cbs.ott", "#0064FF"},
-        {"Crunchyroll", "com.crunchyroll.crunchyroid", "#F47521"},
-        {"BBC iPlayer", "bbc.iplayer.android", "#EC4899"},
-        {"Play Store", PLAY_STORE_PKG, "#0F9D58"},
-        {"YouTube", "com.google.android.youtube.tv", "#DC2626"},
-        {"SmartTube", "org.smarttube.stable", "#B91C1C"},
-        {"SonyLIV", "com.sonyliv", "#4F46E5"},
-        {"ZEE5", "com.graymatrix.did", "#9333EA"},
-        {"Airtel Xstream", "tv.airtel.xstream.tvapp", "#E11D48"},
-        {"Plex", "com.plexapp.android", "#E5A00D"},
-        {"Kodi", "org.xbmc.kodi", "#0284C7"},
-        {"Stremio", "com.stremio.one", "#7C3AED"},
-        {"MX Player", "com.mxtech.videoplayer.television", "#2563EB"},
-        {"VLC", "org.videolan.vlc", "#EA580C"},
-        {"Downloader", "com.esaba.downloader", "#D97706"}
-    };
-
     private AppCatalogProvider() {}
 
     public static List<JSONObject> discoverTvApps(Context ctx) {
@@ -67,7 +41,7 @@ public final class AppCatalogProvider {
     }
 
     private static void addInstalledCoreApps(PackageManager pm, List<JSONObject> list, Set<String> added) {
-        for (String[] app : CORE_STREAMING_APPS) {
+        for (String[] app : RegionProviderRegistry.getCoreStreamingAppsCatalog()) {
             if (!added.contains(app[1]) && (isPackageInstalled(pm, app[1]) || PLAY_STORE_PKG.equals(app[1]))) {
                 added.add(app[1]);
                 addAppJson(list, app[0], app[1], app[2]);
@@ -115,7 +89,7 @@ public final class AppCatalogProvider {
         String p = pkg != null ? pkg.toLowerCase() : "";
         if (low.contains("phone media") || low.equals("aura ai") || low.contains("package installer")) return true;
         if (low.contains("password") || low.contains("factory") || low.contains("webview")) return true;
-        return low.contains("sink") || p.contains("mstar") || p.contains("mediatek");
+        return low.contains("sink") || (!p.isEmpty() && TvDeviceProfile.isProtectedSystemOrOemPackage(p) && !PLAY_STORE_PKG.equals(p));
     }
 
     private static boolean isPackageInstalled(PackageManager pm, String pkg) {

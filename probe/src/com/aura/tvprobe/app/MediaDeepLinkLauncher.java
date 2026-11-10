@@ -20,9 +20,11 @@ import java.util.List;
 public final class MediaDeepLinkLauncher {
 
     private static final String NETFLIX_PKG = "com.netflix.ninja";
-    private static final String YOUTUBE_TV_PKG = "com.google.android.youtube.tv";
-    private static final String SMARTTUBE_PKG = "org.smarttube.stable";
     private static final String PLAY_STORE_PKG = "com.android.vending";
+    private static final String[] TRAILER_CANDIDATE_PKGS = {
+        "com.google.android.youtube.tv", "org.smarttube.stable",
+        "com.liskovsoft.smarttubetv.beta", "com.liskovsoft.smarttubetv", "com.google.android.youtube"
+    };
 
     private MediaDeepLinkLauncher() {}
 
@@ -30,8 +32,9 @@ public final class MediaDeepLinkLauncher {
         String query = buildTrailerSearchQuery(item);
         if (query.isEmpty() || ctx == null) return;
         AuraActivity.markOutboundAppLaunch();
-        if (tryYouTubeTrailerIntent(ctx, YOUTUBE_TV_PKG, query)) return;
-        if (tryYouTubeTrailerIntent(ctx, SMARTTUBE_PKG, query)) return;
+        for (String pkg : TRAILER_CANDIDATE_PKGS) {
+            if (isPkgInstalled(ctx, pkg) && tryYouTubeTrailerIntent(ctx, pkg, query)) return;
+        }
         tryYouTubeTrailerIntent(ctx, "", query);
     }
 
@@ -112,14 +115,40 @@ public final class MediaDeepLinkLauncher {
 
     private static boolean tryDirectDeepLink(Context ctx, String uri, String pkg, JSONObject item) {
         if (uri == null || uri.isEmpty()) return false;
-        String finalPkg = pkg.isEmpty() ? item.optString("launch_pkg", "").trim() : pkg;
+        String finalPkg = resolveInstalledTargetPkg(ctx, pkg.isEmpty() ? item.optString("launch_pkg", "").trim() : pkg, item);
         try {
             Intent intent = buildDeepLinkIntent(uri, finalPkg);
+            ensureIntentPackageInstalled(ctx, intent, finalPkg);
             ctx.startActivity(intent);
             return true;
         } catch (Exception e) {
             return tryUnpackagedWebUri(ctx, uri);
         }
+    }
+
+    private static String resolveInstalledTargetPkg(Context ctx, String preferredPkg, JSONObject item) {
+        if (ctx == null || preferredPkg.isEmpty() || isPkgInstalled(ctx, preferredPkg)) return preferredPkg;
+        String appName = item != null ? item.optString("app", item.optString("app_name", "")) : "";
+        if (preferredPkg.contains("hotstar") && isPkgInstalled(ctx, "com.disney.disneyplus")) return "com.disney.disneyplus";
+        if (preferredPkg.contains("disney") && isPkgInstalled(ctx, "in.startv.hotstar")) return "in.startv.hotstar";
+        String resolved = RegionProviderRegistry.resolveAndroidPackage(appName);
+        return isPkgInstalled(ctx, resolved) ? resolved : "";
+    }
+
+    private static void ensureIntentPackageInstalled(Context ctx, Intent intent, String fallbackInstalledPkg) {
+        if (ctx == null || intent == null) return;
+        String target = intent.getPackage();
+        if (target != null && !target.isEmpty() && !isPkgInstalled(ctx, target)) {
+            intent.setPackage(fallbackInstalledPkg != null && !fallbackInstalledPkg.isEmpty() ? fallbackInstalledPkg : null);
+        }
+    }
+
+    private static boolean isPkgInstalled(Context ctx, String pkg) {
+        if (ctx == null || pkg == null || pkg.isEmpty()) return false;
+        try {
+            ctx.getPackageManager().getPackageInfo(pkg, 0);
+            return true;
+        } catch (Throwable e) { return false; }
     }
 
     public static Intent buildDeepLinkIntent(String uri, String pkg) throws Exception {

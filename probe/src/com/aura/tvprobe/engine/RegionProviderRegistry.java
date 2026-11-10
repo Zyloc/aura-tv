@@ -1,67 +1,117 @@
 package com.aura.tvprobe;
 
+import android.content.Context;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import org.json.JSONArray;
+import org.json.JSONObject;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * Global Region, Locale & Streaming Provider Abstraction.
- * Resolves user country/language dynamically and maps international OTT providers
- * without hardcoding any single region or country.
+ * Global Region, Locale & Streaming Provider Registry (Single Source of Truth).
+ * Dynamically resolves country/language, installed OTT package variants, brand colors,
+ * spoken platform filters, and PackageManager application labels without hardcoding.
  */
 public final class RegionProviderRegistry {
 
     private static final String[] GLOBAL_PROVIDER_CODES = {
-        "nfx", "prv", "dnp", "jhs", "atp", "mxx", "hlu", "pmp", "pck", "cru", "snl", "zee", "bbc", "itv", "unx", "abm"
+        "nfx", "prv", "dnp", "jhs", "atp", "mxx", "hlu", "pmp", "pck",
+        "cru", "snl", "zee", "bbc", "itv", "unx", "abm", "stn", "glb", "cnl"
     };
 
     private static final Set<String> ALLOWED_CODES = Collections.unmodifiableSet(
-        new HashSet<>(Arrays.asList(GLOBAL_PROVIDER_CODES))
-    );
+        new HashSet<>(Arrays.asList(GLOBAL_PROVIDER_CODES)));
 
     private static final Set<String> ENGLISH_PRIMARY_COUNTRIES = Collections.unmodifiableSet(
-        new HashSet<>(Arrays.asList("US", "GB", "CA", "AU", "NZ", "IE"))
-    );
+        new HashSet<>(Arrays.asList("US", "GB", "CA", "AU", "NZ", "IE")));
+
+    private static final String[][] CORE_STREAMING_CATALOG = {
+        {"Netflix", "com.netflix.ninja", "#E50914", "nfx"},
+        {"Prime Video", "com.amazon.amazonvideo.livingroom", "#00A8E1", "prv"},
+        {"Disney+", "com.disney.disneyplus", "#113CCF", "dnp"},
+        {"Disney+ Hotstar", "in.startv.hotstar", "#2563EB", "jhs"},
+        {"Apple TV+", "com.apple.atve.androidtv.appletv", "#334155", "atp"},
+        {"Max", "com.wbd.stream", "#002BE7", "mxx"},
+        {"Hulu", "com.hulu.livingroomplus", "#1CE783", "hlu"},
+        {"Peacock", "com.peacocktv.peacockandroid", "#0F172A", "pck"},
+        {"Paramount+", "com.cbs.ott", "#0064FF", "pmp"},
+        {"Crunchyroll", "com.crunchyroll.crunchyroid", "#F47521", "cru"},
+        {"BBC iPlayer", "bbc.iplayer.android", "#EC4899", "bbc"},
+        {"ITVX", "air.ITVMobilePlayer", "#10B981", "itv"},
+        {"U-NEXT", "jp.unext.mediaplayer", "#0EA5E9", "unx"},
+        {"ABEMA", "tv.abema", "#22C55E", "abm"},
+        {"Stan", "au.com.stan.and", "#0284C7", "stn"},
+        {"Globoplay", "com.globo.globotv", "#EF4444", "glb"},
+        {"Canal+", "com.canal.android.canal", "#1E293B", "cnl"},
+        {"SonyLIV", "com.sonyliv", "#4F46E5", "snl"},
+        {"ZEE5", "com.graymatrix.did", "#9333EA", "zee"},
+        {"Airtel Xstream", "tv.airtel.xstream.tvapp", "#E11D48", ""},
+        {"YouTube", "com.google.android.youtube.tv", "#DC2626", ""},
+        {"SmartTube", "org.smarttube.stable", "#B91C1C", ""},
+        {"Plex", "com.plexapp.android", "#E5A00D", ""},
+        {"Kodi", "org.xbmc.kodi", "#0284C7", ""},
+        {"Stremio", "com.stremio.one", "#7C3AED", ""},
+        {"MX Player", "com.mxtech.videoplayer.television", "#2563EB", ""},
+        {"VLC", "org.videolan.vlc", "#EA580C", ""},
+        {"Play Store", "com.android.vending", "#0F9D58", ""}
+    };
 
     private static final Map<String, String> CODE_TO_DISPLAY = createDisplayMap();
     private static final Map<String, String> KEYWORD_TO_PACKAGE = createPackageMap();
+    private static final Map<String, String> KEYWORD_TO_CODE = createKeywordToCodeMap();
 
     private RegionProviderRegistry() {}
 
+    public static String[][] getCoreStreamingAppsCatalog() {
+        return CORE_STREAMING_CATALOG;
+    }
+
     private static Map<String, String> createDisplayMap() {
         Map<String, String> m = new HashMap<>();
-        putPairs(m, "nfx", "Netflix", "prv", "Prime Video", "dnp", "Disney+", "jhs", "Disney+ Hotstar");
-        putPairs(m, "atp", "Apple TV+", "mxx", "Max", "hlu", "Hulu", "pmp", "Paramount+");
-        putPairs(m, "pck", "Peacock", "cru", "Crunchyroll", "snl", "SonyLIV", "zee", "ZEE5");
-        putPairs(m, "bbc", "BBC iPlayer", "itv", "ITVX", "unx", "U-NEXT", "abm", "ABEMA");
+        for (String[] row : CORE_STREAMING_CATALOG) {
+            if (!row[3].isEmpty()) m.put(row[3], row[0]);
+        }
         return Collections.unmodifiableMap(m);
     }
 
     private static Map<String, String> createPackageMap() {
-        Map<String, String> m = new HashMap<>();
+        Map<String, String> m = new LinkedHashMap<>();
         putPairs(m, "netflix", "com.netflix.ninja", "prime", "com.amazon.amazonvideo.livingroom",
-            "hotstar", "in.startv.hotstar", "disney", "com.disney.disneyplus");
+            "amazon", "com.amazon.amazonvideo.livingroom", "hotstar", "in.startv.hotstar",
+            "jio", "in.startv.hotstar", "disney", "com.disney.disneyplus");
         putPairs(m, "apple", "com.apple.atve.androidtv.appletv", "max", "com.wbd.stream",
-            "hulu", "com.hulu.livingroomplus", "crunchyroll", "com.crunchyroll.crunchyroid");
+            "hbo", "com.wbd.stream", "hulu", "com.hulu.livingroomplus", "crunchyroll", "com.crunchyroll.crunchyroid");
         putPairs(m, "sony", "com.sonyliv", "zee", "com.graymatrix.did", "xstream", "tv.airtel.xstream.tvapp",
             "airtel", "tv.airtel.xstream.tvapp", "youtube", "com.google.android.youtube.tv", "smarttube", "org.smarttube.stable");
-        putPairs(m, "iplayer", "bbc.iplayer.android", "itvx", "air.ITVMobilePlayer",
-            "u-next", "jp.unext.mediaplayer", "abema", "tv.abema",
-            "peacock", "com.peacocktv.peacockandroid", "paramount", "com.cbs.ott",
-            "plex", "com.plexapp.android", "kodi", "org.xbmc.kodi");
+        putPairs(m, "iplayer", "bbc.iplayer.android", "bbc", "bbc.iplayer.android", "itvx", "air.ITVMobilePlayer",
+            "u-next", "jp.unext.mediaplayer", "unext", "jp.unext.mediaplayer", "abema", "tv.abema",
+            "peacock", "com.peacocktv.peacockandroid", "paramount", "com.cbs.ott", "stan", "au.com.stan.and",
+            "globo", "com.globo.globotv", "canal", "com.canal.android.canal", "plex", "com.plexapp.android",
+            "kodi", "org.xbmc.kodi", "stremio", "com.stremio.one", "mxtech", "com.mxtech.videoplayer.television");
+        return Collections.unmodifiableMap(m);
+    }
+
+    private static Map<String, String> createKeywordToCodeMap() {
+        Map<String, String> m = new LinkedHashMap<>();
+        putPairs(m, "netflix", "nfx", "prime", "prv", "amazon", "prv", "hotstar", "jhs", "jio", "jhs",
+            "disney", "dnp", "apple", "atp", "max", "mxx", "hbo", "mxx", "hulu", "hlu");
+        putPairs(m, "paramount", "pmp", "peacock", "pck", "crunchyroll", "cru", "sony", "snl",
+            "zee", "zee", "iplayer", "bbc", "bbc", "bbc", "itvx", "itv", "u-next", "unx",
+            "unext", "unx", "abema", "abm", "stan", "stn", "globo", "glb", "canal", "cnl");
         return Collections.unmodifiableMap(m);
     }
 
     private static void putPairs(Map<String, String> map, String... kv) {
-        for (int i = 0; i + 1 < kv.length; i += 2) {
-            map.put(kv[i], kv[i + 1]);
-        }
+        for (int i = 0; i + 1 < kv.length; i += 2) map.put(kv[i], kv[i + 1]);
     }
 
     public static String getCountryCode(AuraDb db) {
@@ -142,7 +192,8 @@ public final class RegionProviderRegistry {
 
     public static boolean isPrimaryTierProvider(String shortName) {
         return "nfx".equals(shortName) || "prv".equals(shortName) || "dnp".equals(shortName)
-            || "jhs".equals(shortName) || "atp".equals(shortName) || "mxx".equals(shortName) || "hlu".equals(shortName);
+            || "jhs".equals(shortName) || "atp".equals(shortName) || "mxx".equals(shortName)
+            || "hlu".equals(shortName) || "pmp".equals(shortName) || "pck".equals(shortName) || "bbc".equals(shortName);
     }
 
     public static String normalizeProviderName(String shortName, String clearName) {
@@ -167,6 +218,9 @@ public final class RegionProviderRegistry {
         if ("IN".equals(c)) return Arrays.asList("nfx", "prv", "jhs", "atp", "snl", "zee", "cru");
         if ("GB".equals(c)) return Arrays.asList("nfx", "prv", "dnp", "atp", "bbc", "itv", "pmp", "cru");
         if ("JP".equals(c)) return Arrays.asList("nfx", "prv", "dnp", "atp", "unx", "abm", "hlu", "cru");
+        if ("AU".equals(c)) return Arrays.asList("nfx", "prv", "dnp", "atp", "stn", "pmp", "cru");
+        if ("BR".equals(c)) return Arrays.asList("nfx", "prv", "dnp", "atp", "mxx", "glb", "pmp", "cru");
+        if ("FR".equals(c)) return Arrays.asList("nfx", "prv", "dnp", "atp", "mxx", "cnl", "pmp", "cru");
         return Arrays.asList("nfx", "prv", "dnp", "atp", "mxx", "hlu", "pmp", "pck", "cru");
     }
 
@@ -182,6 +236,90 @@ public final class RegionProviderRegistry {
             if (lower.contains(entry.getKey())) return entry.getValue();
         }
         return "";
+    }
+
+    public static String resolveFriendlyAppName(Context ctx, String rawPkgOrName) {
+        if (rawPkgOrName == null || rawPkgOrName.isEmpty()) return "Streaming";
+        String base = rawPkgOrName.split("\u00B7")[0].trim();
+        String lower = base.toLowerCase(Locale.US);
+        for (String[] row : CORE_STREAMING_CATALOG) {
+            if (lower.equals(row[1].toLowerCase(Locale.US)) || lower.equals(row[0].toLowerCase(Locale.US))) return row[0];
+        }
+        String matched = matchFriendlyAppByKeyword(lower);
+        if (!matched.isEmpty()) return matched;
+        return queryPackageManagerAppLabel(ctx, base);
+    }
+
+    private static String matchFriendlyAppByKeyword(String lower) {
+        String code = matchProviderCodeByKeyword(lower);
+        if (!code.isEmpty() && CODE_TO_DISPLAY.containsKey(code)) return CODE_TO_DISPLAY.get(code);
+        for (String[] row : CORE_STREAMING_CATALOG) {
+            String key = row[0].toLowerCase(Locale.US).split(" ")[0];
+            if (key.length() >= 3 && lower.contains(key)) return row[0];
+        }
+        if (lower.contains("graymatrix")) return "ZEE5";
+        if (lower.contains("xstream")) return "Airtel Xstream";
+        return lower.contains("mxtech") ? "MX Player" : "";
+    }
+
+    private static String queryPackageManagerAppLabel(Context ctx, String pkg) {
+        if (ctx == null || !pkg.contains(".")) return pkg;
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            CharSequence lbl = pm.getApplicationLabel(ai);
+            if (lbl != null && lbl.length() > 0) return lbl.toString().trim();
+        } catch (Throwable ignored) {}
+        return pkg;
+    }
+
+    public static String matchProviderCodeByKeyword(String lowerText) {
+        if (lowerText == null || lowerText.isEmpty()) return "";
+        for (Map.Entry<String, String> e : KEYWORD_TO_CODE.entrySet()) {
+            if (lowerText.contains(e.getKey())) return e.getValue();
+        }
+        return "";
+    }
+
+    public static List<String> inferPackageCodesFromText(String text) {
+        List<String> pkgs = new ArrayList<>();
+        if (text == null || text.isEmpty()) return pkgs;
+        String lower = text.toLowerCase(Locale.US);
+        for (Map.Entry<String, String> e : KEYWORD_TO_CODE.entrySet()) {
+            if (lower.contains(e.getKey()) && !pkgs.contains(e.getValue())) pkgs.add(e.getValue());
+        }
+        return pkgs;
+    }
+
+    public static boolean matchesSpokenPlatformFilter(String itemApp, String combinedQuery) {
+        List<String> requestedCodes = inferPackageCodesFromText(combinedQuery);
+        if (requestedCodes.isEmpty()) return true;
+        String itemCode = matchProviderCodeByKeyword(itemApp != null ? itemApp.toLowerCase(Locale.US) : "");
+        return !itemCode.isEmpty() && requestedCodes.contains(itemCode);
+    }
+
+    public static int getPlatformColorInt(String app) {
+        if (app == null || app.isEmpty()) return 0xFF334155;
+        String lower = app.toLowerCase(Locale.US);
+        for (String[] row : CORE_STREAMING_CATALOG) {
+            String key = row[0].toLowerCase(Locale.US).split(" ")[0];
+            if (lower.contains(key) || lower.contains(row[1].toLowerCase(Locale.US))) {
+                try { return android.graphics.Color.parseColor(row[2]); } catch (Throwable ignored) {}
+            }
+        }
+        return 0xFF334155;
+    }
+
+    public static void adaptSeedItemForRegion(JSONObject item, String countryCode) {
+        if (item == null || "IN".equalsIgnoreCase(countryCode)) return;
+        if (!"jhs".equals(item.optString("provider_code"))) return;
+        try {
+            boolean isJackal = item.optString("title").toLowerCase(Locale.US).contains("jackal");
+            String newCode = isJackal && "US".equalsIgnoreCase(countryCode) ? "pck" : "pmp";
+            String newApp = normalizeProviderName(newCode, "Paramount+");
+            item.put("provider_code", newCode).put("app", newApp);
+            item.put("launch_pkg", resolveAndroidPackage(newApp)).put("launch_uri", "");
+        } catch (Exception ignored) {}
     }
 
     public static String resolveTitleFromSlugIfRomanized(

@@ -514,28 +514,7 @@ public final class HeroSliderBuilder {
     }
 
     static int getPlatformColor(String app) {
-        if (app == null) return 0xFF334155;
-        String lower = app.toLowerCase();
-        int primary = matchPrimaryPlatformColor(lower);
-        if (primary != 0) return primary;
-        return matchSecondaryPlatformColor(lower);
-    }
-
-    private static int matchPrimaryPlatformColor(String lower) {
-        if (lower.contains("netflix")) return GlassTheme.COLOR_NETFLIX;
-        if (lower.contains("prime")) return GlassTheme.COLOR_PRIME;
-        if (lower.contains("hotstar") || lower.contains("jio")) return GlassTheme.COLOR_HOTSTAR;
-        if (lower.contains("apple")) return GlassTheme.COLOR_APPLE_TV;
-        if (lower.contains("youtube") || lower.contains("smarttube")) return GlassTheme.COLOR_YOUTUBE;
-        return 0;
-    }
-
-    private static int matchSecondaryPlatformColor(String lower) {
-        if (lower.contains("sony")) return GlassTheme.COLOR_SONYLIV;
-        if (lower.contains("zee")) return GlassTheme.COLOR_ZEE5;
-        if (lower.contains("airtel") || lower.contains("xstream")) return 0xFFDC2626;
-        if (lower.contains("stremio")) return 0xFF7C3AED;
-        return 0xFF334155;
+        return RegionProviderRegistry.getPlatformColorInt(app);
     }
 
     private static String capitalize(String s) {

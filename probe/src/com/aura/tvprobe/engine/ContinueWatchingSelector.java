@@ -87,15 +87,7 @@ public final class ContinueWatchingSelector {
     }
 
     private static String normalizePackageDisplayName(String base) {
-        String low = base.toLowerCase();
-        if (low.contains("sonyliv")) return "SonyLIV";
-        if (low.contains("netflix")) return "Netflix";
-        if (low.contains("prime") || low.contains("amazon")) return "Prime Video";
-        if (low.contains("hotstar") || low.contains("jio")) return "Disney+ Hotstar";
-        if (low.contains("apple")) return "Apple TV+";
-        if (low.contains("graymatrix") || low.contains("zee")) return "ZEE5";
-        if (low.contains("xstream") || low.contains("airtel")) return "Airtel Xstream";
-        return base;
+        return RegionProviderRegistry.resolveFriendlyAppName(null, base);
     }
 
     private static List<JSONObject> roundRobinInterleave(Map<String, List<JSONObject>> byPlatform, int maxItems) {

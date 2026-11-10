@@ -384,7 +384,7 @@ public class SessionInspector {
 
     public void persistSerializedSession(JSONObject sessionJson) {
         if (sessionJson == null) return;
-        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String profile = db.getValidActiveProfile();
         sessionToNowPlaying(sessionJson, profile);
     }
 
@@ -561,22 +561,7 @@ public class SessionInspector {
     }
 
     public static String friendlyApp(String pkg) {
-        if (pkg.contains("amazon")) return "Prime Video";
-        if (pkg.contains("netflix")) return "Netflix";
-        if (pkg.contains("smarttube")) return "SmartTube";
-        if (pkg.contains("youtube")) return "YouTube";
-        if (pkg.contains("hotstar")) return "Disney+ Hotstar";
-        if (pkg.contains("appletv") || pkg.contains("apple.atve")) return "Apple TV+";
-        return friendlyAppExtended(pkg);
-    }
-
-    private static String friendlyAppExtended(String pkg) {
-        if (pkg.contains("xstream")) return "Airtel Xstream";
-        if (pkg.contains("sonyliv")) return "SonyLIV";
-        if (pkg.contains("stremio")) return "Stremio";
-        if (pkg.contains("graymatrix")) return "ZEE5";
-        if (pkg.contains("mxtech")) return "MX Player";
-        return pkg;
+        return RegionProviderRegistry.resolveFriendlyAppName(null, pkg);
     }
 
     private JSONArray getMediaSessions() {

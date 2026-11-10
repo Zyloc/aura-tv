@@ -249,7 +249,7 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private boolean handleSetProfileRoute(OutputStream out, Uri uri) throws Exception {
-        String prof = optParam(uri, "profile", AuraDb.DEFAULT_PROFILE);
+        String prof = optParam(uri, "profile", db.getValidActiveProfile());
         db.setSetting("active_profile", prof);
         writeHttpResponse(out, "application/json", "{\"ok\":true,\"active_profile\":\"" + prof + "\"}");
         return true;
@@ -359,7 +359,7 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private boolean handleSyncRoute(OutputStream out, String reqBody) throws Exception {
-        String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String prof = db.getValidActiveProfile();
         if (!reqBody.isEmpty()) sync.ingestRemoteSync(new JSONObject(reqBody), prof);
         JSONObject resp = new JSONObject();
         resp.put("ok", true);

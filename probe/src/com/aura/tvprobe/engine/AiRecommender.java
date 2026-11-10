@@ -1028,7 +1028,15 @@ public class AiRecommender {
         addSeedBatchThree(arr);
         addSeedBatchFour(arr);
         addSeedBatchFive(arr);
+        adaptSeedsToActiveRegion(arr);
         return db.filterOutWatched(arr);
+    }
+
+    private void adaptSeedsToActiveRegion(JSONArray arr) {
+        String country = RegionProviderRegistry.getCountryCode(db);
+        for (int i = 0; i < arr.length(); i++) {
+            RegionProviderRegistry.adaptSeedItemForRegion(arr.optJSONObject(i), country);
+        }
     }
 
     private void addSeedBatchOne(JSONArray arr) {

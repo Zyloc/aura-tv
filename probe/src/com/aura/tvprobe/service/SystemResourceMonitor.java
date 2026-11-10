@@ -122,7 +122,7 @@ public final class SystemResourceMonitor {
         int sysCpu = sampleSystemCpuLoadPct(freqsMhz, auraCpu, mem);
         out.put("cpu_load_pct", sysCpu);
         out.put("aura_cpu_pct", Math.round(auraCpu * 10.0) / 10.0);
-        out.put("cpu_freq_str", String.format(Locale.US, "4\u00D7 %.2f GHz", freqsMhz[0] / 1000.0));
+        out.put("cpu_freq_str", String.format(Locale.US, "%d\u00D7 %.2f GHz", freqsMhz.length, freqsMhz[0] / 1000.0));
         out.put("cpu_cores_mhz", toJsonIntArray(freqsMhz));
     }
 
@@ -133,8 +133,9 @@ public final class SystemResourceMonitor {
     }
 
     private static int[] readCoreFrequenciesMhz() {
-        int[] mhz = new int[]{1100, 1100, 1100, 1100};
-        for (int i = 0; i < 4; i++) {
+        int cores = Math.max(1, Math.min(16, Runtime.getRuntime().availableProcessors()));
+        int[] mhz = new int[cores];
+        for (int i = 0; i < cores; i++) {
             String line = readFirstLine("/sys/devices/system/cpu/cpu" + i + "/cpufreq/scaling_cur_freq");
             long khz = parseLongSafe(line, 1100000L);
             mhz[i] = (int) (khz / 1000L);

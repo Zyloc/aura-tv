@@ -59,15 +59,15 @@ public final class ModalOverlayBuilder {
         final String[] currentFilter = {"ALL"};
         final List<JSONObject> allHistory = collectUnifiedDateSortedHistory(db, activeProfile);
         Runnable renderList = () -> populateHistoryGrid(gridRows, allHistory, currentFilter[0], ctx, hostContainer, actions);
-        LinearLayout filterRow = addHistoryHeaderAndFilters(panel, ctx, allHistory.size(), currentFilter, renderList, hostContainer, actions);
+        LinearLayout filterRow = addHistoryHeaderAndFilters(panel, ctx, db, allHistory, currentFilter, renderList, hostContainer, actions);
         panel.addView(wrapInVerticalScroll(ctx, gridRows), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         finishWatchHistoryModal(hostContainer, panel, filterRow, renderList);
     }
 
-    private static LinearLayout addHistoryHeaderAndFilters(LinearLayout panel, Context ctx, int count, String[] currentFilter,
-                                                           Runnable renderList, FrameLayout hostContainer, ModalActions actions) {
-        panel.addView(buildHistoryHeader(ctx, count, hostContainer, actions));
-        LinearLayout filterRow = buildHistoryFilterRow(ctx, currentFilter, renderList, hostContainer, actions);
+    private static LinearLayout addHistoryHeaderAndFilters(LinearLayout panel, Context ctx, AuraDb db, List<JSONObject> allHistory,
+                                                           String[] currentFilter, Runnable renderList, FrameLayout hostContainer, ModalActions actions) {
+        panel.addView(buildHistoryHeader(ctx, db, allHistory.size(), hostContainer, actions));
+        LinearLayout filterRow = buildHistoryFilterRow(ctx, db, allHistory, currentFilter, renderList, hostContainer, actions);
         panel.addView(filterRow);
         return filterRow;
     }
@@ -89,10 +89,10 @@ public final class ModalOverlayBuilder {
     }
 
     // Header Row
-    private static LinearLayout buildHistoryHeader(Context ctx, int totalCount,
+    private static LinearLayout buildHistoryHeader(Context ctx, AuraDb db, int totalCount,
                                                    FrameLayout hostContainer, ModalActions actions) {
         LinearLayout hdr = createModalHeaderRow(ctx, 10);
-        hdr.addView(buildHistoryTitleColumn(ctx, totalCount), GlassTheme.weightParams(1f));
+        hdr.addView(buildHistoryTitleColumn(ctx, db, totalCount), GlassTheme.weightParams(1f));
         TextView syncBtn = createHeaderActionBtn(ctx, "\u21BB Sync & Re-Rank", v -> {
             closeModal(hostContainer, actions);
             if (actions != null) actions.onRefreshRecommendations(true);
@@ -102,29 +102,51 @@ public final class ModalOverlayBuilder {
         return hdr;
     }
 
-    private static LinearLayout buildHistoryTitleColumn(Context ctx, int totalCount) {
+    private static LinearLayout buildHistoryTitleColumn(Context ctx, AuraDb db, int totalCount) {
         LinearLayout titleCol = new LinearLayout(ctx);
         titleCol.setOrientation(LinearLayout.VERTICAL);
         titleCol.addView(GlassTheme.makeText(ctx, "Watch History", 18f,
             GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1));
+        String providers = RegionProviderRegistry.getProviderDisplayListForRegion(db);
         titleCol.addView(GlassTheme.makeText(ctx,
-            "Sorted by recent activity across Netflix, Prime Video, Disney+ Hotstar & Apple TV+ (" + totalCount + " titles)",
+            "Sorted by recent activity across " + providers + " (" + totalCount + " titles)",
             10.5f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1));
         return titleCol;
     }
 
     // Platform Filter Bar
-    private static LinearLayout buildHistoryFilterRow(Context ctx, String[] currentFilter, Runnable renderList,
+    private static LinearLayout buildHistoryFilterRow(Context ctx, AuraDb db, List<JSONObject> allHistory,
+                                                      String[] currentFilter, Runnable renderList,
                                                       FrameLayout hostContainer, ModalActions actions) {
         LinearLayout filterRow = new LinearLayout(ctx);
         filterRow.setOrientation(LinearLayout.HORIZONTAL);
         filterRow.setGravity(Gravity.CENTER_VERTICAL);
         filterRow.setPadding(0, 0, 0, dp(ctx, 12));
-        String[] filters = {"All Platforms", "Netflix", "Prime Video", "Disney+ Hotstar", "Apple TV+"};
-        for (String f : filters) {
+        for (String f : resolveDynamicHistoryFilterPills(db, allHistory)) {
             filterRow.addView(createFilterPill(ctx, f, currentFilter, renderList, hostContainer, actions));
         }
         return filterRow;
+    }
+
+    private static List<String> resolveDynamicHistoryFilterPills(AuraDb db, List<JSONObject> allHistory) {
+        List<String> pills = new ArrayList<>();
+        pills.add("All Platforms");
+        for (JSONObject item : allHistory) {
+            String p = ContinueWatchingSelector.cleanPlatformName(item.optString("app", item.optString("app_name", "")));
+            if (!p.isEmpty() && !"Streaming".equals(p) && !"TV".equals(p) && !pills.contains(p) && pills.size() < 6) {
+                pills.add(p);
+            }
+        }
+        appendRegionalFallbackPills(db, pills);
+        return pills;
+    }
+
+    private static void appendRegionalFallbackPills(AuraDb db, List<String> pills) {
+        for (String code : RegionProviderRegistry.getProvidersForCountry(RegionProviderRegistry.getCountryCode(db))) {
+            if (pills.size() >= 6) break;
+            String name = RegionProviderRegistry.normalizeProviderName(code, code);
+            if (!pills.contains(name)) pills.add(name);
+        }
     }
 
     private static TextView createFilterPill(Context ctx, String f, String[] currentFilter,

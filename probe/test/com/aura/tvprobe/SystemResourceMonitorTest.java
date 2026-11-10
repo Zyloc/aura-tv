@@ -68,4 +68,16 @@ public class SystemResourceMonitorTest {
         assertTrue(TvDeviceProfile.isKnownHeavyOttPackage("jp.unext.mediaplayer"));
         assertEquals("com.sony.dtv.tvinput/.hdmi.HdmiInputService/HW2", TvDeviceProfile.resolveFallbackHdmiInputId("SONY", 2));
     }
+
+    @Test
+    public void testDynamicPlatformResolutionAndSeedAdaptation() throws Exception {
+        assertEquals("Max", RegionProviderRegistry.resolveFriendlyAppName(null, "com.wbd.stream"));
+        assertEquals("BBC iPlayer", RegionProviderRegistry.resolveFriendlyAppName(null, "bbc.iplayer.android"));
+        assertTrue(RegionProviderRegistry.matchesSpokenPlatformFilter("Max", "show me dark sci-fi on hbo max"));
+        assertFalse(RegionProviderRegistry.matchesSpokenPlatformFilter("Netflix", "show me dark sci-fi on hbo max"));
+        org.json.JSONObject seed = new org.json.JSONObject().put("title", "MobLand").put("provider_code", "jhs").put("app", "Disney+ Hotstar");
+        RegionProviderRegistry.adaptSeedItemForRegion(seed, "US");
+        assertEquals("pmp", seed.optString("provider_code"));
+        assertEquals("Paramount+", seed.optString("app"));
+    }
 }
