@@ -80,13 +80,16 @@ public class AiRecommender {
     }
 
     private JSONArray executeRefreshPipeline(String profileId, JSONArray history, AgentProgressListener progress) {
-        int currentYear = JustWatchGraph.getCurrentYear();
-        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
-        int epoch = ImpressionTracker.advanceEpoch(db, profileId);
-        if (progress != null) progress.onStep("Modeling temporal taste vector from your recent watch history\u2026");
-        JSONObject seedPlan = resolveSeedPlan(profileId, collectWatchedTitles(history), minModernYear, currentYear);
-        if (progress != null) progress.onStep("Retrieving & scoring verified candidates across your streaming apps\u2026");
-        return buildSotaRecommendationsForEpoch(profileId, seedPlan, minModernYear, currentYear, epoch);
+        AgentStatusNarrator narrator = AgentStatusNarrator.start(this, db, profileId, "", progress);
+        try {
+            int currentYear = JustWatchGraph.getCurrentYear();
+            int minModernYear = JustWatchGraph.getDefaultMinModernYear();
+            int epoch = ImpressionTracker.advanceEpoch(db, profileId);
+            JSONObject seedPlan = resolveSeedPlan(profileId, collectWatchedTitles(history), minModernYear, currentYear);
+            return buildSotaRecommendationsForEpoch(profileId, seedPlan, minModernYear, currentYear, epoch);
+        } finally {
+            narrator.stop();
+        }
     }
 
     private JSONObject resolveSeedPlan(String profileId, List<String> watchedList, int minModernYear, int currentYear) {
@@ -397,14 +400,16 @@ public class AiRecommender {
      * Uses SOTA Item-to-Item Similarity + Genre Jaccard + Bayesian Vote Confidence.
      */
     public JSONArray traverseSimilarToWatched(String profileId, String seedTitle, AgentProgressListener progress) {
-        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
-        if (progress != null) progress.onStep("Traversing co-watch graph & genre vector for " + seedTitle + "\u2026");
-        JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seedTitle, minModernYear);
-        JSONArray filtered = filterAndFormatSimilarHits(sim, seedTitle);
-        if (filtered.length() == 0) {
-            appendFallbackSimilarHits(profileId, seedTitle, filtered);
+        AgentStatusNarrator narrator = AgentStatusNarrator.start(this, db, profileId, "Similar to " + seedTitle, progress);
+        try {
+            int minModernYear = JustWatchGraph.getDefaultMinModernYear();
+            JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(seedTitle, minModernYear);
+            JSONArray filtered = filterAndFormatSimilarHits(sim, seedTitle);
+            if (filtered.length() == 0) appendFallbackSimilarHits(profileId, seedTitle, filtered);
+            return filtered;
+        } finally {
+            narrator.stop();
         }
-        return filtered;
     }
 
     private JSONArray filterAndFormatSimilarHits(JSONArray sim, String seedTitle) {

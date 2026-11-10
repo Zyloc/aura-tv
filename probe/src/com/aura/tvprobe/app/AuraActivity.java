@@ -619,7 +619,7 @@ public class AuraActivity extends Activity implements
     private void refreshAllData(boolean forceRefresh) {
         updateNavMetadata();
         populateTraversalChips();
-        if (forceRefresh) setBannerText("Refreshing personalized recommendations for you\u2026", true);
+        if (forceRefresh) setBannerText("Looking at what you\u2019ve been watching lately\u2026", true);
         JSONArray cached = db.getProfileRecommendations(activeProfile);
         boolean hadFresh = cached.length() >= 12 && db.isRecoCacheFresh(activeProfile);
         if (!forceRefresh || railsContainer.getChildCount() == 0) {
@@ -958,18 +958,9 @@ public class AuraActivity extends Activity implements
         String seed = item.optString("title", "this title");
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
-        setBannerText("Analyzing your watch history & taste vector for " + seed + "\u2026", true);
-        scheduleSimilarProgressUpdate(seed);
+        setBannerText("Looking for shows and movies like " + seed + "\u2026", true);
         final long startMs = System.currentTimeMillis();
         bgPool.submit(() -> executeSimilarTraversal(seed, startMs));
-    }
-
-    private void scheduleSimilarProgressUpdate(String seed) {
-        ui.postDelayed(() -> {
-            if (loadingOverlay != null && loadingOverlay.getVisibility() == View.VISIBLE) {
-                setBannerText("Scanning streaming catalogs & ranking matches similar to " + seed + "\u2026", true);
-            }
-        }, 720);
     }
 
     private void executeSimilarTraversal(String seed, long startMs) {
@@ -1090,7 +1081,7 @@ public class AuraActivity extends Activity implements
             SearchOverlay.show(searchOverlay, this, false);
         }
         SearchOverlay.setLoading(searchOverlay, true,
-            "Analyzing query & watch history across your streaming apps\u2026");
+            "Understanding what you\u2019re in the mood to watch\u2026");
     }
 
     private void submitSearchQueryTurn(String q, long startMs) {

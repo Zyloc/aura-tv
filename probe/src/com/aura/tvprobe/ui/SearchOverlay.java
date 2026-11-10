@@ -161,8 +161,6 @@ public final class SearchOverlay {
     }
 
     public static void setLoading(FrameLayout overlay, boolean loading, String message) {
-        View v = overlay.findViewWithTag(TAG_LOADING);
-        if (v != null) v.setVisibility(loading ? View.VISIBLE : View.GONE);
         TextView txt = findTagged(overlay, TAG_LOADING_TEXT);
         if (txt != null && message != null && !message.isEmpty()) txt.setText(message);
         animateLoadingPanel(overlay.findViewWithTag(TAG_LOADING_PANEL), loading);
@@ -390,22 +388,8 @@ public final class SearchOverlay {
         LinearLayout.LayoutParams abLp = GlassTheme.wrapParams();
         abLp.rightMargin = dp(ctx, 10);
         inputBox.addView(aiBadge, abLp);
-        inputBox.addView(et, new LinearLayout.LayoutParams(dp(ctx, 288), ViewGroup.LayoutParams.WRAP_CONTENT));
-        inputBox.addView(createInlineSearchSpinner(ctx));
+        inputBox.addView(et, new LinearLayout.LayoutParams(dp(ctx, 310), ViewGroup.LayoutParams.WRAP_CONTENT));
         inputBox.addView(icon, new LinearLayout.LayoutParams(dp(ctx, 26), dp(ctx, 26)));
-    }
-
-    // Subtle inline spinner inside the input pill when searching
-    private static ProgressBar createInlineSearchSpinner(Context ctx) {
-        ProgressBar pb = new ProgressBar(ctx);
-        int pbSize = dp(ctx, 14);
-        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(pbSize, pbSize);
-        pbLp.rightMargin = dp(ctx, 8);
-        pb.setLayoutParams(pbLp);
-        pb.getIndeterminateDrawable().setTint(Color.WHITE);
-        pb.setTag(TAG_LOADING);
-        pb.setVisibility(View.GONE);
-        return pb;
     }
 
     private static void bindInputPillInteractions(Context ctx, LinearLayout inputBox, EditText et,

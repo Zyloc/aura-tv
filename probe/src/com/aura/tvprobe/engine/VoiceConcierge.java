@@ -105,12 +105,20 @@ public class VoiceConcierge {
     private JSONObject runAgenticSearchTurn(
         String profileId, String userText, List<String> activeFilters, AiRecommender.AgentProgressListener progress
     ) {
+        AgentStatusNarrator narrator = AgentStatusNarrator.start(ai, db, profileId, userText, progress);
+        try {
+            return executeAgenticTurnBody(profileId, userText, activeFilters);
+        } finally {
+            narrator.stop();
+        }
+    }
+
+    private JSONObject executeAgenticTurnBody(String profileId, String userText, List<String> activeFilters) {
         JSONArray turns = isFollowUpRefinement(userText) ? getOrInitTurns(profileId) : new JSONArray();
         int currentYear = JustWatchGraph.getCurrentYear();
         String contextualQuery = buildContextualQuery(turns, userText);
         int minModernYear = resolveSearchMinYear(contextualQuery, currentYear, JustWatchGraph.getDefaultMinModernYear());
-        List<String> cfPool = runRetrievalSteps(profileId, userText, contextualQuery, minModernYear, currentYear, progress);
-        if (progress != null) progress.onStep("AI ranking top matches for your conversation\u2026");
+        List<String> cfPool = runRetrievalSteps(profileId, contextualQuery, minModernYear);
         String prompt = buildPrompt(profileId, turns, userText, activeFilters, collectWatchedNames(profileId), cfPool, minModernYear, currentYear);
         String rawJson = ai.callGeminiJson(prompt);
         persistTurnResult(profileId, turns, userText, contextualQuery, activeFilters, rawJson, minModernYear, currentYear);
@@ -131,11 +139,7 @@ public class VoiceConcierge {
         return turns != null ? turns : new JSONArray();
     }
 
-    private List<String> runRetrievalSteps(
-        String profileId, String userText, String contextualQuery,
-        int minModernYear, int currentYear, AiRecommender.AgentProgressListener progress
-    ) {
-        if (progress != null) progress.onStep("Planning dynamic JustWatch GraphQL filters for \"" + userText + "\"\u2026");
+    private List<String> runRetrievalSteps(String profileId, String contextualQuery, int minModernYear) {
         List<String> scatterGathered = ai.executeScatterGatherForSearch(profileId, contextualQuery, minModernYear);
         if (scatterGathered.size() >= 4) return scatterGathered;
         JSONObject searchPlan = ai.buildFastSeedPlan(profileId, contextualQuery);

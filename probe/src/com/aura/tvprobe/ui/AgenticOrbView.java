@@ -240,9 +240,9 @@ public final class AgenticOrbView extends View {
     }
 
     private static void addBadgeChild(Context ctx, LinearLayout col) {
-        TextView badge = GlassTheme.makeText(ctx, "AURA AGENTIC RECOGNITION", 9.5f,
+        TextView badge = GlassTheme.makeText(ctx, "AURA", 9.5f,
             Color.argb(210, 148, 163, 184), GlassTheme.FONT_BOLD, 1);
-        badge.setLetterSpacing(0.14f);
+        badge.setLetterSpacing(0.18f);
         badge.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams bLp = GlassTheme.wrapParams();
         bLp.bottomMargin = GlassTheme.dp(ctx, 6);
@@ -251,7 +251,7 @@ public final class AgenticOrbView extends View {
 
     private static void addMainStatusChild(Context ctx, LinearLayout col, int statusTextTag) {
         TextView mainTxt = GlassTheme.makeText(ctx,
-            "Analyzing your watch history & taste profile\u2026", 14.5f,
+            "Looking at what you love to watch\u2026", 14.5f,
             Color.WHITE, GlassTheme.FONT_BOLD, 2);
         mainTxt.setGravity(Gravity.CENTER);
         if (statusTextTag != 0) mainTxt.setTag(statusTextTag);
@@ -260,7 +260,7 @@ public final class AgenticOrbView extends View {
 
     private static void addSubStatusChild(Context ctx, LinearLayout col, int subTextTag) {
         TextView subTxt = GlassTheme.makeText(ctx,
-            "Synthesizing deep-linked matches across your streaming apps", 10.5f,
+            "Checking what\u2019s streaming across your apps", 10.5f,
             GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
         subTxt.setGravity(Gravity.CENTER);
         if (subTextTag != 0) subTxt.setTag(subTextTag);
