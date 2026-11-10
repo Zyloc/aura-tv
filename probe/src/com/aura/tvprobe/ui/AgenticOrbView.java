@@ -110,14 +110,17 @@ public final class AgenticOrbView extends View {
     }
 
     private boolean isEffectivelyVisible() {
-        if (getWindowVisibility() != VISIBLE || !isShown() || getAlpha() <= 0.05f) return false;
-        android.view.ViewParent p = getParent();
-        while (p instanceof View) {
-            View v = (View) p;
-            if (v.getVisibility() != VISIBLE || v.getAlpha() <= 0.05f) return false;
-            p = v.getParent();
+        return getWindowVisibility() == VISIBLE && isShown();
+    }
+
+    public static void ensureRunningIn(View root) {
+        if (root instanceof AgenticOrbView) {
+            ((AgenticOrbView) root).startLoop();
+            root.invalidate();
+        } else if (root instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) root;
+            for (int i = 0; i < vg.getChildCount(); i++) ensureRunningIn(vg.getChildAt(i));
         }
-        return true;
     }
 
     private void onPhaseUpdate(ValueAnimator a) {

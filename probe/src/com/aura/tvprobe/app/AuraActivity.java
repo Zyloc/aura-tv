@@ -1091,22 +1091,32 @@ public class AuraActivity extends Activity implements
 
     private void startCatchMeUpForItem(JSONObject item) {
         String title = item.optString("title", "Show");
-        Toast.makeText(this, "\uD83D\uDD0A Preparing 2-minute audio recap for " + title + "\u2026", Toast.LENGTH_SHORT).show();
-        bgPool.submit(() -> {
+        setBannerText("Preparing 2-minute audio recap for " + title + "\u2026", true);
+        bgPool.submit(() -> executeCatchMeUpBackground(title, item));
+    }
+
+    private void executeCatchMeUpBackground(String title, JSONObject item) {
+        AgentStatusNarrator narrator = AgentStatusNarrator.start(
+            ai, db, activeProfile, "Catch me up on " + title,
+            msg -> ui.post(() -> setBannerText(msg, true)));
+        try {
             JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, activeProfile, "Catch me up on " + title, item);
             ui.post(() -> presentCatchMeUpInDetail(title, recap));
-        });
+        } finally {
+            narrator.stop();
+        }
     }
 
     private void presentCatchMeUpInDetail(String title, JSONObject recap) {
+        setBannerText("", false);
         if (recap == null) return;
-        if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+        if (!DetailOverlay.isShowingTitle(detailOverlay, title) && lastFocusedView != null) {
+            DetailOverlay.showRecapInDetail(detailOverlay, recap);
+        } else if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
             DetailOverlay.showRecapInDetail(detailOverlay, recap);
         }
         String spoken = recap.optString("spoken_narration", "");
-        if (!spoken.isEmpty()) {
-            AuraTtsNarrator.speak(this, spoken, null);
-        }
+        if (!spoken.isEmpty()) AuraTtsNarrator.speak(this, spoken, null);
     }
 
     @Override
@@ -1544,10 +1554,14 @@ public class AuraActivity extends Activity implements
     }
 
     private void fadeInGlobalLoadingOverlay() {
-        if (loadingOverlay.getVisibility() == View.VISIBLE) return;
+        if (loadingOverlay.getVisibility() == View.VISIBLE) {
+            AgenticOrbView.ensureRunningIn(loadingOverlay);
+            return;
+        }
         loadingOverlay.animate().cancel();
         loadingOverlay.setAlpha(0f);
         loadingOverlay.setVisibility(View.VISIBLE);
+        AgenticOrbView.ensureRunningIn(loadingOverlay);
         loadingOverlay.animate().alpha(1f).setDuration(180).setInterpolator(GlassTheme.EASE).start();
     }
 

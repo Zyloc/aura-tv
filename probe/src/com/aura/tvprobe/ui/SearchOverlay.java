@@ -187,6 +187,7 @@ public final class SearchOverlay {
         panel.animate().cancel();
         if (loading) {
             panel.setVisibility(View.VISIBLE);
+            AgenticOrbView.ensureRunningIn(panel);
             panel.animate().alpha(1f).setDuration(160).start();
         } else {
             panel.animate().alpha(0f).setDuration(150).withEndAction(() -> panel.setVisibility(View.GONE)).start();
