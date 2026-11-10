@@ -285,7 +285,8 @@ public class JustWatchGraph {
     private static void extractDynamicSpecNodes(JSONArray edges, JSONObject spec, String lang, JSONArray out) {
         if (edges == null) return;
         String sq = spec.optString("searchQuery", "").trim();
-        int minYr = !sq.isEmpty() ? 1950 : Math.max(1950, spec.optInt("minYear", 2008));
+        int specMin = spec.optInt("minYear", 2008);
+        int minYr = (!sq.isEmpty() && specMin < getCurrentYear() - 1) ? 1950 : Math.max(1950, specMin);
         String seedAnchor = !sq.isEmpty() ? spec.optString("seedAnchor", sq).trim() : "";
         String specGenres = joinGenreArray(extractSpecGenres(spec.optJSONArray("genres")));
         JSONArray objTypes = extractSpecObjectTypes(spec.optJSONArray("objectTypes"));

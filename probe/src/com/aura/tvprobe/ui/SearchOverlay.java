@@ -318,7 +318,7 @@ public final class SearchOverlay {
         LinearLayout bar = new LinearLayout(ctx);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setClipChildren(false);
+        bar.setClipChildren(true);
         bar.setPadding(0, 0, 0, dp(ctx, 14));
         return bar;
     }

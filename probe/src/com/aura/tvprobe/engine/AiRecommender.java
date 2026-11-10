@@ -537,10 +537,11 @@ public class AiRecommender {
     private String buildPlannerTaskInstructions(int minModernYear, int currentYear) {
         return "Task:\n" +
             "1. Plan 'queries': 6 diverse JustWatch GraphQL query spec objects for parallel scatter-gather retrieval. " +
+            "If 'User Search Query' asks for 'new', 'latest', 'recent', or broad genre/platform discovery without naming a specific title or actor (e.g. 'new movies', 'latest shows'), set 'searchQuery': \"\" and 'includeSimilar': false on ALL 6 'queries' specs with 'minYear': " + minModernYear + " across diverse genres and productionCountries ([\"US\",\"GB\"] and [\"IN\"]), and set 'primary_queries': [] so live " + minModernYear + "\u2013" + currentYear + " JustWatch catalog titles are discovered instead of older training-cutoff titles. " +
             "If 'User Search Query' is an actor, director, or franchise query (e.g. 'Amitabh Bachchan movies', 'Jason Statham comedy movies'), set 'includeSimilar': false on the 6 'queries' specs (using the actor/director name with 'genres': [] and 5 of their iconic films as 'searchQuery') and list 10 of their specific movies/shows in 'primary_queries' (including action-comedies, heist films, and lighthearted hits starring that person). " +
             "If 'User Search Query' is a 'like X' similarity query, set 'searchQuery' to X and 5 iconic peer titles in that exact sub-genre with 'includeSimilar': true. " +
             "If 'User Search Query' is empty, generate the 6 query specs from the plot synopses, genres, countries, and types of the User's Watched & In-Progress Shows.\n" +
-            "2. Plan 'primary_queries': 10 specific show/movie titles directly matching the request or watched history.\n" +
+            "2. Plan 'primary_queries': 10 specific show/movie titles directly matching the request or watched history (or [] for 'new'/'latest' release queries).\n" +
             "3. Plan 'watched_traversal_seeds': 3 seed titles for co-watch traversal.\n" +
             "4. Plan 'traversal_chips': 3 short clickable search phrases (max 24 chars each).\n" +
             "Return ONLY a JSON object with keys: 'queries', 'primary_queries', 'watched_traversal_seeds', 'traversal_chips'.";
@@ -550,7 +551,8 @@ public class AiRecommender {
         int currentYear = JustWatchGraph.getCurrentYear();
         List<String> watched = collectWatchedTitles(db.listHistory(profileId));
         String directSeed = extractSimilaritySeed(userQuery);
-        Future<JSONArray> directSimFut = submitDirectSimilarFetch(!directSeed.isEmpty() ? directSeed : userQuery);
+        String simSeed = minModernYear >= currentYear - 1 ? directSeed : (!directSeed.isEmpty() ? directSeed : userQuery);
+        Future<JSONArray> directSimFut = submitDirectSimilarFetch(simSeed);
         JSONObject plan = planAgentSearchStrategy(profileId, userQuery, watched, minModernYear, currentYear);
         JSONArray gathered = JustWatchGraph.executeScatterGatherSpecs(plan.optJSONArray("queries"));
         return mergeSearchScatterGatherResults(directSimFut, gathered, plan, minModernYear);
@@ -566,19 +568,21 @@ public class AiRecommender {
             Future<JSONArray> directSimFut, JSONArray gathered, JSONObject plan, int minModernYear) {
         List<String> summaries = new ArrayList<>();
         Set<String> seenNorm = new HashSet<>();
-        appendPrimaryQueryLookups(plan, seenNorm, summaries);
-        try { appendSearchCandidateSummaries(directSimFut.get(1500, TimeUnit.MILLISECONDS), seenNorm, summaries); } catch (Exception ignored) {}
-        appendSearchCandidateSummaries(gathered, seenNorm, summaries);
+        boolean isNewReleasesQuery = minModernYear >= JustWatchGraph.getCurrentYear() - 1;
+        if (!isNewReleasesQuery) appendPrimaryQueryLookups(plan, minModernYear, seenNorm, summaries);
+        try { appendSearchCandidateSummaries(directSimFut.get(1500, TimeUnit.MILLISECONDS), minModernYear, seenNorm, summaries); } catch (Exception ignored) {}
+        appendSearchCandidateSummaries(gathered, minModernYear, seenNorm, summaries);
+        if (isNewReleasesQuery) appendPrimaryQueryLookups(plan, minModernYear, seenNorm, summaries);
         appendFallbackPlanCandidates(plan, minModernYear, seenNorm, summaries);
         return summaries;
     }
 
-    private void appendPrimaryQueryLookups(JSONObject plan, Set<String> seenNorm, List<String> summaries) {
+    private void appendPrimaryQueryLookups(JSONObject plan, int minModernYear, Set<String> seenNorm, List<String> summaries) {
         JSONArray pq = plan != null ? plan.optJSONArray("primary_queries") : null;
         if (pq == null || pq.length() == 0) return;
         JSONObject[] hits = lookupTitlesInParallel(pq, Math.min(10, pq.length()));
         for (JSONObject h : hits) {
-            if (h != null && h.optBoolean("has_flatrate_offer", false)) addSearchCandidateSummary(h, seenNorm, summaries);
+            if (h != null && h.optBoolean("has_flatrate_offer", false)) addSearchCandidateSummary(h, minModernYear, seenNorm, summaries);
         }
     }
 
@@ -595,11 +599,11 @@ public class AiRecommender {
         return hits;
     }
 
-    private void appendSearchCandidateSummaries(JSONArray arr, Set<String> seenNorm, List<String> summaries) {
+    private void appendSearchCandidateSummaries(JSONArray arr, int minModernYear, Set<String> seenNorm, List<String> summaries) {
         if (arr == null || summaries.size() >= 36) return;
         for (int i = 0; i < arr.length() && summaries.size() < 36; i++) {
             JSONObject o = arr.optJSONObject(i);
-            if (o != null) addSearchCandidateSummary(o, seenNorm, summaries);
+            if (o != null) addSearchCandidateSummary(o, minModernYear, seenNorm, summaries);
         }
     }
 
@@ -609,11 +613,12 @@ public class AiRecommender {
         if (pq == null) return;
         for (int i = 0; i < pq.length() && i < 5; i++) {
             String q = pq.optString(i).trim();
-            if (!q.isEmpty()) appendSearchCandidateSummaries(JustWatchGraph.fetchCollaborativeSimilar(q, 2008), seenNorm, summaries);
+            if (!q.isEmpty()) appendSearchCandidateSummaries(JustWatchGraph.fetchCollaborativeSimilar(q, Math.max(2008, minModernYear)), minModernYear, seenNorm, summaries);
         }
     }
 
-    private void addSearchCandidateSummary(JSONObject o, Set<String> seenNorm, List<String> summaries) {
+    private void addSearchCandidateSummary(JSONObject o, int minModernYear, Set<String> seenNorm, List<String> summaries) {
+        if (minModernYear >= JustWatchGraph.getCurrentYear() - 1 && o.optInt("year", 0) < minModernYear) return;
         String t = o.optString("title", "").trim();
         String norm = AuraDb.normalizeTitleKey(t);
         if (t.isEmpty() || seenNorm.contains(norm) || db.isTitleWatched(t)) return;

@@ -107,8 +107,8 @@ public class VoiceConcierge {
     ) {
         JSONArray turns = isFollowUpRefinement(userText) ? getOrInitTurns(profileId) : new JSONArray();
         int currentYear = JustWatchGraph.getCurrentYear();
-        int minModernYear = JustWatchGraph.getDefaultMinModernYear();
         String contextualQuery = buildContextualQuery(turns, userText);
+        int minModernYear = resolveSearchMinYear(contextualQuery, currentYear, JustWatchGraph.getDefaultMinModernYear());
         List<String> cfPool = runRetrievalSteps(profileId, userText, contextualQuery, minModernYear, currentYear, progress);
         if (progress != null) progress.onStep("AI ranking top matches for your conversation\u2026");
         String prompt = buildPrompt(profileId, turns, userText, activeFilters, collectWatchedNames(profileId), cfPool, minModernYear, currentYear);
@@ -189,13 +189,24 @@ public class VoiceConcierge {
         int minModernYear, int currentYear, JSONObject out
     ) throws Exception {
         out.put("reply", parsed.optString("reply", "Updated picks for your search."));
-        int minSearchYear = (userText != null && userText.toLowerCase().contains("top releases")) ? (currentYear - 2) : 1950;
+        int minSearchYear = resolveSearchMinYear(userText, currentYear, minModernYear >= currentYear - 1 ? minModernYear : 1950);
         JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minSearchYear, currentYear);
         out.put("results", applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters));
         JSONArray parsedFollowUps = parsed.optJSONArray("follow_ups");
         if (parsedFollowUps != null && parsedFollowUps.length() > 0) {
             out.put("follow_ups", parsedFollowUps);
         }
+    }
+
+    public static int resolveSearchMinYear(String query, int currentYear, int defaultYear) {
+        if (query == null) return defaultYear;
+        String low = " " + query.toLowerCase().trim() + " ";
+        if (low.contains(" " + currentYear + " ") || low.contains("this year")) return currentYear;
+        if (low.contains(" new ") || low.contains(" latest ") || low.contains(" recent ")
+                || low.contains(" newest ") || low.contains("top releases") || low.contains(" " + (currentYear - 1) + " ")) {
+            return currentYear - 1;
+        }
+        return defaultYear;
     }
 
     private void backfillWithDeterministicSearch(
@@ -349,6 +360,7 @@ public class VoiceConcierge {
             "- SIMILARITY & FRANCHISE QUERIES: If the user asks for titles 'like X' or 'similar to X', EVERY SINGLE RESULT must match the subgenre, tone, scale, and storyline of X. NEVER include unrelated crime dramas or thrillers.\n" +
             "- ACTOR / DIRECTOR QUERIES: If the user searches for a specific actor or director (even with a genre modifier like 'Jason Statham comedy movies'), ONLY select candidates whose 'Cast=' includes that exact person (rank their exact-genre films first, followed by their most lighthearted/entertaining action-comedy or heist films from the pool; NEVER include any title without that person).\n" +
             "- FORMAT CONSTRAINT: If the user asks for 'movies' or 'films', ONLY return feature films (Type='Movie', NEVER TV series). If they ask for 'shows' or 'series', ONLY return TV series.\n" +
+            "- NEW / LATEST RELEASES: If the user asks for 'new', 'latest', or 'recent' releases, ONLY select " + minModernYear + "\u2013" + currentYear + " titles, rank " + currentYear + " releases first followed by " + minModernYear + ", and include a diverse mix of genres (Sci-Fi, Thriller, Comedy, Action, Drama) rather than a single genre.\n" +
             "- RECENCY WINDOW: Prioritize " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for franchise/similarity queries include iconic 2008\u2013" + currentYear + " peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +
             "1. 'reply': Short 1-sentence conversational summary explaining how you filtered and ranked the results.\n" +

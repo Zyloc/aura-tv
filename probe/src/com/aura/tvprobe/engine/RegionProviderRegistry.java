@@ -167,6 +167,6 @@ public final class RegionProviderRegistry {
     private static String stripCollisionSuffix(String slug) {
         String lower = slug.toLowerCase(Locale.US);
         if (lower.matches(".*-(chapter|part|vol|volume|season)-\\d{1,2}$")) return slug;
-        return slug.replaceAll("-\\d{1,2}$", "");
+        return slug.replaceAll("(-(19|20)\\d{2})?(-\\d{1,2})?$", "");
     }
 }
