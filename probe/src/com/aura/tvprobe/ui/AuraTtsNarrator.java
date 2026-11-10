@@ -35,6 +35,7 @@ public final class AuraTtsNarrator {
     private static int sActiveIdx = -1;
     private static long sSentenceStartMs = 0L;
     private static boolean sNativeRangeActive = false;
+    private static volatile int sSpeechEpoch = 0;
 
     private static final Runnable WORD_TICKER = AuraTtsNarrator::tickWordHighlight;
 
@@ -133,22 +134,22 @@ public final class AuraTtsNarrator {
     }
 
     private static void handleUtteranceDone(String id) {
-        if ("utt_final".equals(id)) {
+        if (id != null && id.equals("utt_" + sSpeechEpoch + "_final")) {
             postToMain(AuraTtsNarrator::finishNarrationUi);
         }
     }
 
     private static int parseUtteranceIndex(String id) {
-        if (id == null) return -1;
-        if ("utt_final".equals(id)) return sSentences.size() - 1;
-        if (id.startsWith("utt_")) {
-            try { return Integer.parseInt(id.substring(4)); } catch (Exception ignored) {}
-        }
-        return -1;
+        String prefix = "utt_" + sSpeechEpoch + "_";
+        if (id == null || !id.startsWith(prefix)) return -1;
+        String suffix = id.substring(prefix.length());
+        if ("final".equals(suffix)) return sSentences.size() - 1;
+        try { return Integer.parseInt(suffix); } catch (Exception ignored) { return -1; }
     }
 
     public static synchronized void speak(Context ctx, String script, Runnable onComplete) {
         if (script == null || script.trim().isEmpty()) return;
+        sSpeechEpoch++;
         sLastSpokenScript = cleanSpokenText(script);
         sOnCompleteCallback = onComplete;
         sSentences = splitIntoSentences(sLastSpokenScript);
@@ -175,11 +176,11 @@ public final class AuraTtsNarrator {
 
     private static void enqueueSentences() {
         try {
-            sTts.stop();
+            int ep = sSpeechEpoch;
             Bundle params = new Bundle();
             params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f);
             for (int i = 0; i < sSentences.size(); i++) {
-                String id = (i == sSentences.size() - 1) ? "utt_final" : ("utt_" + i);
+                String id = "utt_" + ep + "_" + ((i == sSentences.size() - 1) ? "final" : i);
                 int mode = (i == 0) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
                 sTts.speak(sSentences.get(i), mode, params, id);
             }
@@ -203,12 +204,10 @@ public final class AuraTtsNarrator {
         String sentence = sSentences.get(sActiveIdx);
         long elapsed = System.currentTimeMillis() - sSentenceStartMs;
         long estDuration = Math.max(1400L, sentence.length() * 62L);
-        if (!sNativeRangeActive) {
-            updateEstimatedWordSpan(sentence, elapsed, estDuration);
-        }
-        if (elapsed >= estDuration + 350L) {
+        if (!sNativeRangeActive) updateEstimatedWordSpan(sentence, elapsed, estDuration);
+        if ((!sReady || sTts == null) && elapsed >= estDuration + 350L) {
             advanceFallbackSentenceIfNeeded();
-        } else {
+        } else if (elapsed < estDuration + 4000L) {
             postDelayedToMain(WORD_TICKER, 65L);
         }
     }

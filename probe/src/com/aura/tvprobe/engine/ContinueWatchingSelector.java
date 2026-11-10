@@ -39,7 +39,8 @@ public final class ContinueWatchingSelector {
     }
 
     public static boolean isEligibleSession(JSONObject item, Set<String> seenTitles) {
-        if (item == null || item.optBoolean("watched", false)) return false;
+        if (item == null || (item.optBoolean("watched", false) && !isActiveNetflixContinueSeries(item))) return false;
+        if (SessionInspector.isOrphanEpisodeCodeTitle(item.optString("series_title"), item.optString("title"))) return false;
         String title = extractDisplayTitle(item);
         String pkg = item.optString("app_pkg", "").toLowerCase();
         if (title.isEmpty() || isExcludedPackage(pkg)) return false;
@@ -47,6 +48,11 @@ public final class ContinueWatchingSelector {
         if (title.equalsIgnoreCase(cleanApp) || !isUnfinishedProgress(item)) return false;
         String normKey = AuraDb.normalizeTitleKey(title);
         return !normKey.isEmpty() && seenTitles.add(normKey);
+    }
+
+    private static boolean isActiveNetflixContinueSeries(JSONObject item) {
+        String syn = item.optString("synopsis", "").toLowerCase();
+        return "com.netflix.ninja".equals(item.optString("app_pkg")) && syn.startsWith("continue watching ");
     }
 
     public static boolean isExcludedPackage(String pkg) {

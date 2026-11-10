@@ -116,6 +116,16 @@ public final class ShowCompanionAgent {
             String t = h != null ? (h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title")) : "";
             if (!t.isEmpty() && qLow.contains(t.toLowerCase(Locale.US))) return cloneJson(h);
         }
+        return pickFirstNonOrphanHistoryItem(hist);
+    }
+
+    private static JSONObject pickFirstNonOrphanHistoryItem(JSONArray hist) {
+        for (int i = 0; i < hist.length(); i++) {
+            JSONObject h = hist.optJSONObject(i);
+            if (h != null && !SessionInspector.isOrphanEpisodeCodeTitle(h.optString("series_title"), h.optString("title"))) {
+                return cloneJson(h);
+            }
+        }
         return hist.length() > 0 ? cloneJson(hist.optJSONObject(0)) : new JSONObject();
     }
 
@@ -160,7 +170,9 @@ public final class ShowCompanionAgent {
             String rawTitle = base.optString("series_title").isEmpty() ? base.optString("title", "MobLand") : base.optString("series_title");
             String clean = rawTitle.split("\u00B7")[0].trim();
             base.put("title", clean.isEmpty() ? "MobLand" : clean);
-            boolean isSeries = !"Movie".equalsIgnoreCase(base.optString("type", "Series")) || base.optInt("season", 0) > 0 || base.optInt("episode", 0) > 0;
+            boolean hasExplicitEp = base.optInt("season", 0) > 0 && base.optInt("episode", 0) > 0;
+            base.put("has_explicit_ep", hasExplicitEp);
+            boolean isSeries = !"Movie".equalsIgnoreCase(base.optString("type", "Series")) || hasExplicitEp;
             base.put("is_series", isSeries);
             if (isSeries && base.optInt("season", 0) <= 0) base.put("season", 1);
             if (isSeries && base.optInt("episode", 0) <= 0) base.put("episode", 1);
@@ -173,14 +185,35 @@ public final class ShowCompanionAgent {
             AiRecommender ai, AuraDb db, String profileId, String userQuery, String lens, JSONObject ctx) {
         String title = ctx.optString("title", "MobLand");
         boolean isSeries = ctx.optBoolean("is_series", true);
+        int posSec = ctx.optInt("position_sec", 1450);
+        JSONObject guide = SubtitleAndGuideStore.getOrFetchShowGuide(db, title, isSeries);
+        resolveEpisodeFromGuideIfNeeded(ctx, guide);
         int s = ctx.optInt("season", 1);
         int e = ctx.optInt("episode", 1);
-        int posSec = ctx.optInt("position_sec", 1450);
         AgentStatusNarrator.publishLiveStep("Stitching " + title + (isSeries ? " S" + s + "E" + e : "") + " transcript up to " + SubtitleAndGuideStore.formatMmSs(posSec));
-        JSONObject guide = SubtitleAndGuideStore.getOrFetchShowGuide(db, title, isSeries);
         JSONArray cues = SubtitleAndGuideStore.getOrFetchEpisodeSrtCues(db, title, guide, s, e, isSeries);
         SubtitleAndGuideStore.proactivelyCacheSeriesAsync(db, title, s, e);
         return synthesizeWithTools(ai, db, profileId, userQuery, lens, ctx, guide, cues);
+    }
+
+    private static void resolveEpisodeFromGuideIfNeeded(JSONObject ctx, JSONObject guide) {
+        if (ctx == null || guide == null || ctx.optBoolean("has_explicit_ep", false)) return;
+        String syn = ctx.optString("synopsis", "").replaceFirst("(?i)^continue watching\\s+", "").trim();
+        if (syn.length() < 3) return;
+        JSONArray eps = guide.optJSONArray("episodes");
+        if (eps == null) return;
+        matchEpisodeByTitle(ctx, eps, syn.toLowerCase(Locale.US));
+    }
+
+    private static void matchEpisodeByTitle(JSONObject ctx, JSONArray eps, String epHintLow) {
+        for (int i = 0; i < eps.length(); i++) {
+            JSONObject ep = eps.optJSONObject(i);
+            String name = ep != null ? ep.optString("name", "").trim().toLowerCase(Locale.US) : "";
+            if (!name.isEmpty() && (epHintLow.contains(name) || name.contains(epHintLow))) {
+                try { ctx.put("season", ep.optInt("season", 1)).put("episode", ep.optInt("number", 1)); } catch (Exception ignored) {}
+                return;
+            }
+        }
     }
 
     private static JSONObject synthesizeWithTools(

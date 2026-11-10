@@ -18,8 +18,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class SessionInspector {
+    private static final Pattern EP_CODE_PAT =
+        Pattern.compile("(?i)^S(\\d{1,2})\\s*[:·-]?\\s*E(\\d{1,3})\\s+(.+)$");
     private final Context ctx;
     private final ComponentName component;
     private final AuraDb db;
@@ -252,11 +256,24 @@ public class SessionInspector {
     private void upsertNetflixWatchItem(JSONObject r, String title, String intentUri, long updatedSec) {
         try {
             JSONObject item = buildNetflixItemBase(r, title, intentUri);
-            item.put("position_sec", 1200);
+            int existingPos = findExistingNetflixPositionSec(title);
+            item.put("position_sec", existingPos > 60 ? existingPos : 1200);
             item.put("duration_sec", 2700);
             item.put("updated_at", updatedSec);
             db.upsertWatchItem(item);
         } catch (Exception ignored) {}
+    }
+
+    private int findExistingNetflixPositionSec(String title) {
+        JSONArray hist = db.listHistory(db.getValidActiveProfile());
+        for (int i = 0; i < hist.length(); i++) {
+            JSONObject h = hist.optJSONObject(i);
+            if (h != null && "com.netflix.ninja".equals(h.optString("app_pkg"))
+                    && title.equalsIgnoreCase(h.optString("title"))) {
+                return h.optInt("position_sec", 1200);
+            }
+        }
+        return 1200;
     }
 
     private JSONObject buildNetflixItemBase(JSONObject r, String title, String intentUri) throws Exception {
@@ -322,8 +339,8 @@ public class SessionInspector {
         item.put("app_name", friendlyApp(pkg) + (ch.isEmpty() ? "" : " · " + ch));
         item.put("title", epTitle.isEmpty() ? title : epTitle);
         item.put("series_title", epTitle.isEmpty() ? "" : title);
-        item.put("season", r.optInt("season_number", 0));
-        item.put("episode", r.optInt("episode_number", 0));
+        item.put("season", r.optInt("season_display_number", r.optInt("season_number", 0)));
+        item.put("episode", r.optInt("episode_display_number", r.optInt("episode_number", 0)));
         return item;
     }
 
@@ -410,12 +427,19 @@ public class SessionInspector {
     private void maybePersistActiveSession(JSONObject out, String pkg) throws Exception {
         String checkTitle = out.optString("series_title").isEmpty()
             ? out.optString("title") : out.optString("series_title");
+        if (isOrphanEpisodeCodeTitle(out.optString("series_title"), out.optString("title"))) return;
         if (!checkTitle.isEmpty() && !checkTitle.equalsIgnoreCase(friendlyApp(pkg))
                 && !pkg.contains("youtube") && !pkg.contains("smarttube")) {
             enrichFromLocalCache(out, checkTitle);
             out.put("media_key", (pkg + ":" + out.optString("series_title") + ":" + out.optString("title")).toLowerCase());
             db.upsertWatchItem(out);
+            SubtitleAndGuideStore.proactivelyCacheSeriesAsync(db, checkTitle, out.optInt("season", 0), out.optInt("episode", 0));
         }
+    }
+
+    public static boolean isOrphanEpisodeCodeTitle(String seriesTitle, String title) {
+        if (seriesTitle != null && !seriesTitle.trim().isEmpty()) return false;
+        return title != null && title.trim().matches("(?i)^S\\d{1,2}\\s*[:·-]?\\s*E\\d{1,3}\\b.*");
     }
 
     private void populatePrimeSessionMetadata(JSONObject out, String mediaId) throws Exception {
@@ -437,6 +461,74 @@ public class SessionInspector {
         out.put("title", t);
         out.put("series_title", resolveSeriesFromMetadata(meta, t));
         out.put("poster_url", meta.optString("android.media.metadata.ALBUM_ART_URI"));
+        if (t.equalsIgnoreCase(friendlyApp(pkg))) {
+            hydrateSessionFromHistoryForPackage(out, pkg);
+        } else if (out.optString("series_title").isEmpty()) {
+            tryResolveOrphanEpisodeCode(out, t);
+        }
+    }
+
+    private void tryResolveOrphanEpisodeCode(JSONObject out, String title) throws Exception {
+        Matcher m = EP_CODE_PAT.matcher(title != null ? title.trim() : "");
+        if (!m.matches()) return;
+        int season = Integer.parseInt(m.group(1));
+        int episode = Integer.parseInt(m.group(2));
+        String epName = m.group(3).trim();
+        out.put("season", season).put("episode", episode);
+        String matchedSeries = findParentSeriesForEpisode(out.optString("profile_id", AuraDb.DEFAULT_PROFILE), season, episode, epName);
+        if (!matchedSeries.isEmpty()) out.put("series_title", matchedSeries);
+    }
+
+    private String findParentSeriesForEpisode(String profileId, int season, int episode, String epName) {
+        JSONArray hist = db.listHistory(profileId);
+        Set<String> checked = new HashSet<>();
+        for (int i = 0; i < Math.min(10, hist.length()); i++) {
+            String cand = extractSeriesCandidate(hist.optJSONObject(i));
+            if (!cand.isEmpty() && checked.add(cand.toLowerCase()) && guideContainsEpisode(cand, season, episode, epName)) {
+                return cand;
+            }
+        }
+        return "";
+    }
+
+    private String extractSeriesCandidate(JSONObject h) {
+        if (h == null) return "";
+        String s = h.optString("series_title", "").trim();
+        String t = h.optString("title", "").trim();
+        String cand = s.isEmpty() ? t : s;
+        return isOrphanEpisodeCodeTitle("", cand) ? "" : cand;
+    }
+
+    private boolean guideContainsEpisode(String seriesTitle, int season, int episode, String epName) {
+        JSONObject guide = SubtitleAndGuideStore.getOrFetchShowGuide(db, seriesTitle, true);
+        JSONArray eps = guide != null ? guide.optJSONArray("episodes") : null;
+        if (eps == null) return false;
+        for (int i = 0; i < eps.length(); i++) {
+            JSONObject e = eps.optJSONObject(i);
+            if (e != null && e.optInt("s") == season && e.optInt("e") == episode
+                    && e.optString("name", "").equalsIgnoreCase(epName)) return true;
+        }
+        return false;
+    }
+
+    private void hydrateSessionFromHistoryForPackage(JSONObject out, String pkg) throws Exception {
+        JSONArray hist = db.listHistory(out.optString("profile_id", AuraDb.DEFAULT_PROFILE));
+        for (int i = 0; i < hist.length(); i++) {
+            JSONObject h = hist.optJSONObject(i);
+            if (h != null && pkg.equals(h.optString("app_pkg")) && !h.optString("title").isEmpty()) {
+                copyHistoryFieldsToActiveSession(out, h);
+                return;
+            }
+        }
+    }
+
+    private void copyHistoryFieldsToActiveSession(JSONObject out, JSONObject h) throws Exception {
+        out.put("title", h.optString("title"));
+        out.put("series_title", h.optString("series_title"));
+        out.put("synopsis", h.optString("synopsis"));
+        out.put("poster_url", h.optString("poster_url"));
+        out.put("launch_uri", h.optString("launch_uri"));
+        if (out.optInt("position_sec", 0) < 30) out.put("position_sec", h.optInt("position_sec", 1200));
     }
 
     private String resolveSeriesFromMetadata(JSONObject meta, String title) {
@@ -572,21 +664,29 @@ public class SessionInspector {
     private JSONArray queryTvProvider(String uriStr, boolean dedupByTitle) {
         JSONArray rows = new JSONArray();
         Set<String> seen = new HashSet<>();
-        String sel = uriStr.contains("preview_program") ? "package_name = ?" : null;
-        String[] args = uriStr.contains("preview_program") ? new String[]{"com.netflix.ninja"} : null;
-        try (Cursor c = ctx.getContentResolver().query(Uri.parse(uriStr), null, sel, args, "_id DESC")) {
-            if (c != null) collectCursorRows(c, rows, seen, dedupByTitle);
+        boolean netflixOnly = uriStr.contains("preview_program");
+        try (Cursor c = ctx.getContentResolver().query(Uri.parse(uriStr), null, null, null, "_id DESC")) {
+            if (c != null) collectCursorRows(c, rows, seen, dedupByTitle, netflixOnly);
         } catch (Exception ignored) {}
         return rows;
     }
 
-    private void collectCursorRows(Cursor c, JSONArray rows, Set<String> seen, boolean dedupByTitle) throws Exception {
+    private void collectCursorRows(Cursor c, JSONArray rows, Set<String> seen,
+                                   boolean dedupByTitle, boolean netflixOnly) throws Exception {
+        int pkgIdx = c.getColumnIndex("package_name");
         int scanned = 0;
-        while (c.moveToNext() && scanned++ < 60 && rows.length() < 36) {
+        while (c.moveToNext() && scanned++ < 300 && rows.length() < 36) {
+            if (netflixOnly && !isNetflixCursorRow(c, pkgIdx)) continue;
             JSONObject row = cursorRowToJson(c);
             if (dedupByTitle && !seen.add(buildProviderRowKey(row))) continue;
             rows.put(row);
         }
+    }
+
+    private boolean isNetflixCursorRow(Cursor c, int pkgIdx) {
+        if (pkgIdx < 0) return false;
+        String pkg = c.getString(pkgIdx);
+        return pkg != null && pkg.contains("netflix");
     }
 
     private String buildProviderRowKey(JSONObject row) {

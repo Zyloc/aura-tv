@@ -777,7 +777,6 @@ public class AuraDb extends SQLiteOpenHelper {
         int s = item.optInt("season", 0);
         int e = item.optInt("episode", 0);
         DatabaseJanitor.recordEpisodeCheckpoint(this, baseTitle, s, e, newPos, newDur);
-        SubtitleAndGuideStore.proactivelyCacheSeriesAsync(this, baseTitle, s, e);
     }
 
     private ContentValues buildWatchItemValues(JSONObject item, String rawKey, int newPos, int newDur, long updatedAt) {
@@ -827,6 +826,7 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public void enforceStorageCapForProfile(String profileId) {
         SQLiteDatabase db = getWritableDatabase();
+        db.execSQL("DELETE FROM watch_history WHERE (series_title IS NULL OR series_title = '') AND title GLOB 'S[0-9]* E[0-9]*'");
         String where = profileId != null
             ? "profile_id = '" + profileId + "' AND media_key NOT IN (" +
               "SELECT media_key FROM watch_history WHERE profile_id = '" + profileId +

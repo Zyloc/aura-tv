@@ -32,7 +32,7 @@ public class VoiceConcierge {
         String prof = resolveValidProfile(profileId);
         if (reset) return resetSession(prof);
         if (ShowCompanionAgent.isShowCompanionQuery(userText)) {
-            return executeShowCompanionTurn(prof, userText.trim());
+            return runAgenticSearchTurn(prof, userText.trim(), new ArrayList<>(), progress);
         }
         sync.syncWithHost();
         List<String> activeFilters = db.getActiveFilters(prof);
@@ -157,11 +157,14 @@ public class VoiceConcierge {
                 .put(new JSONObject().put("role", "user").put("text", userText))
                 .put(new JSONObject().put("role", "assistant").put("text", reply));
             String t = recap.optString("title", "MobLand");
+            JSONObject targetItem = ShowCompanionAgent.resolveTargetContext(db, profileId, userText, null);
+            targetItem.put("title", t).put("season", recap.optInt("season", 1)).put("episode", recap.optInt("episode", 1));
             JSONArray chips = new JSONArray().put("Who is in this scene in " + t + "?")
                 .put("What happened in the last 5 minutes of " + t + "?").put("Movies with the lead actor of " + t);
             JSONObject sess = new JSONObject().put("turns", turns).put("reply", reply)
                 .put("spoken_narration", recap.optString("spoken_narration", ""))
                 .put("cast_xray", recap.optString("cast_xray", ""))
+                .put("companion_recap", recap).put("target_item", targetItem)
                 .put("follow_ups", chips).put("results", results);
             db.saveVoiceSession(profileId, sess);
         } catch (Exception ignored) {}

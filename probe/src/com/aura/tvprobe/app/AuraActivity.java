@@ -324,7 +324,7 @@ public class AuraActivity extends Activity implements
             i.putExtra(android.app.SearchManager.QUERY, q);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             ctx.startActivity(i);
-            scheduleBringAuraToFront(mainH, ctx);
+            mainH.postDelayed(() -> scheduleBringAuraToFront(mainH, ctx), 250L);
         } catch (Throwable ignored) {}
     }
 
@@ -1278,6 +1278,7 @@ public class AuraActivity extends Activity implements
         if (!SearchOverlay.isVisible(searchOverlay)) return;
         SearchOverlay.setLoading(searchOverlay, false, "");
         if (res == null) return;
+        if (tryPresentPureCompanionRecap(res)) return;
         SearchOverlay.setConversationTurns(searchOverlay, res.optJSONArray("turns"), this);
         String reply = res.optString("reply", "");
         if (!reply.isEmpty()) SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
@@ -1286,6 +1287,19 @@ public class AuraActivity extends Activity implements
         SearchOverlay.setFollowUps(searchOverlay, extractFollowUpList(res.optJSONArray("follow_ups")), this, this);
         SearchOverlay.setResults(searchOverlay, res.optJSONArray("results"), this, this);
         populateTraversalChips();
+    }
+
+    private boolean tryPresentPureCompanionRecap(JSONObject res) {
+        JSONObject recap = res.optJSONObject("companion_recap");
+        if (recap == null || !recap.optString("actor_to_search", "").isEmpty()) return false;
+        JSONObject targetItem = res.optJSONObject("target_item");
+        if (targetItem == null || targetItem.optString("title").isEmpty()) return false;
+        SearchOverlay.dismiss(searchOverlay);
+        openDetailDrawer(targetItem);
+        DetailOverlay.showRecapInDetail(detailOverlay, recap);
+        String spoken = res.optString("spoken_narration", "");
+        if (!spoken.isEmpty()) AuraTtsNarrator.speak(this, spoken, null);
+        return true;
     }
 
     private List<String> extractFollowUpList(JSONArray arr) {

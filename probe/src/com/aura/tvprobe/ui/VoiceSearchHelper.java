@@ -192,11 +192,11 @@ public final class VoiceSearchHelper {
     }
 
     public static void silenceAssistantAudio(Context ctx, android.os.Handler ui) {
-        if (ctx == null || ui == null) return;
+        if (ctx == null || ui == null || AuraTtsNarrator.isSpeaking()) return;
         sTtsUnmutedOverride = false;
         muteAssistantStreamsNow(ctx, true);
         for (long d : new long[]{700L, 1500L, 2400L, 3300L, 4100L}) {
-            ui.postDelayed(() -> { if (!sTtsUnmutedOverride) muteAssistantStreamsNow(ctx, true); }, d);
+            ui.postDelayed(() -> { if (!sTtsUnmutedOverride && !AuraTtsNarrator.isSpeaking()) muteAssistantStreamsNow(ctx, true); }, d);
         }
         ui.postDelayed(() -> muteAssistantStreamsNow(ctx, false), 5000L);
     }
