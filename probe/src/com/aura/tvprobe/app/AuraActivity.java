@@ -974,6 +974,7 @@ public class AuraActivity extends Activity implements
     public void onNavigate(String destination) {
         if ("home".equals(destination)) refreshAllData(false);
         else if ("refresh_recos".equals(destination)) refreshAllData(true);
+        else if ("ram_guardian".equals(destination)) showSystemMonitorDialog();
         else if ("guide_ai".equals(destination)) showGuideAiDialog();
         else if ("watched".equals(destination)) showWatchHistoryDialog();
         else if (destination.startsWith("sys_")) openSystemSetting(destination);
@@ -1445,6 +1446,13 @@ public class AuraActivity extends Activity implements
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
         ModalOverlayBuilder.showGuideAiModal(modalContainer, this, db, activeProfile, this);
+    }
+
+    private void showSystemMonitorDialog() {
+        saveFocusBeforeOverlay();
+        HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
+        setBackgroundFocusBlocked(true);
+        SystemMonitorModal.show(modalContainer, this, db, this);
     }
 
     private void showSettingsDialog() {

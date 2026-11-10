@@ -146,6 +146,7 @@ public class SessionInspector {
         try {
             populateBaseStateFields(out, profile, nowPlaying, recos, history);
             out.put("foreground_pkg", getForegroundPackage());
+            out.put("system_health", SystemResourceMonitor.collectTelemetrySnapshot(ctx, db));
         } catch (Exception ignored) {}
         return out;
     }
@@ -434,6 +435,7 @@ public class SessionInspector {
             out.put("media_key", (pkg + ":" + out.optString("series_title") + ":" + out.optString("title")).toLowerCase());
             db.upsertWatchItem(out);
             SubtitleAndGuideStore.proactivelyCacheSeriesAsync(db, checkTitle, out.optInt("season", 0), out.optInt("episode", 0));
+            if ("PLAYING".equals(out.optString("state"))) SystemResourceMonitor.maybeAutoGuardOnPlayback(ctx, db, pkg);
         }
     }
 

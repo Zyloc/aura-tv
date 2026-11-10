@@ -95,6 +95,7 @@ public final class NavPanelBuilder {
 
     private static void expandDrawerView(PanelState st, LinearLayout drawer, float hiddenX, Context ctx) {
         prepareDrawerForExpand(drawer, hiddenX);
+        refreshLiveTelemetryBox(drawer, ctx);
         setMainDescendantFocusability(st.mainContentToAnimate, ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         drawer.animate().translationX(0f).alpha(1f).setDuration(420).setInterpolator(SLIDE_EASE).start();
         animateMainContent(st.mainContentToAnimate, dp(ctx, DRAWER_WIDTH_DP + 14), 0.955f);
@@ -157,12 +158,40 @@ public final class NavPanelBuilder {
                                      String ram, String remotePort) {
         LinearLayout statusBox = findByTag(wrapper, TAG_STATUS);
         if (statusBox == null) return;
+        populateTelemetryCard(statusBox, statusBox.getContext(), serverStatus + " \u00B7 :" + remotePort);
+    }
+
+    private static void refreshLiveTelemetryBox(View root, Context ctx) {
+        LinearLayout statusBox = findByTag(root, TAG_STATUS);
+        if (statusBox != null) populateTelemetryCard(statusBox, ctx, "Aura Guardian \u00B7 :8765");
+    }
+
+    private static void populateTelemetryCard(LinearLayout statusBox, Context ctx, String footerMeta) {
         statusBox.removeAllViews();
-        Context ctx = statusBox.getContext();
-        TextView tv = GlassTheme.makeText(ctx,
-            serverStatus + " \u00B7 " + ram + " \u00B7 :" + remotePort,
-            9.5f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
-        statusBox.addView(tv, GlassTheme.wrapParams());
+        JSONObject snap = SystemResourceMonitor.collectTelemetrySnapshot(ctx, null);
+        int pct = snap.optInt("used_ram_pct", 76);
+        String ramLine = "RAM " + snap.optInt("used_ram_mb", 1400) + "/" + snap.optInt("total_ram_mb", 1831)
+            + "M (" + snap.optInt("avail_ram_mb", 430) + "M Free)";
+        String cpuLine = "CPU " + snap.optInt("cpu_load_pct", 24) + "% \u00B7 " + snap.optString("cpu_freq_str", "4\u00D71.1GHz")
+            + " \u00B7 Aura " + snap.optInt("aura_pss_mb", 16) + "M";
+        statusBox.addView(GlassTheme.makeText(ctx, ramLine, 9.5f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1));
+        statusBox.addView(buildMiniRamBar(ctx, pct));
+        statusBox.addView(GlassTheme.makeText(ctx, cpuLine, 9f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1));
+        statusBox.addView(GlassTheme.makeText(ctx, footerMeta, 8.5f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1));
+    }
+
+    private static View buildMiniRamBar(Context ctx, int pct) {
+        FrameLayout track = new FrameLayout(ctx);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 5));
+        lp.topMargin = dp(ctx, 3);
+        lp.bottomMargin = dp(ctx, 3);
+        track.setLayoutParams(lp);
+        track.setBackground(GlassTheme.solidRounded(Color.argb(55, 255, 255, 255), dp(ctx, 3)));
+        View fill = new View(ctx);
+        int col = pct >= 85 ? Color.rgb(255, 107, 107) : (pct >= 72 ? GlassTheme.GOLD_ACCENT : Color.rgb(72, 219, 151));
+        fill.setBackground(GlassTheme.solidRounded(col, dp(ctx, 3)));
+        track.addView(fill, new FrameLayout.LayoutParams(dp(ctx, (190 * Math.min(100, Math.max(8, pct))) / 100), ViewGroup.LayoutParams.MATCH_PARENT));
+        return track;
     }
 
     private static PanelState getState(FrameLayout wrapper) {
@@ -271,6 +300,7 @@ public final class NavPanelBuilder {
                                              Context ctx, NavCallback cb) {
         addSectionLabel(content, ctx, "NAVIGATION & AI");
         addNavItem(wrapper, content, ctx, "\u2302", "Home", true, v -> closeAndRun(wrapper, ctx, true, () -> cb.onNavigate("home")));
+        addNavItem(wrapper, content, ctx, "\u26A1", "RAM & CPU Guardian", false, v -> closeAndRun(wrapper, ctx, false, () -> cb.onNavigate("ram_guardian")));
         addNavItem(wrapper, content, ctx, "\u25F7", "Watch History", false, v -> closeAndRun(wrapper, ctx, false, cb::onWatchHistoryOpen));
         addNavItem(wrapper, content, ctx, "\u2726", "Guide AI Taste", false, v -> closeAndRun(wrapper, ctx, false, () -> cb.onNavigate("guide_ai")));
         addNavItem(wrapper, content, ctx, "\u2699", "Aura Settings", false, v -> closeAndRun(wrapper, ctx, false, cb::onSettingsOpen));

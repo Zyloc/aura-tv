@@ -3,6 +3,8 @@ package com.aura.tvprobe;
 import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * Hard-capped SQLite storage janitor for Aura TV.
@@ -17,6 +19,7 @@ public final class DatabaseJanitor {
     public static final int MAX_GTI_CACHE_ROWS    = 350;
     public static final long MAX_GTI_CACHE_BYTES  = 3584L * 1024L;      // 3.5 MB hard cap
     public static final int MAX_IMPRESSION_ROWS   = 250;
+    public static final int MAX_RAM_HISTORY_ROWS  = 100;
     private static final long DAILY_INTERVAL_SEC  = 24L * 3600L;
     private static final long SUBTITLE_TTL_SEC    = 14L * 24L * 3600L;
     private static final long GTI_TTL_SEC         = 7L * 24L * 3600L;
@@ -30,8 +33,16 @@ public final class DatabaseJanitor {
         db.execSQL("CREATE TABLE IF NOT EXISTS episode_checkpoints (" +
             "checkpoint_key TEXT PRIMARY KEY, series_key TEXT, season INTEGER, episode INTEGER, " +
             "position_sec INTEGER, duration_sec INTEGER, updated_at INTEGER)");
+        ensureRamHistoryTable(db);
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_sub_cache_lru ON subtitle_cache(last_accessed_at ASC)");
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_ep_ckpt_series ON episode_checkpoints(series_key, season, episode)");
+    }
+
+    private static void ensureRamHistoryTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS ram_cleanup_history (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp_sec INTEGER, trigger_type TEXT, " +
+            "active_context TEXT, killed_apps TEXT, avail_before_mb INTEGER, " +
+            "avail_after_mb INTEGER, freed_mb INTEGER, cpu_pct INTEGER)");
     }
 
     public static void maybeRunDailyJanitor(AuraDb auraDb) {
@@ -61,6 +72,7 @@ public final class DatabaseJanitor {
         enforceImpressionCaps(auraDb, db);
         auraDb.enforceStorageCap();
         enforceWatchedItemsCap(db);
+        trimTableByRowCount(db, "ram_cleanup_history", "id", "timestamp_sec", MAX_RAM_HISTORY_ROWS);
     }
 
     public static void enforceSubtitleCacheCaps(SQLiteDatabase db, long nowSec) {
@@ -206,5 +218,64 @@ public final class DatabaseJanitor {
 
     private static long parseLongSafe(String val) {
         try { return Long.parseLong(val.trim()); } catch (Exception e) { return 0L; }
+    }
+
+    public static void recordRamCleanupEvent(
+            AuraDb auraDb, String triggerType, String activeContext, String killedApps,
+            int availBeforeMb, int availAfterMb, int freedMb, int cpuPct) {
+        if (auraDb == null || killedApps == null || killedApps.trim().isEmpty()) return;
+        try {
+            SQLiteDatabase db = auraDb.getWritableDatabase();
+            ensureCompanionTables(db);
+            insertRamCleanupRow(db, triggerType, activeContext, killedApps, availBeforeMb, availAfterMb, freedMb, cpuPct);
+            trimTableByRowCount(db, "ram_cleanup_history", "id", "timestamp_sec", MAX_RAM_HISTORY_ROWS);
+        } catch (Exception ignored) {}
+    }
+
+    private static void insertRamCleanupRow(
+            SQLiteDatabase db, String triggerType, String activeContext, String killedApps,
+            int beforeMb, int afterMb, int freedMb, int cpuPct) {
+        ContentValues cv = new ContentValues();
+        cv.put("timestamp_sec", System.currentTimeMillis() / 1000L);
+        cv.put("trigger_type", triggerType);
+        cv.put("active_context", activeContext);
+        cv.put("killed_apps", killedApps);
+        cv.put("avail_before_mb", beforeMb);
+        cv.put("avail_after_mb", afterMb);
+        cv.put("freed_mb", Math.max(1, freedMb));
+        cv.put("cpu_pct", cpuPct);
+        db.insert("ram_cleanup_history", null, cv);
+    }
+
+    public static JSONArray listRamCleanupHistory(AuraDb auraDb, int limit) {
+        JSONArray out = new JSONArray();
+        if (auraDb == null) return out;
+        try {
+            SQLiteDatabase db = auraDb.getWritableDatabase();
+            ensureCompanionTables(db);
+            queryRamHistoryCursor(db, Math.max(1, limit), out);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static void queryRamHistoryCursor(SQLiteDatabase db, int limit, JSONArray out) throws Exception {
+        String sql = "SELECT timestamp_sec, trigger_type, active_context, killed_apps, " +
+            "avail_before_mb, avail_after_mb, freed_mb, cpu_pct FROM ram_cleanup_history " +
+            "ORDER BY timestamp_sec DESC, id DESC LIMIT " + limit;
+        try (Cursor c = db.rawQuery(sql, null)) {
+            while (c.moveToNext()) out.put(cursorToRamHistoryJson(c));
+        }
+    }
+
+    private static JSONObject cursorToRamHistoryJson(Cursor c) throws Exception {
+        return new JSONObject()
+            .put("timestamp_sec", c.getLong(0))
+            .put("trigger_type", c.getString(1))
+            .put("active_context", c.getString(2))
+            .put("killed_apps", c.getString(3))
+            .put("avail_before_mb", c.getInt(4))
+            .put("avail_after_mb", c.getInt(5))
+            .put("freed_mb", c.getInt(6))
+            .put("cpu_pct", c.getInt(7));
     }
 }
