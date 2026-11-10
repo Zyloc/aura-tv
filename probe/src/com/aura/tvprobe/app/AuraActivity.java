@@ -123,6 +123,7 @@ public class AuraActivity extends Activity implements
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         initServices();
+        AuraTtsNarrator.warmup(this);
         buildUi();
         setupGlobalFocusRouting();
         registerHomeKeyReceiverSafe();
@@ -278,6 +279,7 @@ public class AuraActivity extends Activity implements
         super.onPause();
         sIsInForeground = false;
         sLastActiveWallMs = System.currentTimeMillis();
+        AuraTtsNarrator.stop(this);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         ui.removeCallbacks(homeSearchHintTask);
         ui.removeCallbacks(idleScreensaverTask);
@@ -1028,6 +1030,37 @@ public class AuraActivity extends Activity implements
     }
 
     @Override
+    public void onCatchMeUpClicked(JSONObject item) {
+        if (item == null) return;
+        if (AuraTtsNarrator.isSpeaking()) {
+            AuraTtsNarrator.stop(this);
+            Toast.makeText(this, "Stopped voice narration", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startCatchMeUpForItem(item);
+    }
+
+    private void startCatchMeUpForItem(JSONObject item) {
+        String title = item.optString("title", "Show");
+        Toast.makeText(this, "\uD83D\uDD0A Preparing 2-minute audio recap for " + title + "\u2026", Toast.LENGTH_SHORT).show();
+        bgPool.submit(() -> {
+            JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, activeProfile, "Catch me up on " + title, item);
+            ui.post(() -> presentCatchMeUpInDetail(title, recap));
+        });
+    }
+
+    private void presentCatchMeUpInDetail(String title, JSONObject recap) {
+        if (recap == null) return;
+        if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+            DetailOverlay.showRecapInDetail(detailOverlay, recap);
+        }
+        String spoken = recap.optString("spoken_narration", "");
+        if (!spoken.isEmpty()) {
+            AuraTtsNarrator.speak(this, spoken, null);
+        }
+    }
+
+    @Override
     public void onWatchedClicked(JSONObject item) {
         db.markTitleWatched(item, true);
         Toast.makeText(this, "Marked watched: " + item.optString("title"), Toast.LENGTH_SHORT).show();
@@ -1200,6 +1233,8 @@ public class AuraActivity extends Activity implements
         SearchOverlay.setConversationTurns(searchOverlay, res.optJSONArray("turns"), this);
         String reply = res.optString("reply", "");
         if (!reply.isEmpty()) SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
+        String spoken = res.optString("spoken_narration", "");
+        if (!spoken.isEmpty()) AuraTtsNarrator.speak(this, spoken, null);
         SearchOverlay.setFollowUps(searchOverlay, extractFollowUpList(res.optJSONArray("follow_ups")), this, this);
         SearchOverlay.setResults(searchOverlay, res.optJSONArray("results"), this, this);
         populateTraversalChips();
@@ -1268,6 +1303,7 @@ public class AuraActivity extends Activity implements
 
     @Override
     public void onDismiss() {
+        AuraTtsNarrator.stop(this);
         if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
         if (SearchOverlay.isVisible(searchOverlay)) SearchOverlay.dismiss(searchOverlay);
         setBackgroundFocusBlocked(false);

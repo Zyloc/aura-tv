@@ -121,6 +121,9 @@ public class VoiceConcierge {
     }
 
     private JSONObject executeAgenticTurnBody(String profileId, String userText, List<String> activeFilters) {
+        if (ShowCompanionAgent.isShowCompanionQuery(userText)) {
+            return executeShowCompanionTurn(profileId, userText);
+        }
         int epoch = ImpressionTracker.advanceEpoch(db, profileId);
         JSONArray turns = isFollowUpRefinement(userText) ? getOrInitTurns(profileId) : new JSONArray();
         int currentYear = JustWatchGraph.getCurrentYear();
@@ -131,6 +134,34 @@ public class VoiceConcierge {
         String prompt = buildPrompt(profileId, turns, userText, activeFilters, collectWatchedNames(profileId), cfPool, minModernYear, currentYear, epoch);
         persistTurnResult(profileId, turns, userText, contextualQuery, activeFilters, cfPool, ai.callGeminiJson(prompt), minModernYear, currentYear, epoch);
         return db.getVoiceSession(profileId);
+    }
+
+    private JSONObject executeShowCompanionTurn(String profileId, String userText) {
+        JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, profileId, userText, null);
+        String spoken = recap.optString("spoken_narration", "");
+        String xray = recap.optString("cast_xray", "");
+        String reply = "\uD83D\uDD0A " + recap.optString("headline", "Catch Me Up") + " — " + spoken + (xray.isEmpty() ? "" : " [Cast X-Ray: " + xray + "]");
+        JSONArray results = recap.optJSONArray("results");
+        if (results == null || results.length() == 0) results = db.getProfileRecommendations(profileId);
+        saveCompanionVoiceSession(profileId, userText, reply, results, recap);
+        return db.getVoiceSession(profileId);
+    }
+
+    private void saveCompanionVoiceSession(
+            String profileId, String userText, String reply, JSONArray results, JSONObject recap) {
+        try {
+            JSONArray turns = new JSONArray()
+                .put(new JSONObject().put("role", "user").put("text", userText))
+                .put(new JSONObject().put("role", "assistant").put("text", reply));
+            String t = recap.optString("title", "MobLand");
+            JSONArray chips = new JSONArray().put("Who is in this scene in " + t + "?")
+                .put("What happened in the last 5 minutes of " + t + "?").put("Movies with the lead actor of " + t);
+            JSONObject sess = new JSONObject().put("turns", turns).put("reply", reply)
+                .put("spoken_narration", recap.optString("spoken_narration", ""))
+                .put("cast_xray", recap.optString("cast_xray", ""))
+                .put("follow_ups", chips).put("results", results);
+            db.saveVoiceSession(profileId, sess);
+        } catch (Exception ignored) {}
     }
 
     public static boolean isFollowUpRefinement(String userText) {

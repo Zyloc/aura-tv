@@ -52,6 +52,7 @@ public final class DetailOverlay {
     public interface DetailCallback {
         void onWatchClicked(JSONObject item);
         default void onTrailerClicked(JSONObject item) {}
+        default void onCatchMeUpClicked(JSONObject item) {}
         void onWatchedToggle(JSONObject item);
         void onSimilarClicked(JSONObject item);
         void onRated(JSONObject item, int score);
@@ -139,6 +140,18 @@ public final class DetailOverlay {
         if (posterImg != null) {
             ImageLoader.load(ctx, posterUrl, posterImg);
         }
+    }
+
+    public static void showRecapInDetail(FrameLayout overlay, JSONObject recap) {
+        if (overlay == null || recap == null) return;
+        TextView synTv = findTagged(overlay, TAG_SYNOPSIS);
+        if (synTv != null) {
+            synTv.setMaxLines(6);
+            synTv.setText(recap.optString("spoken_narration", ""));
+        }
+        TextView reasonTv = findTagged(overlay, TAG_REASON);
+        String xray = recap.optString("cast_xray", "");
+        if (reasonTv != null && !xray.isEmpty()) reasonTv.setText("\uD83D\uDD0A X-Ray Cast: " + xray);
     }
 
     // ── Studio Layout Construction ───────────────────────────────────────
@@ -483,7 +496,10 @@ public final class DetailOverlay {
         TextView watchBtn = buildActionButton(ctx, "\u25B6  Watch", true);
         watchBtn.setOnClickListener(v -> cb.onWatchClicked(item));
         row.addView(watchBtn);
-        TextView trailerBtn = buildActionButton(ctx, "\u25B6  Watch Trailer", false);
+        TextView catchUpBtn = buildActionButton(ctx, "\uD83D\uDD0A  Catch Me Up", false);
+        catchUpBtn.setOnClickListener(v -> cb.onCatchMeUpClicked(item));
+        row.addView(catchUpBtn);
+        TextView trailerBtn = buildActionButton(ctx, "\u25B6  Trailer", false);
         trailerBtn.setOnClickListener(v -> cb.onTrailerClicked(item));
         row.addView(trailerBtn);
         row.addView(createExploreSimilarButton(overlay, item, ctx, cb));

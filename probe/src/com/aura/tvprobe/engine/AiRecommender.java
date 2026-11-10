@@ -928,24 +928,28 @@ public class AiRecommender {
     }
 
     public String callGeminiJson(String prompt) {
+        return callGeminiMultimodalJson(prompt, null);
+    }
+
+    public String callGeminiMultimodalJson(String prompt, String base64Jpeg) {
         String apiKey = getApiKey();
         if (apiKey.isEmpty()) return null;
-        String fast = tryCallLiteWithRetry(MODELS[0], apiKey, prompt);
+        String fast = tryCallLiteWithRetry(MODELS[0], apiKey, prompt, base64Jpeg);
         if (fast != null) return fast;
-        return MODELS.length > 1 ? tryCallSingleGeminiModel(MODELS[1], apiKey, prompt) : null;
+        return MODELS.length > 1 ? tryCallSingleGeminiModel(MODELS[1], apiKey, prompt, base64Jpeg) : null;
     }
 
-    private String tryCallLiteWithRetry(String model, String apiKey, String prompt) {
-        String first = tryCallSingleGeminiModel(model, apiKey, prompt);
+    private String tryCallLiteWithRetry(String model, String apiKey, String prompt, String base64Jpeg) {
+        String first = tryCallSingleGeminiModel(model, apiKey, prompt, base64Jpeg);
         if (first != null) return first;
         try { Thread.sleep(800); } catch (Exception ignored) {}
-        return tryCallSingleGeminiModel(model, apiKey, prompt);
+        return tryCallSingleGeminiModel(model, apiKey, prompt, base64Jpeg);
     }
 
-    private String tryCallSingleGeminiModel(String model, String apiKey, String prompt) {
+    private String tryCallSingleGeminiModel(String model, String apiKey, String prompt, String base64Jpeg) {
         try {
             String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
-            String resp = httpPost(url, buildGeminiRequestBody(prompt).toString());
+            String resp = httpPost(url, buildGeminiRequestBody(prompt, base64Jpeg).toString());
             JSONObject root = new JSONObject(resp);
             return root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
         } catch (Exception e) {
@@ -953,8 +957,11 @@ public class AiRecommender {
         }
     }
 
-    private JSONObject buildGeminiRequestBody(String prompt) throws Exception {
+    private JSONObject buildGeminiRequestBody(String prompt, String base64Jpeg) throws Exception {
         JSONArray parts = new JSONArray().put(new JSONObject().put("text", prompt));
+        if (base64Jpeg != null && !base64Jpeg.isEmpty()) {
+            parts.put(new JSONObject().put("inlineData", new JSONObject().put("mimeType", "image/jpeg").put("data", base64Jpeg)));
+        }
         JSONArray contents = new JSONArray().put(new JSONObject().put("parts", parts));
         JSONObject genCfg = new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.65);
         return new JSONObject().put("contents", contents).put("generationConfig", genCfg);

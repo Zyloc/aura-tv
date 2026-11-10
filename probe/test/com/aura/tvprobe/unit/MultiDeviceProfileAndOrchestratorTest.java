@@ -113,4 +113,65 @@ public class MultiDeviceProfileAndOrchestratorTest {
         assertTrue(VoiceConcierge.isFollowUpRefinement("under 2 hours"));
         assertTrue(VoiceConcierge.isFollowUpRefinement("only on Netflix"));
     }
+
+    @Test
+    public void testShowCompanionIntentLensesAndTargetExtraction() throws Exception {
+        assertTrue(ShowCompanionAgent.isShowCompanionQuery("Catch me up on MobLand Season 1 Episode 4 at 24 minutes"));
+        assertEquals(ShowCompanionAgent.LENS_FULL_RECAP,
+            ShowCompanionAgent.detectLens("Catch me up on MobLand Season 1 Episode 4 at 24 minutes"));
+        assertEquals("MobLand",
+            ShowCompanionAgent.extractTitleFromCompanionQuery("Catch me up on MobLand Season 1 Episode 4 at 24 minutes"));
+
+        assertTrue(ShowCompanionAgent.isShowCompanionQuery("Who is Harry Da Souza in MobLand and why did he visit Antoine?"));
+        assertEquals(ShowCompanionAgent.LENS_CHARACTER_OR_PLOT,
+            ShowCompanionAgent.detectLens("Who is Harry Da Souza in MobLand and why did he visit Antoine?"));
+
+        assertTrue(ShowCompanionAgent.isShowCompanionQuery("What happened in the last 5 minutes?"));
+        assertEquals(ShowCompanionAgent.LENS_RECENT_SCENE,
+            ShowCompanionAgent.detectLens("What happened in the last 5 minutes?"));
+
+        assertTrue(ShowCompanionAgent.isShowCompanionQuery("Who is this actor on screen and find me movies with him"));
+        assertEquals(ShowCompanionAgent.LENS_ACTOR_XRAY,
+            ShowCompanionAgent.detectLens("Who is this actor on screen and find me movies with him"));
+
+        JSONObject ctx = ShowCompanionAgent.resolveTargetContext(
+            null, "member1", "Catch me up on MobLand Season 1 Episode 4 at 24 minutes", null);
+        assertEquals("MobLand", ctx.optString("title"));
+        assertEquals(1, ctx.optInt("season"));
+        assertEquals(4, ctx.optInt("episode"));
+        assertEquals(1440, ctx.optInt("position_sec"));
+    }
+
+    @Test
+    public void testSubtitleSrtSlicingSceneBeatCompressionGrepAndActorXray() throws Exception {
+        String sampleSrt =
+            "1\n00:00:15,000 --> 00:00:18,000\nYeah.\n\n" +
+            "2\n00:02:10,000 --> 00:02:16,000\nHarry Da Souza is heading to the docks to meet Conrad Harrigan.\n\n" +
+            "3\n00:08:40,000 --> 00:08:46,000\nMaeve Harrigan warned Kevin that Richie is planning a retaliation tonight.\n\n" +
+            "4\n00:23:10,000 --> 00:23:18,000\nBella told Harry to pay a visit to Antoine before Conrad finds the rat.\n\n" +
+            "5\n00:42:00,000 --> 00:42:10,000\nSpoiler from minute 42 that must be excluded when paused at minute 24!\n";
+
+        JSONArray cues = SubtitleAndGuideStore.parseRawSrtToCues(sampleSrt);
+        assertEquals("Filler 'Yeah.' must be stripped while 4 substantive cues remain", 4, cues.length());
+
+        // Slice up to 24:00 (1440s) -> must include minutes 2, 8, 23 and exclude minute 42
+        String compressed = SubtitleAndGuideStore.sliceCompressedSceneBeats(cues, 1440);
+        assertTrue(compressed.contains("Harry Da Souza"));
+        assertTrue(compressed.contains("Antoine"));
+        assertFalse("Cues after position_sec (1440s) must never leak into sliced beats", compressed.contains("minute 42"));
+
+        // Grep for 'Antoine' up to 1440s
+        String grepped = SubtitleAndGuideStore.grepCharacterOrTopic(cues, 1440, Arrays.asList("Antoine"));
+        assertTrue(grepped.contains("Antoine"));
+
+        // Actor <-> Character X-Ray at 23m 30s (1410s)
+        JSONObject guide = new JSONObject().put("cast", new JSONArray()
+            .put(new JSONObject().put("actor", "Tom Hardy").put("character", "Harry Da Souza"))
+            .put(new JSONObject().put("actor", "Pierce Brosnan").put("character", "Conrad Harrigan"))
+            .put(new JSONObject().put("actor", "Lara Pulver").put("character", "Bella Harrigan")));
+        JSONArray activeActors = SubtitleAndGuideStore.inferActiveSceneActors(guide, cues, 1410);
+        assertTrue(activeActors.length() >= 2);
+        assertEquals("Clean TTS text must strip markdown/icons",
+            "MobLand S1E4 Audio Recap", AuraTtsNarrator.cleanSpokenText("🔊 **MobLand** `S1E4` Audio Recap"));
+    }
 }

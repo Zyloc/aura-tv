@@ -283,7 +283,32 @@ public class MediaProbeService extends NotificationListenerService {
         if ("/api/toggle-filter".equals(p)) return handleToggleFilterRoute(out, uri);
         if ("/api/watched".equals(p)) return handleWatchedRoute(out, uri, reqBody);
         if ("/api/chat".equals(p)) return handleChatRoute(out, uri, reqBody);
+        if ("/api/catchup".equals(p)) return handleCatchupRoute(out, uri, reqBody);
         return false;
+    }
+
+    private boolean handleCatchupRoute(OutputStream out, Uri uri, String reqBody) throws Exception {
+        JSONObject item = !reqBody.isEmpty() ? new JSONObject(reqBody) : new JSONObject();
+        String prof = optParam(uri, "profile", item.optString("profile", db.getValidActiveProfile()));
+        String q = optParam(uri, "q", item.optString("query", ""));
+        populateCatchupItemFromUri(uri, item);
+        JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, prof, q, item);
+        if (!"0".equals(optParam(uri, "speak", "1"))) {
+            AuraTtsNarrator.speak(this, recap.optString("spoken_narration", ""), null);
+        }
+        writeHttpResponse(out, "application/json", recap.toString());
+        return true;
+    }
+
+    private void populateCatchupItemFromUri(Uri uri, JSONObject item) throws Exception {
+        String title = optParam(uri, "title", item.optString("title", ""));
+        if (!title.isEmpty()) item.put("title", title).put("series_title", title);
+        int s = Integer.parseInt(optParam(uri, "season", String.valueOf(item.optInt("season", 0))));
+        int e = Integer.parseInt(optParam(uri, "episode", String.valueOf(item.optInt("episode", 0))));
+        int pos = Integer.parseInt(optParam(uri, "pos", String.valueOf(item.optInt("position_sec", 0))));
+        if (s > 0) item.put("season", s);
+        if (e > 0) item.put("episode", e);
+        if (pos > 0) item.put("position_sec", pos);
     }
 
     private boolean handleToggleFilterRoute(OutputStream out, Uri uri) throws Exception {

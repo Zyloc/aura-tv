@@ -49,6 +49,7 @@ public class AuraDb extends SQLiteOpenHelper {
         Thread t = new Thread(() -> {
             purgePromotionalNoiseFromHistory();
             purgeUnreleasedFromRecos();
+            DatabaseJanitor.maybeRunDailyJanitor(this);
         }, "AuraDbCleanup");
         t.setDaemon(true);
         t.start();
@@ -92,6 +93,7 @@ public class AuraDb extends SQLiteOpenHelper {
     public void onCreate(SQLiteDatabase db) {
         createWatchHistoryTable(db);
         createSupportTables(db);
+        DatabaseJanitor.ensureCompanionTables(db);
         seedDefaultSettings(db);
     }
 
@@ -767,6 +769,15 @@ public class AuraDb extends SQLiteOpenHelper {
         long updatedAt = resolveWatchItemTimestamp(db, item, rawKey, newPos);
         ContentValues cv = buildWatchItemValues(item, rawKey, newPos, newDur, updatedAt);
         db.insertWithOnConflict("watch_history", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        recordCompanionProgressAndPrefetch(item, newPos, newDur);
+    }
+
+    private void recordCompanionProgressAndPrefetch(JSONObject item, int newPos, int newDur) {
+        String baseTitle = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
+        int s = item.optInt("season", 0);
+        int e = item.optInt("episode", 0);
+        DatabaseJanitor.recordEpisodeCheckpoint(this, baseTitle, s, e, newPos, newDur);
+        SubtitleAndGuideStore.proactivelyCacheSeriesAsync(this, baseTitle, s, e);
     }
 
     private ContentValues buildWatchItemValues(JSONObject item, String rawKey, int newPos, int newDur, long updatedAt) {
@@ -885,11 +896,13 @@ public class AuraDb extends SQLiteOpenHelper {
 
     public void saveCachedGti(String gti, String json) {
         SQLiteDatabase db = getWritableDatabase();
+        long now = System.currentTimeMillis() / 1000L;
         ContentValues cv = new ContentValues();
         cv.put("gti", gti);
         cv.put("payload_json", json);
-        cv.put("updated_at", System.currentTimeMillis() / 1000L);
+        cv.put("updated_at", now);
         db.insertWithOnConflict("gti_cache", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        DatabaseJanitor.enforceGtiCacheCaps(db, now);
     }
 
     public boolean isRecoCacheFresh(String profileId) {
