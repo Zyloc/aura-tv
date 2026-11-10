@@ -34,13 +34,44 @@ public final class QrRemoteBuilder {
         return card;
     }
 
-    /** Returns the device's WiFi IP address as a dotted string. */
+    /** Returns the device's WiFi or LAN IPv4 address as a dotted string. */
     public static String getTvIpAddress(Context ctx) {
-        WifiManager wm = (WifiManager) ctx.getApplicationContext()
-                .getSystemService(Context.WIFI_SERVICE);
-        if (wm == null) return "0.0.0.0";
-        int ip = wm.getConnectionInfo().getIpAddress();
-        return formatIp(ip);
+        String wifiIp = getWifiManagerIp(ctx);
+        if (isValidLanIp(wifiIp)) return wifiIp;
+        String ifaceIp = scanNetworkInterfacesIp();
+        return isValidLanIp(ifaceIp) ? ifaceIp : "0.0.0.0";
+    }
+
+    private static String getWifiManagerIp(Context ctx) {
+        try {
+            WifiManager wm = (WifiManager) ctx.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            return wm != null ? formatIp(wm.getConnectionInfo().getIpAddress()) : "0.0.0.0";
+        } catch (Throwable e) { return "0.0.0.0"; }
+    }
+
+    private static boolean isValidLanIp(String ip) {
+        return ip != null && !ip.isEmpty() && !"0.0.0.0".equals(ip) && !ip.startsWith("127.");
+    }
+
+    private static String scanNetworkInterfacesIp() {
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> en = java.net.NetworkInterface.getNetworkInterfaces();
+            while (en != null && en.hasMoreElements()) {
+                String found = findIpv4OnInterface(en.nextElement());
+                if (isValidLanIp(found)) return found;
+            }
+        } catch (Throwable ignored) {}
+        return "0.0.0.0";
+    }
+
+    private static String findIpv4OnInterface(java.net.NetworkInterface nif) throws Exception {
+        if (nif == null || nif.isLoopback() || !nif.isUp()) return "";
+        java.util.Enumeration<java.net.InetAddress> addrs = nif.getInetAddresses();
+        while (addrs.hasMoreElements()) {
+            java.net.InetAddress a = addrs.nextElement();
+            if (!a.isLoopbackAddress() && a instanceof java.net.Inet4Address) return a.getHostAddress();
+        }
+        return "";
     }
 
     // ── Card layout pieces ───────────────────────────────────────────────
@@ -64,11 +95,14 @@ public final class QrRemoteBuilder {
     }
 
     private static ImageView createQrImageView(Context ctx, String url) {
-        Bitmap bmp = renderQrBitmap(url, GlassTheme.dp(ctx, 180));
+        int size = GlassTheme.dp(ctx, 220);
         ImageView iv = new ImageView(ctx);
-        iv.setImageBitmap(bmp);
+        iv.setImageBitmap(renderQrBitmap(url, size));
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        setBottomMargin(ctx, iv, 12);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(size, size);
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        lp.bottomMargin = GlassTheme.dp(ctx, 14);
+        iv.setLayoutParams(lp);
         return iv;
     }
 
@@ -127,7 +161,8 @@ public final class QrRemoteBuilder {
 
     private static Paint createDarkPaint() {
         Paint dark = new Paint();
-        dark.setColor(GlassTheme.TEXT_PRIMARY);
+        dark.setColor(Color.BLACK);
+        dark.setStyle(Paint.Style.FILL);
         return dark;
     }
 
@@ -152,7 +187,7 @@ public final class QrRemoteBuilder {
 
     private static Paint createFallbackPaint(int sizePx) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        p.setColor(GlassTheme.TEXT_PRIMARY);
+        p.setColor(Color.BLACK);
         p.setTextSize(sizePx / 12f);
         p.setTextAlign(Paint.Align.CENTER);
         return p;
@@ -437,13 +472,13 @@ public final class QrRemoteBuilder {
     }
 
     private static void placeFormatAround(boolean[][] g, int s, int bits) {
-        for (int i = 0; i <= 5; i++) g[8][i] = bit(bits, i);
-        g[8][7] = bit(bits, 6);
+        for (int i = 0; i <= 5; i++) g[8][i] = bit(bits, 14 - i);
+        g[8][7] = bit(bits, 8);
         g[8][8] = bit(bits, 7);
-        g[7][8] = bit(bits, 8);
-        for (int i = 9; i < 15; i++) g[14 - i][8] = bit(bits, i);
-        for (int i = 0; i < 8; i++) g[8][s - 1 - i] = bit(bits, i);
-        for (int i = 0; i < 7; i++) g[s - 7 + i][8] = bit(bits, 8 + i);
+        g[7][8] = bit(bits, 6);
+        for (int i = 0; i <= 5; i++) g[i][8] = bit(bits, i);
+        for (int i = 0; i < 7; i++) g[s - 1 - i][8] = bit(bits, 14 - i);
+        for (int i = 0; i < 8; i++) g[8][s - 8 + i] = bit(bits, 7 - i);
     }
 
     private static boolean bit(int val, int i) {

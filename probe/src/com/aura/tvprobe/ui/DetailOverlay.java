@@ -51,6 +51,7 @@ public final class DetailOverlay {
 
     public interface DetailCallback {
         void onWatchClicked(JSONObject item);
+        default void onTrailerClicked(JSONObject item) {}
         void onWatchedToggle(JSONObject item);
         void onSimilarClicked(JSONObject item);
         void onRated(JSONObject item, int score);
@@ -482,12 +483,20 @@ public final class DetailOverlay {
         TextView watchBtn = buildActionButton(ctx, "\u25B6  Watch", true);
         watchBtn.setOnClickListener(v -> cb.onWatchClicked(item));
         row.addView(watchBtn);
+        TextView trailerBtn = buildActionButton(ctx, "\u25B6  Watch Trailer", false);
+        trailerBtn.setOnClickListener(v -> cb.onTrailerClicked(item));
+        row.addView(trailerBtn);
+        row.addView(createExploreSimilarButton(overlay, item, ctx, cb));
+    }
+
+    private static TextView createExploreSimilarButton(FrameLayout overlay, JSONObject item,
+                                                       Context ctx, DetailCallback cb) {
         TextView simBtn = buildActionButton(ctx, "\u2726  Explore Similar", false);
         simBtn.setOnClickListener(v -> {
             dismiss(overlay);
             cb.onSimilarClicked(item);
         });
-        row.addView(simBtn);
+        return simBtn;
     }
 
     private static void bindActionButtonsDpad(FrameLayout overlay, LinearLayout row, DetailCallback cb) {

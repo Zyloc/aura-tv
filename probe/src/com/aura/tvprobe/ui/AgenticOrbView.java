@@ -214,9 +214,7 @@ public final class AgenticOrbView extends View {
     public static LinearLayout buildFloatingLoaderColumn(Context ctx, int statusTextTag, int subTextTag) {
         LinearLayout col = createLoaderColumnContainer(ctx);
         addOrbChild(ctx, col);
-        addBadgeChild(ctx, col);
         addMainStatusChild(ctx, col, statusTextTag);
-        addSubStatusChild(ctx, col, subTextTag);
         return col;
     }
 
@@ -239,33 +237,12 @@ public final class AgenticOrbView extends View {
         col.addView(orb, orbLp);
     }
 
-    private static void addBadgeChild(Context ctx, LinearLayout col) {
-        TextView badge = GlassTheme.makeText(ctx, "AURA", 9.5f,
-            Color.argb(210, 148, 163, 184), GlassTheme.FONT_BOLD, 1);
-        badge.setLetterSpacing(0.18f);
-        badge.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams bLp = GlassTheme.wrapParams();
-        bLp.bottomMargin = GlassTheme.dp(ctx, 6);
-        col.addView(badge, bLp);
-    }
-
     private static void addMainStatusChild(Context ctx, LinearLayout col, int statusTextTag) {
         TextView mainTxt = GlassTheme.makeText(ctx,
-            "Looking at what you love to watch\u2026", 14.5f,
-            Color.WHITE, GlassTheme.FONT_BOLD, 2);
+            "Finding best matches\u2026", 14.0f,
+            Color.WHITE, GlassTheme.FONT_BOLD, 1);
         mainTxt.setGravity(Gravity.CENTER);
         if (statusTextTag != 0) mainTxt.setTag(statusTextTag);
         col.addView(mainTxt, GlassTheme.wrapParams());
-    }
-
-    private static void addSubStatusChild(Context ctx, LinearLayout col, int subTextTag) {
-        TextView subTxt = GlassTheme.makeText(ctx,
-            "Checking what\u2019s streaming across your apps", 10.5f,
-            GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1);
-        subTxt.setGravity(Gravity.CENTER);
-        if (subTextTag != 0) subTxt.setTag(subTextTag);
-        LinearLayout.LayoutParams sLp = GlassTheme.wrapParams();
-        sLp.topMargin = GlassTheme.dp(ctx, 4);
-        col.addView(subTxt, sLp);
     }
 }

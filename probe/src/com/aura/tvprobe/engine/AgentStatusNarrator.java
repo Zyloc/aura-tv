@@ -52,7 +52,7 @@ public final class AgentStatusNarrator {
         int idx = 0;
         while (active.get() && idx < stepQueue.size()) {
             emitStepIfActive(stepQueue.get(idx++));
-            sleepQuietly(1650L);
+            sleepQuietly(2400L);
         }
     }
 
@@ -66,16 +66,12 @@ public final class AgentStatusNarrator {
 
     private String buildNarrationPrompt(AuraDb db, String profileId, String userQuery) {
         List<String> anchors = db.getDynamicTasteAnchors(profileId);
-        List<String> recent = anchors.subList(0, Math.min(4, anchors.size()));
+        List<String> recent = anchors.subList(0, Math.min(3, anchors.size()));
         String q = userQuery == null ? "" : userQuery.trim();
-        String taskDesc = q.isEmpty()
-            ? "refreshing personalized home recommendations based on recently watched titles " + recent
-            : "finding movies or shows for request \"" + q + "\" (viewer also likes " + recent + ")";
-        return "You are a warm, friendly living-room TV concierge speaking to a non-technical viewer.\n" +
-            "Task right now: " + taskDesc + ".\n" +
-            "Generate 4 short, natural progress updates (8 to 13 words each, ending with '\u2026') describing what you are doing step-by-step (e.g. looking at what they liked, exploring matching stories/actors/moods, checking Netflix/Prime/Hotstar, picking tonight's best options).\n" +
-            "STRICT RULE: NEVER use technical words like AI, LLM, GraphQL, graph, JustWatch, vector, algorithm, database, metadata, or API.\n" +
-            "Return ONLY a JSON array of 4 strings.";
+        String taskDesc = q.isEmpty() ? "refreshing recommendations from " + recent : "searching for \"" + q + "\"";
+        return "You are a concise TV status label generator.\nTask: " + taskDesc + ".\n" +
+            "Generate 3 ultra-short status phrases (3 to 5 words MAX each, ending with '\u2026', e.g. 'Finding feel-good movies\u2026', 'Checking your streaming apps\u2026', 'Picking top matches\u2026').\n" +
+            "NEVER use technical words (AI, LLM, GraphQL, graph, JustWatch, vector, algorithm, metadata). Return ONLY a JSON array of 3 strings.";
     }
 
     private void emitStepIfActive(String msg) {
@@ -86,9 +82,21 @@ public final class AgentStatusNarrator {
 
     public static String sanitizeStep(String raw) {
         if (raw == null) return "";
-        String s = raw.trim().replaceAll("(?i)\\b(JustWatch|GraphQL|graph|LLM|vector|Bayesian|metadata|algorithm)\\b", "").replaceAll("\\s{2,}", " ").trim();
+        String s = raw.trim().replaceAll("(?i)\\b(JustWatch|GraphQL|graph|LLM|vector|Bayesian|metadata|algorithm|AI)\\b", "")
+            .replaceAll("[.\u2026]+$", "").replaceAll("\\s{2,}", " ").trim();
         if (s.isEmpty()) return "";
-        return s.endsWith("\u2026") || s.endsWith("...") ? s : (s + "\u2026");
+        return capWordCount(s, 5) + "\u2026";
+    }
+
+    private static String capWordCount(String text, int maxWords) {
+        String[] words = text.split("\\s+");
+        if (words.length <= maxWords) return text;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < maxWords; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(words[i]);
+        }
+        return sb.toString();
     }
 
     private static void sleepQuietly(long ms) {

@@ -289,8 +289,16 @@ public class AuraActivity extends Activity implements
         if (!shouldHandleGlobalVoiceQuery(q)) return;
         AuraActivity inst = sActiveInstance;
         if (inst == null) return;
+        VoiceSearchHelper.silenceAssistantAudio(ctx, inst.ui);
         inst.ui.post(() -> inst.runSearchQuery(q));
         scheduleBringAuraToFront(inst.ui, ctx);
+    }
+
+    public static void suppressKatnissOverlayNow(Context ctx) {
+        if ((System.currentTimeMillis() - sLastGlobalVoiceMs) > 9_000L) return;
+        AuraActivity inst = sActiveInstance;
+        if (inst != null) VoiceSearchHelper.silenceAssistantAudio(ctx, inst.ui);
+        bringAuraToFrontNow(ctx);
     }
 
     private static boolean shouldHandleGlobalVoiceQuery(String q) {
@@ -306,18 +314,26 @@ public class AuraActivity extends Activity implements
 
     private static void scheduleBringAuraToFront(Handler h, Context ctx) {
         bringAuraToFrontNow(ctx);
-        for (long delay : new long[]{160L, 340L, 600L, 950L, 1450L, 2200L, 3200L}) {
-            h.postDelayed(() -> bringAuraToFrontNow(ctx), delay);
+        for (int step = 1; step <= 34; step++) {
+            h.postDelayed(() -> bringAuraToFrontNow(ctx), step * 140L);
         }
     }
 
     private static void bringAuraToFrontNow(Context ctx) {
         try {
+            killKatnissBackgroundSafe(ctx);
             ctx.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
-            Intent i = new Intent(ctx, AuraActivity.class);
-            i.putExtra("aura_bring_to_front", true);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            Intent i = new Intent(ctx, AuraActivity.class).putExtra("aura_bring_to_front", true);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
             ctx.startActivity(i);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void killKatnissBackgroundSafe(Context ctx) {
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) am.killBackgroundProcesses("com.google.android.katniss");
         } catch (Throwable ignored) {}
     }
 
@@ -706,8 +722,8 @@ public class AuraActivity extends Activity implements
 
     private void renderHomeContent(JSONArray recos) {
         lastRenderedRecoSec = Math.max(System.currentTimeMillis() / 1000L, db.getRecoUpdatedAt(activeProfile));
-        final int savedScrollY = mainScroll != null ? mainScroll.getScrollY() : 0;
-        final int[] savedRailFocus = findFocusedRailAndCard();
+        final int savedScrollY = resolveSavedScrollY();
+        final int[] savedRailFocus = resolveSavedRailFocus();
         List<JSONObject> fullList = toJsonList(recos);
         List<JSONObject> all = fullList.subList(0, Math.min(16, fullList.size()));
         AmbientScreensaverOverlay.setItems(screensaverOverlay, all);
@@ -716,6 +732,16 @@ public class AuraActivity extends Activity implements
         rebuildHomeRails(all);
         animateHomeRailsEntrance();
         restoreOrInitFocus(savedRailFocus, savedScrollY);
+    }
+
+    private int resolveSavedScrollY() {
+        int cur = mainScroll != null ? mainScroll.getScrollY() : 0;
+        return cur > 0 ? cur : lastScrollY;
+    }
+
+    private int[] resolveSavedRailFocus() {
+        int[] live = findFocusedRailAndCard();
+        return live != null ? live : lastRailFocus;
     }
 
     private void rebuildHomeRails(List<JSONObject> all) {
@@ -743,9 +769,9 @@ public class AuraActivity extends Activity implements
     }
 
     private void applySavedOrInitialFocus(int[] savedRailFocus, int savedScrollY) {
-        if (savedRailFocus != null && savedRailFocus[0] >= 0
-                && savedRailFocus[0] < railsContainer.getChildCount()) {
-            focusSavedRailItem(savedRailFocus[0], savedRailFocus[1], savedScrollY);
+        if (savedRailFocus != null && savedRailFocus[0] >= 0 && railsContainer.getChildCount() > 0) {
+            int railIdx = Math.min(savedRailFocus[0], railsContainer.getChildCount() - 1);
+            focusSavedRailItem(railIdx, savedRailFocus[1], savedScrollY);
             return;
         }
         if (mainScroll != null) mainScroll.scrollTo(0, 0);
@@ -753,10 +779,13 @@ public class AuraActivity extends Activity implements
     }
 
     private void focusSavedRailItem(int railIdx, int cardIdx, int savedScrollY) {
-        if (mainScroll != null) mainScroll.scrollTo(0, savedScrollY);
         View railView = railsContainer.getChildAt(railIdx);
         if (railView instanceof LinearLayout) {
             RailBuilder.focusItemAt((LinearLayout) railView, cardIdx);
+        }
+        if (mainScroll != null) {
+            mainScroll.scrollTo(0, savedScrollY);
+            mainScroll.post(() -> mainScroll.scrollTo(0, savedScrollY));
         }
     }
 
@@ -936,6 +965,11 @@ public class AuraActivity extends Activity implements
     @Override
     public void onWatchClicked(JSONObject item) {
         launchMediaItem(item);
+    }
+
+    @Override
+    public void onTrailerClicked(JSONObject item) {
+        MediaDeepLinkLauncher.launchYouTubeTrailer(this, item);
     }
 
     @Override
@@ -1228,6 +1262,7 @@ public class AuraActivity extends Activity implements
         watchedChangedWhileInDetail = true;
         int rating = db.getUserRatingsMap().getOrDefault(AuraDb.normalizeTitleKey(title), 0);
         DetailOverlay.updateUserFeedback(detailOverlay, item, nowWatched, rating, this, this);
+        if (nowWatched) ui.postDelayed(this::onDismiss, 160);
     }
 
     @Override
@@ -1238,6 +1273,7 @@ public class AuraActivity extends Activity implements
         Toast.makeText(this, "Rated " + score + "/10", Toast.LENGTH_SHORT).show();
         boolean watched = db.isTitleWatched(title);
         DetailOverlay.updateUserFeedback(detailOverlay, item, watched, score, this, this);
+        ui.postDelayed(this::onDismiss, 160);
     }
 
     @Override

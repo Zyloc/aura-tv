@@ -20,9 +20,44 @@ import java.util.List;
 public final class MediaDeepLinkLauncher {
 
     private static final String NETFLIX_PKG = "com.netflix.ninja";
+    private static final String YOUTUBE_TV_PKG = "com.google.android.youtube.tv";
+    private static final String SMARTTUBE_PKG = "org.smarttube.stable";
     private static final String PLAY_STORE_PKG = "com.android.vending";
 
     private MediaDeepLinkLauncher() {}
+
+    public static void launchYouTubeTrailer(Context ctx, JSONObject item) {
+        String query = buildTrailerSearchQuery(item);
+        if (query.isEmpty() || ctx == null) return;
+        if (tryYouTubeTrailerIntent(ctx, YOUTUBE_TV_PKG, query)) return;
+        if (tryYouTubeTrailerIntent(ctx, SMARTTUBE_PKG, query)) return;
+        tryYouTubeTrailerIntent(ctx, "", query);
+    }
+
+    public static String buildTrailerSearchQuery(JSONObject item) {
+        String cleanTitle = extractCleanTitle(item);
+        if (cleanTitle.isEmpty()) return "";
+        int year = item != null ? item.optInt("year", 0) : 0;
+        return (year > 0 ? cleanTitle + " " + year : cleanTitle) + " official trailer";
+    }
+
+    private static boolean tryYouTubeTrailerIntent(Context ctx, String pkg, String query) {
+        String url = "https://www.youtube.com/results?search_query=" + Uri.encode(query);
+        if (tryStartYouTubeUri(ctx, "android.media.action.MEDIA_PLAY_FROM_SEARCH", url, pkg, query)) return true;
+        return tryStartYouTubeUri(ctx, Intent.ACTION_VIEW, url, pkg, query);
+    }
+
+    private static boolean tryStartYouTubeUri(Context ctx, String action, String url, String pkg, String query) {
+        try {
+            Intent i = new Intent(action, Uri.parse(url));
+            if (pkg != null && !pkg.isEmpty()) i.setPackage(pkg);
+            i.putExtra(SearchManager.QUERY, query);
+            i.putExtra("query", query);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+            return true;
+        } catch (Exception ignored) { return false; }
+    }
 
     public static void launchMediaItem(Context ctx, AuraDb db, JSONObject item) {
         if (item == null) return;

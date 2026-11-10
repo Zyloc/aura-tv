@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets;
 public class MediaProbeService extends NotificationListenerService {
     private ServerSocket serverSocket;
     private volatile boolean running = false;
-    private final java.util.concurrent.ExecutorService httpPool = java.util.concurrent.Executors.newFixedThreadPool(2);
+    private final java.util.concurrent.ExecutorService httpPool = java.util.concurrent.Executors.newCachedThreadPool();
     private AuraDb db;
     private AiRecommender ai;
     private SessionInspector inspector;
@@ -84,20 +84,42 @@ public class MediaProbeService extends NotificationListenerService {
         }
     }
 
-    private void startHttpServer() {
-        if (running) return;
+    private synchronized void startHttpServer() {
+        if (running && serverSocket != null && !serverSocket.isClosed() && serverSocket.isBound()) return;
         running = true;
         new Thread(this::acceptLoop, "AuraHttpProbe").start();
     }
 
     private void acceptLoop() {
+        while (running) {
+            runServerSocketOnce();
+            if (running) try { Thread.sleep(1000L); } catch (InterruptedException ignored) {}
+        }
+    }
+
+    private void runServerSocketOnce() {
         try {
-            serverSocket = new ServerSocket(8765);
-            while (running) {
+            openReusableServerSocket();
+            while (running && serverSocket != null && !serverSocket.isClosed()) {
                 Socket client = serverSocket.accept();
                 httpPool.submit(() -> handleClient(client));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            closeServerSocketSafe();
+        }
+    }
+
+    private void openReusableServerSocket() throws Exception {
+        closeServerSocketSafe();
+        ServerSocket ss = new ServerSocket();
+        ss.setReuseAddress(true);
+        ss.bind(new java.net.InetSocketAddress("0.0.0.0", 8765), 32);
+        serverSocket = ss;
+    }
+
+    private void closeServerSocketSafe() {
+        try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
     }
 
     private void handleClient(Socket client) {

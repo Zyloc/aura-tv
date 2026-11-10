@@ -172,6 +172,35 @@ public final class VoiceSearchHelper {
         return (end > start) ? logLine.substring(start, end).trim() : "";
     }
 
+    public static boolean isKatnissResponseTakeoverLog(String line) {
+        if (line == null) return false;
+        return line.contains("Starting the connection")
+            || line.contains("VIEW_ADD_TEXT_START")
+            || line.contains("TEXT_FRAGMENT")
+            || line.contains("PreviewTextResponseFragment")
+            || line.contains("LIBAS_TTS_PLAYBACK_STARTED");
+    }
+
+    public static void silenceAssistantAudio(Context ctx, android.os.Handler ui) {
+        if (ctx == null || ui == null) return;
+        muteAssistantStreamsNow(ctx, true);
+        for (long d : new long[]{700L, 1500L, 2400L, 3300L, 4100L}) {
+            ui.postDelayed(() -> muteAssistantStreamsNow(ctx, true), d);
+        }
+        ui.postDelayed(() -> muteAssistantStreamsNow(ctx, false), 5000L);
+    }
+
+    private static void muteAssistantStreamsNow(Context ctx, boolean mute) {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            int dir = mute ? android.media.AudioManager.ADJUST_MUTE : android.media.AudioManager.ADJUST_UNMUTE;
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, dir, 0);
+            if (mute) am.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE);
+            else am.abandonAudioFocus(null);
+        } catch (Throwable ignored) {}
+    }
+
     private static String extractQuotedField(String line, String marker) {
         int idx = line.indexOf(marker);
         if (idx < 0) return "";

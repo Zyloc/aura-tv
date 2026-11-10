@@ -112,6 +112,21 @@ public class AndroidManifestContractTest {
         assertTrue("AuraActivity must handle voice recognition result in onActivityResult", src.contains("extractActivityResultQuery"));
     }
 
+    @Test
+    public void testQrCodeContrastFormatBitsTrailerAndRatingFocusContracts() throws Exception {
+        boolean[][] qr = QrRemoteBuilder.encode("http://192.168.1.4:8765");
+        assertNotNull("QR matrix must encode URL", qr);
+        assertTrue("Top-left format MSB (8,0) must be true for 0x77C4", qr[8][0]);
+        assertFalse("Top-left format LSB (0,8) must be false for 0x77C4", qr[0][8]);
+        assertTrue("Bottom-left format MSB (s-1,8) must be true for 0x77C4", qr[qr.length - 1][8]);
+        assertFalse("Top-right format LSB (8,s-1) must be false for 0x77C4", qr[8][qr.length - 1]);
+        String shortStep = AgentStatusNarrator.sanitizeStep("Checking JustWatch GraphQL vector database for the best feel good movies tonight");
+        assertTrue("Orb step must be capped to 5 words max", shortStep.split("\\s+").length <= 5);
+        assertTrue("Katniss TTS log must trigger suppression", VoiceSearchHelper.isKatnissResponseTakeoverLog("I katniss: LIBAS_TTS_PLAYBACK_STARTED"));
+        org.json.JSONObject item = new org.json.JSONObject().put("title", "Dune: Part Two").put("year", 2024);
+        assertEquals("Dune: Part Two 2024 official trailer", MediaDeepLinkLauncher.buildTrailerSearchQuery(item));
+    }
+
     private static File resolveFile(String rootRelative, String probeRelative) {
         File f1 = new File(rootRelative);
         return f1.exists() ? f1 : new File(probeRelative);

@@ -155,7 +155,9 @@ public final class RailBuilder {
         LinearLayout row = findScrollContent(rail);
         if (row != null && row.getChildCount() > 0) {
             int idx = Math.max(0, Math.min(cardIndex, row.getChildCount() - 1));
-            return row.getChildAt(idx).requestFocus();
+            View target = row.getChildAt(idx);
+            target.post(target::requestFocus);
+            return target.requestFocus();
         }
         return false;
     }

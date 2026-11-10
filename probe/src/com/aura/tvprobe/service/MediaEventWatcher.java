@@ -92,7 +92,10 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
             katnissLogProcess = new ProcessBuilder(
                 "logcat", "-T", "1", "-s",
                 "katniss_interactor_StreamingTextView:I",
-                "katniss_interactor_KatnissConversationStateListenerImpl:I").start();
+                "katniss_interactor_KatnissConversationStateListenerImpl:I",
+                "katniss_search_KatnissIpcConnection:I",
+                "katniss_search_PreviewTextResponseFragment:I",
+                "katniss_interactor_AppFlowEventHandlerInteractor:I").start();
             readKatnissProcessStream(katnissLogProcess);
         } catch (Throwable ignored) {
         } finally {
@@ -105,9 +108,17 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
                 new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while (katnissWatcherRunning && (line = br.readLine()) != null) {
-                String spoken = VoiceSearchHelper.extractKatnissRecognizedText(line);
-                if (!spoken.isEmpty()) AuraActivity.onGlobalVoiceSearchQuery(ctx, spoken);
+                handleKatnissLogLine(line);
             }
+        }
+    }
+
+    private void handleKatnissLogLine(String line) {
+        String spoken = VoiceSearchHelper.extractKatnissRecognizedText(line);
+        if (!spoken.isEmpty()) {
+            AuraActivity.onGlobalVoiceSearchQuery(ctx, spoken);
+        } else if (VoiceSearchHelper.isKatnissResponseTakeoverLog(line)) {
+            AuraActivity.suppressKatnissOverlayNow(ctx);
         }
     }
 
