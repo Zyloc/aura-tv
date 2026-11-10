@@ -46,16 +46,6 @@ public final class VoiceSearchHelper {
             activity.startActivityForResult(buildRecognizerIntent(), REQ_VOICE_SEARCH);
             return true;
         } catch (Throwable e) {
-            return tryStartAssistantOverlay(activity);
-        }
-    }
-
-    private static boolean tryStartAssistantOverlay(Activity activity) {
-        try {
-            activity.startActivity(new Intent(Intent.ACTION_ASSIST).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            return true;
-        } catch (Throwable e) {
-            Toast.makeText(activity, "Voice input unavailable on this device", Toast.LENGTH_SHORT).show();
             return false;
         }
     }
@@ -174,11 +164,20 @@ public final class VoiceSearchHelper {
 
     public static String extractKatnissRecognizedText(String logLine) {
         if (logLine == null) return "";
+        if (logLine.contains("state[FINAL_RESULT]")) return extractQuotedField(logLine, "recognized_speech: \"");
         int idx = logLine.indexOf("setFinalRecognizedText(");
         if (idx < 0) return "";
         int start = idx + 23;
         int end = logLine.lastIndexOf(')');
         return (end > start) ? logLine.substring(start, end).trim() : "";
+    }
+
+    private static String extractQuotedField(String line, String marker) {
+        int idx = line.indexOf(marker);
+        if (idx < 0) return "";
+        int start = idx + marker.length();
+        int end = line.indexOf('"', start);
+        return (end > start) ? line.substring(start, end).trim() : "";
     }
 
     public static TextView buildMicButton(Context ctx, Runnable onClick) {

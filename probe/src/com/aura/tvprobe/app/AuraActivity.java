@@ -61,6 +61,7 @@ public class AuraActivity extends Activity implements
     private static final int TAG_GLOBAL_LOADER_TEXT = 0xAA_0101;
     private static final int TAG_GLOBAL_LOADER_SUB  = 0xAA_0102;
     private static volatile AuraActivity sActiveInstance;
+    private static volatile boolean sIsInForeground = false;
     private static volatile long sLastActiveWallMs = 0L;
     private static volatile String sLastGlobalVoiceQuery = "";
     private static volatile long sLastGlobalVoiceMs = 0L;
@@ -139,6 +140,7 @@ public class AuraActivity extends Activity implements
     protected void onResume() {
         super.onResume();
         sActiveInstance = this;
+        sIsInForeground = true;
         sLastActiveWallMs = System.currentTimeMillis();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
@@ -180,11 +182,15 @@ public class AuraActivity extends Activity implements
 
     private void scheduleHourlyRecoRefresh() {
         ui.removeCallbacks(hourlyRecoRefreshTask);
-        ui.postDelayed(hourlyRecoRefreshTask, HOURLY_REFRESH_MS);
+        long ageSec = db != null ? db.getRecoCacheAgeSec(activeProfile) : -1L;
+        long remMs = ageSec < 0 ? 5_000L : Math.max(5_000L, HOURLY_REFRESH_MS - (ageSec * 1000L));
+        ui.postDelayed(hourlyRecoRefreshTask, Math.min(remMs, 300_000L));
     }
 
     private void runHourlyRecoRefreshLoop() {
-        refreshAllData(true);
+        if (!db.isRecoCacheFresh(activeProfile)) {
+            refreshAllData(true);
+        }
         scheduleHourlyRecoRefresh();
     }
 
@@ -255,11 +261,11 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onPause() {
         super.onPause();
+        sIsInForeground = false;
         sLastActiveWallMs = System.currentTimeMillis();
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         ui.removeCallbacks(homeSearchHintTask);
         ui.removeCallbacks(idleScreensaverTask);
-        ui.removeCallbacks(hourlyRecoRefreshTask);
     }
 
     @Override
@@ -271,6 +277,8 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onDestroy() {
         if (sActiveInstance == this) sActiveInstance = null;
+        sIsInForeground = false;
+        ui.removeCallbacks(hourlyRecoRefreshTask);
         try { unregisterReceiver(homeKeyReceiver); } catch (Exception ignored) {}
         super.onDestroy();
     }
@@ -286,7 +294,8 @@ public class AuraActivity extends Activity implements
 
     private static boolean shouldHandleGlobalVoiceQuery(String q) {
         long now = System.currentTimeMillis();
-        if (q.length() < 2 || (now - sLastActiveWallMs) > 600_000L) return false;
+        boolean activeOrJustPaused = sIsInForeground || (now - sLastActiveWallMs) < 90_000L;
+        if (q.length() < 2 || !activeOrJustPaused) return false;
         if (q.equalsIgnoreCase(sLastGlobalVoiceQuery) && (now - sLastGlobalVoiceMs) < 3_500L) return false;
         sLastGlobalVoiceQuery = q;
         sLastGlobalVoiceMs = now;
@@ -296,14 +305,14 @@ public class AuraActivity extends Activity implements
 
     private static void scheduleBringAuraToFront(Handler h, Context ctx) {
         bringAuraToFrontNow(ctx);
-        h.postDelayed(() -> bringAuraToFrontNow(ctx), 650L);
-        h.postDelayed(() -> bringAuraToFrontNow(ctx), 1450L);
-        h.postDelayed(() -> bringAuraToFrontNow(ctx), 2450L);
-        h.postDelayed(() -> bringAuraToFrontNow(ctx), 3350L);
+        for (long delay : new long[]{160L, 340L, 600L, 950L, 1450L, 2200L, 3200L}) {
+            h.postDelayed(() -> bringAuraToFrontNow(ctx), delay);
+        }
     }
 
     private static void bringAuraToFrontNow(Context ctx) {
         try {
+            ctx.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
             Intent i = new Intent(ctx, AuraActivity.class);
             i.putExtra("aura_bring_to_front", true);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -319,6 +328,7 @@ public class AuraActivity extends Activity implements
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        sLastActiveWallMs = System.currentTimeMillis();
         resetIdleTimer();
         if (AmbientScreensaverOverlay.isVisible(screensaverOverlay)) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -681,9 +691,11 @@ public class AuraActivity extends Activity implements
 
     private void renderHomeContent(JSONArray recos) {
         lastRenderedRecoSec = Math.max(System.currentTimeMillis() / 1000L, db.getRecoUpdatedAt(activeProfile));
+        scheduleHourlyRecoRefresh();
         final int savedScrollY = mainScroll != null ? mainScroll.getScrollY() : 0;
         final int[] savedRailFocus = findFocusedRailAndCard();
-        List<JSONObject> all = toJsonList(recos);
+        List<JSONObject> fullList = toJsonList(recos);
+        List<JSONObject> all = fullList.subList(0, Math.min(16, fullList.size()));
         AmbientScreensaverOverlay.setItems(screensaverOverlay, all);
         HeroSliderBuilder.setItems(heroSlider, all.subList(0, Math.min(6, all.size())), this, this);
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
@@ -916,7 +928,15 @@ public class AuraActivity extends Activity implements
     public void onWatchedClicked(JSONObject item) {
         db.markTitleWatched(item, true);
         Toast.makeText(this, "Marked watched: " + item.optString("title"), Toast.LENGTH_SHORT).show();
-        refreshAllData(true);
+        replaceWatchedFromReserve();
+    }
+
+    private void replaceWatchedFromReserve() {
+        JSONArray remaining = db.getProfileRecommendations(activeProfile);
+        renderHomeContent(remaining);
+        if (remaining.length() < 12) {
+            submitBackgroundRefresh(true, true);
+        }
     }
 
     @Override
@@ -1038,6 +1058,9 @@ public class AuraActivity extends Activity implements
 
     private void prepareUiForSearchQuery(String q) {
         lastSearchQuery = q;
+        if (AmbientScreensaverOverlay.isVisible(screensaverOverlay)) {
+            AmbientScreensaverOverlay.dismiss(screensaverOverlay);
+        }
         if (searchLabel != null) {
             searchLabel.setText(q);
             searchLabel.setTextColor(GlassTheme.TEXT_PRIMARY);
@@ -1152,7 +1175,7 @@ public class AuraActivity extends Activity implements
         setBackgroundFocusBlocked(false);
         if (watchedChangedWhileInDetail) {
             watchedChangedWhileInDetail = false;
-            refreshAllData(true);
+            replaceWatchedFromReserve();
             return;
         }
         restoreFocusAfterOverlay();

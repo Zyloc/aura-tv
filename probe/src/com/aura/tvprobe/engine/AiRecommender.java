@@ -106,7 +106,7 @@ public class AiRecommender {
         taste.ensureDefaultGenreWeightsIfEmpty();
         scoreAndRerankPool(pool, taste, currentYear);
         List<JSONObject> slate = filterAndRerankPoolWithLlm(profileId, pool, epoch);
-        ImpressionTracker.recordSlateImpressions(db, epoch, slate);
+        ImpressionTracker.recordSlateImpressions(db, epoch, slate.subList(0, Math.min(16, slate.size())));
         return packRankedItems(slate);
     }
 
@@ -713,7 +713,7 @@ public class AiRecommender {
         for (int i = 0; i < arr.length(); i++) {
             tryAddMatchedLlmPick(arr.optJSONObject(i), byKey, added, out);
         }
-        if (out.size() < 12) appendRemainingPoolItems(pool, added, out, 16);
+        if (out.size() < 28) appendRemainingPoolItems(pool, added, out, 28);
         return out;
     }
 

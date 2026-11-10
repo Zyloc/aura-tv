@@ -293,13 +293,12 @@ public final class SearchOverlay {
         LinearLayout bar = createTopBarRow(ctx);
         LinearLayout inputBox = buildSearchInputPill(ctx, cb);
         LinearLayout.LayoutParams ibLp = GlassTheme.wrapParams();
-        ibLp.rightMargin = dp(ctx, 8);
+        ibLp.rightMargin = dp(ctx, 12);
         bar.addView(inputBox, ibLp);
-        TextView micBtn = addVoiceMicToBar(ctx, bar, cb);
         LinearLayout chipsRow = addChipsScrollToBar(ctx, bar);
         TextView resetBtn = addResetButtonToBar(ctx, bar, cb);
         TextView closeBtn = addCloseButtonToBar(ctx, bar, cb);
-        bindTopBarDpad(root, inputBox, micBtn, chipsRow, resetBtn, closeBtn, cb);
+        bindTopBarDpad(root, inputBox, chipsRow, resetBtn, closeBtn, cb);
         return bar;
     }
 
@@ -519,32 +518,21 @@ public final class SearchOverlay {
         return closeBtn;
     }
 
-    private static void bindTopBarDpad(FrameLayout root, View inputBox, View micBtn, LinearLayout chipsRow,
+    private static void bindTopBarDpad(FrameLayout root, View inputBox, LinearLayout chipsRow,
                                        View resetBtn, View closeBtn, SearchCallback cb) {
         inputBox.setOnKeyListener((v, code, ev) ->
-            handleInputBoxDpad(root, micBtn, cb, code, ev));
-        micBtn.setOnKeyListener((v, code, ev) ->
-            handleMicBtnDpad(root, inputBox, chipsRow, resetBtn, closeBtn, cb, code, ev));
+            handleInputBoxDpad(root, chipsRow, resetBtn, closeBtn, cb, code, ev));
         resetBtn.setOnKeyListener((v, code, ev) ->
-            handleResetBtnDpad(root, micBtn, chipsRow, closeBtn, cb, code, ev));
+            handleResetBtnDpad(root, inputBox, chipsRow, closeBtn, cb, code, ev));
         closeBtn.setOnKeyListener((v, code, ev) ->
-            handleCloseBtnDpad(root, micBtn, chipsRow, resetBtn, cb, code, ev));
+            handleCloseBtnDpad(root, inputBox, chipsRow, resetBtn, cb, code, ev));
     }
 
-    private static boolean handleInputBoxDpad(FrameLayout root, View micBtn, SearchCallback cb, int code, KeyEvent ev) {
+    private static boolean handleInputBoxDpad(FrameLayout root, LinearLayout chipsRow, View resetBtn,
+                                              View closeBtn, SearchCallback cb, int code, KeyEvent ev) {
         if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
         if (code == KeyEvent.KEYCODE_BACK) { if (cb != null) cb.onDismiss(); return true; }
         if (code == KeyEvent.KEYCODE_DPAD_DOWN) { focusFirstPoster(root); return true; }
-        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) return micBtn.requestFocus();
-        return false;
-    }
-
-    private static boolean handleMicBtnDpad(FrameLayout root, View inputBox, LinearLayout chipsRow, View resetBtn,
-                                            View closeBtn, SearchCallback cb, int code, KeyEvent ev) {
-        if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
-        if (code == KeyEvent.KEYCODE_BACK) { if (cb != null) cb.onDismiss(); return true; }
-        if (code == KeyEvent.KEYCODE_DPAD_DOWN) { focusFirstPoster(root); return true; }
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT) return inputBox.requestFocus();
         if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
             if (chipsRow.getChildCount() > 0) chipsRow.getChildAt(0).requestFocus();
             else if (resetBtn.getVisibility() == View.VISIBLE) resetBtn.requestFocus();

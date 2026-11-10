@@ -83,14 +83,16 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private void runKatnissVoiceLogLoop() {
         while (katnissWatcherRunning) {
             streamKatnissTranscriptsOnce();
-            try { Thread.sleep(2000L); } catch (InterruptedException ignored) {}
+            try { Thread.sleep(250L); } catch (InterruptedException ignored) {}
         }
     }
 
     private void streamKatnissTranscriptsOnce() {
         try {
             katnissLogProcess = new ProcessBuilder(
-                "logcat", "-T", "1", "-s", "katniss_interactor_StreamingTextView:I").start();
+                "logcat", "-T", "1", "-s",
+                "katniss_interactor_StreamingTextView:I",
+                "katniss_interactor_KatnissConversationStateListenerImpl:I").start();
             readKatnissProcessStream(katnissLogProcess);
         } catch (Throwable ignored) {
         } finally {

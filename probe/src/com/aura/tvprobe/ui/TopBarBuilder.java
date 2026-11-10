@@ -47,10 +47,9 @@ public final class TopBarBuilder {
         TextView hamburger = NavPanelBuilder.createTopBarHamburger(navPanel, ctx);
         TextView[] labelHolder = new TextView[1];
         LinearLayout searchBox = buildSearchBox(ctx, resolveFirstHint(initialHints), labelHolder, onSearchClicked);
-        TextView micBtn = VoiceSearchHelper.buildMicButton(ctx, onVoiceClicked != null ? onVoiceClicked : onSearchClicked);
         TextView clock = buildClockLabel(ctx);
-        assembleTopBarViews(ctx, bar, hamburger, searchBox, micBtn, clock);
-        bindTopBarDpad(hamburger, searchBox, micBtn, heroSlider);
+        assembleTopBarViews(ctx, bar, hamburger, searchBox, clock);
+        bindTopBarDpad(hamburger, searchBox, heroSlider);
         return new TopBarViews(bar, hamburger, searchBox, labelHolder[0], clock);
     }
 
@@ -60,13 +59,10 @@ public final class TopBarBuilder {
     }
 
     private static void assembleTopBarViews(Context ctx, LinearLayout bar, TextView hamburger,
-                                            LinearLayout searchBox, TextView micBtn, TextView clock) {
+                                            LinearLayout searchBox, TextView clock) {
         bar.addView(hamburger);
         bar.addView(new View(ctx), GlassTheme.weightParams(1f));
         bar.addView(searchBox);
-        LinearLayout.LayoutParams micLp = new LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36));
-        micLp.leftMargin = dp(ctx, 8);
-        bar.addView(micBtn, micLp);
         bar.addView(new View(ctx), GlassTheme.weightParams(1f));
         bar.addView(clock, GlassTheme.wrapParams());
     }
@@ -184,13 +180,11 @@ public final class TopBarBuilder {
     }
 
     private static void bindTopBarDpad(TextView hamburger, LinearLayout searchBox,
-                                       TextView micBtn, FrameLayout heroSlider) {
+                                       FrameLayout heroSlider) {
         hamburger.setOnKeyListener((v, code, ev) ->
             handleTopBarNodeKey(code, ev, null, searchBox, heroSlider));
         searchBox.setOnKeyListener((v, code, ev) ->
-            handleTopBarNodeKey(code, ev, hamburger, micBtn, heroSlider));
-        micBtn.setOnKeyListener((v, code, ev) ->
-            handleTopBarNodeKey(code, ev, searchBox, null, heroSlider));
+            handleTopBarNodeKey(code, ev, hamburger, null, heroSlider));
     }
 
     private static boolean handleTopBarNodeKey(int code, KeyEvent ev, View leftView,
