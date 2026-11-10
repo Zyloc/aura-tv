@@ -20,6 +20,7 @@ AURA_BUNDLE_ENV="${AURA_BUNDLE_ENV:-1}" "$ROOT_DIR/scripts/build_apk.sh"
 
 echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" connect "$TV_IP:5555"
+PRE_INSTALL_FG="$("$ADB" -s "$TV_IP:5555" shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true)"
 "$ADB" -s "$TV_IP:5555" install -r "$ROOT_DIR/probe/aura-probe.apk"
 
 # Grant TV permissions & notification listener access for MediaSession inspection
@@ -36,8 +37,7 @@ fi
 
 "$ADB" -s "$TV_IP:5555" shell cmd package set-home-activity com.aura.tvprobe/.AuraActivity || true
 
-FOREGROUND="$("$ADB" -s "$TV_IP:5555" shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true)"
-if [[ "${FORCE_LAUNCH:-0}" == "1" ]] || ! echo "$FOREGROUND" | grep -Eq "hotstar|netflix|youtube|appletv|amazonvideo|sonyliv|jiocinema"; then
+if [[ "${FORCE_LAUNCH:-0}" == "1" ]] || echo "$PRE_INSTALL_FG" | grep -q "com.aura.tvprobe" || ! echo "$PRE_INSTALL_FG" | grep -Eq "hotstar|netflix|youtube|appletv|amazonvideo|sonyliv|jiocinema"; then
   "$ADB" -s "$TV_IP:5555" shell am start -a android.intent.action.MAIN -c android.intent.category.HOME -n com.aura.tvprobe/.AuraActivity
 fi
 echo "Deployed Aura TV on $TV_IP"

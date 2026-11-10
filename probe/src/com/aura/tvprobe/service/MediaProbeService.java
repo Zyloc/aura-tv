@@ -99,7 +99,7 @@ public class MediaProbeService extends NotificationListenerService {
             try {
                 QrRemoteBuilder.nudgeLanArpTable(QrRemoteBuilder.getTvIpAddress(this));
                 LocalDomainResponder.announceAllDomainsNow(this);
-                Thread.sleep(10000L);
+                Thread.sleep(60000L);
             } catch (Exception ignored) {}
         }
     }

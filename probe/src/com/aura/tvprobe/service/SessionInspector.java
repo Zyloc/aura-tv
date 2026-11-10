@@ -520,14 +520,23 @@ public class SessionInspector {
         return pos;
     }
 
+    private static final String[] META_TEXT_KEYS = {
+        "android.media.metadata.MEDIA_ID", "android.media.metadata.TITLE",
+        "android.media.metadata.DISPLAY_TITLE", "android.media.metadata.ARTIST",
+        "android.media.metadata.ALBUM", "android.media.metadata.DISPLAY_SUBTITLE",
+        "android.media.metadata.ALBUM_ART_URI", "android.media.metadata.ART_URI",
+        "com.amazon.alexa.externalmediaplayer.metadata.PLAYBACK_SOURCE_ID"
+    };
+
     private JSONObject extractMetadata(MediaMetadata meta) throws Exception {
         JSONObject m = new JSONObject();
         if (meta == null) return m;
-        for (String key : meta.keySet()) {
+        for (String key : META_TEXT_KEYS) {
             CharSequence cs = meta.getText(key);
             if (cs != null) m.put(key, cs.toString());
-            else m.put(key, meta.getLong(key));
         }
+        long dur = meta.getLong("android.media.metadata.DURATION");
+        if (dur > 0) m.put("android.media.metadata.DURATION", dur);
         return m;
     }
 
@@ -563,14 +572,17 @@ public class SessionInspector {
     private JSONArray queryTvProvider(String uriStr, boolean dedupByTitle) {
         JSONArray rows = new JSONArray();
         Set<String> seen = new HashSet<>();
-        try (Cursor c = ctx.getContentResolver().query(Uri.parse(uriStr), null, null, null, "_id DESC")) {
+        String sel = uriStr.contains("preview_program") ? "package_name = ?" : null;
+        String[] args = uriStr.contains("preview_program") ? new String[]{"com.netflix.ninja"} : null;
+        try (Cursor c = ctx.getContentResolver().query(Uri.parse(uriStr), null, sel, args, "_id DESC")) {
             if (c != null) collectCursorRows(c, rows, seen, dedupByTitle);
         } catch (Exception ignored) {}
         return rows;
     }
 
     private void collectCursorRows(Cursor c, JSONArray rows, Set<String> seen, boolean dedupByTitle) throws Exception {
-        while (c.moveToNext()) {
+        int scanned = 0;
+        while (c.moveToNext() && scanned++ < 60 && rows.length() < 36) {
             JSONObject row = cursorRowToJson(c);
             if (dedupByTitle && !seen.add(buildProviderRowKey(row))) continue;
             rows.put(row);
@@ -586,9 +598,15 @@ public class SessionInspector {
         JSONObject row = new JSONObject();
         for (int i = 0; i < c.getColumnCount(); i++) {
             int t = c.getType(i);
-            if (t == Cursor.FIELD_TYPE_STRING) row.put(c.getColumnName(i), c.getString(i));
+            if (t == Cursor.FIELD_TYPE_STRING) putTrimmedColumnString(row, c.getColumnName(i), c.getString(i));
             else if (t == Cursor.FIELD_TYPE_INTEGER) row.put(c.getColumnName(i), c.getLong(i));
         }
         return row;
+    }
+
+    private void putTrimmedColumnString(JSONObject row, String col, String val) throws Exception {
+        if (val != null && val.length() <= 1200) {
+            row.put(col, val);
+        }
     }
 }

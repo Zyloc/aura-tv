@@ -81,9 +81,16 @@ public final class AgenticOrbView extends View {
     }
 
     @Override
+    protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        if (visibility == VISIBLE && isEffectivelyVisible()) startLoop();
+        else stopLoop();
+    }
+
+    @Override
     protected void onVisibilityChanged(View changedView, int visibility) {
         super.onVisibilityChanged(changedView, visibility);
-        if (visibility == VISIBLE && isShown()) {
+        if (visibility == VISIBLE && isEffectivelyVisible()) {
             startLoop();
         } else {
             stopLoop();
@@ -91,7 +98,7 @@ public final class AgenticOrbView extends View {
     }
 
     public void startLoop() {
-        if (!isShown()) return;
+        if (!isEffectivelyVisible()) return;
         postInvalidateOnAnimation();
         if (animator != null && animator.isRunning()) return;
         animator = ValueAnimator.ofFloat(0f, 1f);
@@ -102,8 +109,19 @@ public final class AgenticOrbView extends View {
         animator.start();
     }
 
+    private boolean isEffectivelyVisible() {
+        if (getWindowVisibility() != VISIBLE || !isShown() || getAlpha() <= 0.05f) return false;
+        android.view.ViewParent p = getParent();
+        while (p instanceof View) {
+            View v = (View) p;
+            if (v.getVisibility() != VISIBLE || v.getAlpha() <= 0.05f) return false;
+            p = v.getParent();
+        }
+        return true;
+    }
+
     private void onPhaseUpdate(ValueAnimator a) {
-        if (!isShown()) {
+        if (!isEffectivelyVisible()) {
             stopLoop();
             return;
         }
@@ -121,13 +139,13 @@ public final class AgenticOrbView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        if (getWidth() <= 0 || getHeight() <= 0) return;
+        if (getWidth() <= 0 || getHeight() <= 0 || !isEffectivelyVisible()) return;
         phase = ((SystemClock.uptimeMillis() - startUptimeMs) % 360_000_000L) * 0.0026f;
         float cx = getWidth() * 0.5f;
         float cy = getHeight() * 0.5f;
         float maxR = Math.min(getWidth(), getHeight()) * 0.44f;
         drawAllOrbLayers(canvas, cx, cy, maxR);
-        if (isShown()) postInvalidateOnAnimation();
+        if (isEffectivelyVisible()) postInvalidateOnAnimation();
     }
 
     private void drawAllOrbLayers(Canvas canvas, float cx, float cy, float maxR) {

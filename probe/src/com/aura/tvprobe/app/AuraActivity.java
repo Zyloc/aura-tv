@@ -68,8 +68,7 @@ public class AuraActivity extends Activity implements
     private static volatile long sLastGlobalVoiceMs = 0L;
     private static volatile long sLastTakeoverBurstMs = 0L;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final ExecutorService bgPool = Executors.newFixedThreadPool(
-        Math.max(4, Runtime.getRuntime().availableProcessors() * 2));
+    private final ExecutorService bgPool = Executors.newFixedThreadPool(3);
     private final Runnable idleScreensaverTask = this::activateScreensaver;
     private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
     private final Runnable hourlyRecoRefreshTask = this::runHourlyRecoRefreshLoop;
@@ -289,6 +288,7 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onStop() {
         super.onStop();
+        if (loadingOverlay != null && !refreshInFlight) loadingOverlay.setVisibility(View.GONE);
         AuraTtsNarrator.stop(this);
         ImageLoader.trimMemory();
     }
@@ -441,7 +441,10 @@ public class AuraActivity extends Activity implements
     private static void killYouTubeBackgroundSafe(Context ctx) {
         try {
             android.app.ActivityManager am = (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
-            if (am != null) am.killBackgroundProcesses("com.google.android.youtube.tv");
+            if (am == null) return;
+            am.killBackgroundProcesses("com.google.android.youtube.tv");
+            am.killBackgroundProcesses("com.netflix.ninja");
+            am.killBackgroundProcesses("com.amazon.amazonvideo.livingroom");
         } catch (Throwable ignored) {}
     }
 
@@ -781,7 +784,7 @@ public class AuraActivity extends Activity implements
     }
 
     private JSONObject syncNowPlayingSafe() {
-        try { return inspector.forceSyncProvidersAndNowPlaying(activeProfile); } catch (Exception e) { return null; }
+        try { return inspector.syncProvidersAndNowPlaying(activeProfile); } catch (Exception e) { return null; }
     }
 
     private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh, boolean hadFresh) {

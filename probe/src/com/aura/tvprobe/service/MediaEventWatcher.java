@@ -162,7 +162,6 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
                 }
             };
             ctx.getContentResolver().registerContentObserver(URI_WATCH_NEXT, true, providerObserver);
-            ctx.getContentResolver().registerContentObserver(URI_PREVIEW, true, providerObserver);
             providerObserverRegistered = true;
         } catch (Throwable ignored) {}
     }
@@ -183,7 +182,7 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private void executeProviderSync() {
         try {
             String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
-            inspector.forceSyncProvidersAndNowPlaying(prof);
+            inspector.syncProvidersAndNowPlaying(prof);
         } catch (Throwable ignored) {}
     }
 
