@@ -145,9 +145,46 @@ public class AiRecommender {
         submitDynamicSpecTasks(exec, taste, seedPlan, seenKeys, pool);
         submitCoWatchTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
         submitPlannedQueryTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
+        submitAppBroadcastTrendTasks(exec, taste, seenKeys, pool);
         submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
         exec.shutdown();
         try { exec.awaitTermination(12, TimeUnit.SECONDS); } catch (Exception ignored) {}
+    }
+
+    private void submitAppBroadcastTrendTasks(
+            ExecutorService exec, UserTasteProfile taste,
+            Set<String> seenKeys, List<JSONObject> pool) {
+        JSONArray trends = db.getAppBroadcastTrends();
+        if (trends.length() == 0) return;
+        int offset = Math.abs(taste.getCurrentEpoch() * 3) % Math.max(1, trends.length());
+        for (int i = 0; i < Math.min(8, trends.length()); i++) {
+            final int rankIdx = i;
+            final JSONObject tObj = trends.optJSONObject((offset + i) % trends.length());
+            if (tObj != null) exec.submit(() -> retrieveBroadcastTrendCandidate(tObj, rankIdx, taste, seenKeys, pool));
+        }
+    }
+
+    private void retrieveBroadcastTrendCandidate(
+            JSONObject trend, int rankIdx, UserTasteProfile taste,
+            Set<String> seenKeys, List<JSONObject> pool) {
+        String title = trend.optString("title", "").trim();
+        if (title.isEmpty() || seenKeys.contains(AuraDb.normalizeTitleKey(title))) return;
+        JSONObject hit = JustWatchGraph.lookupTitle(title);
+        if (hit == null) return;
+        overlayBroadcastMetadata(hit, trend, rankIdx);
+        addSotaCandidate(hit, null, Math.max(0.88, 1.12 - rankIdx * 0.03), taste, seenKeys, pool);
+    }
+
+    private void overlayBroadcastMetadata(JSONObject hit, JSONObject trend, int rankIdx) {
+        try {
+            String uri = trend.optString("launch_uri", "");
+            if (!uri.isEmpty()) hit.put("launch_uri", uri);
+            String app = trend.optString("app", "");
+            String ch = trend.optString("channel", "Trending Now");
+            if (!app.isEmpty()) hit.put("app", app);
+            hit.put("broadcast_badge", ch + (app.isEmpty() ? "" : (" on " + app)));
+            hit.put("source_channel", "app_trending").put("llm_rank", rankIdx + 2);
+        } catch (Exception ignored) {}
     }
 
     private void submitDynamicSpecTasks(
@@ -343,10 +380,11 @@ public class AiRecommender {
     }
 
     private void tagCandidateSourceChannel(JSONObject o, String seedAnchor, double anchorWeight) throws Exception {
+        String src = o.optString("source_channel");
         if (seedAnchor != null && !seedAnchor.isEmpty()) {
             o.put("seed_anchor", seedAnchor).put("anchor_weight", anchorWeight);
             o.put("source_channel", "co_watch").put("is_direct_sim", true).put("sim_score", anchorWeight * 10.0);
-        } else if ("llm_planned".equals(o.optString("source_channel"))) {
+        } else if ("llm_planned".equals(src) || "app_trending".equals(src)) {
             o.put("anchor_weight", anchorWeight).put("sim_score", anchorWeight * 9.5);
         } else {
             o.put("source_channel", "structured").put("sim_score", anchorWeight * 5.0);
@@ -547,6 +585,7 @@ public class AiRecommender {
             "Active Filters: " + db.getActiveFilters(profileId).toString() + "\n" +
             "Refresh Epoch #" + epoch + " Evolution Lens: " + getEpochExplorationAngle(epoch) + "\n" +
             "User's Watched & In-Progress Shows: " + richHistStr + "\n" +
+            "Live App-Broadcasted Trending & Recommended Feed on TV: " + db.getAppBroadcastTrendSummary(12).toString() + "\n" +
             "Already Watched & Rated Exclusion List (NEVER suggest): " + watchedList.toString() + "\n" +
             "Recently Suggested in Last 8 Rounds (AVOID repeating; explore fresh peer titles): " + recentSuggested.toString() + "\n" +
             "User Search Query (empty = Evolving Hourly/Manual Refresh): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +

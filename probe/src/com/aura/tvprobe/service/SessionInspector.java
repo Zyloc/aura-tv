@@ -166,6 +166,7 @@ public class SessionInspector {
                                           JSONArray recos, JSONArray history) throws Exception {
         out.put("now_playing", nowPlaying);
         out.put("recommendations", recos);
+        out.put("app_broadcast_trends", db.getAppBroadcastTrends());
         out.put("watched_items", db.listManuallyWatched());
         out.put("voice_session", db.getVoiceSession(profile));
         out.put("active_filters", new JSONArray(db.getActiveFilters(profile)));
@@ -187,9 +188,69 @@ public class SessionInspector {
 
     private void ingestAllProviderRows(JSONObject raw, Map<Long, String> chMap,
                                        android.database.sqlite.SQLiteDatabase wdb) {
-        ingestRows(raw.optJSONArray("watch_next"), chMap, "Watch Next");
-        ingestNetflixContinueWatching(raw.optJSONArray("preview_programs"));
+        JSONArray watchNext = raw.optJSONArray("watch_next");
+        JSONArray previews = raw.optJSONArray("preview_programs");
+        ingestRows(watchNext, chMap, "Watch Next");
+        ingestNetflixContinueWatching(previews);
+        ingestBroadcastedAppTrends(previews, watchNext, chMap);
         wdb.setTransactionSuccessful();
+    }
+
+    public void ingestBroadcastedAppTrends(JSONArray previews, JSONArray watchNext, Map<Long, String> chMap) {
+        JSONArray trends = new JSONArray();
+        Set<String> seen = new HashSet<>();
+        collectTrendRowsFromArray(previews, chMap, false, seen, trends);
+        collectTrendRowsFromArray(watchNext, chMap, true, seen, trends);
+        if (trends.length() > 0) db.saveAppBroadcastTrends(trends);
+    }
+
+    private void collectTrendRowsFromArray(JSONArray rows, Map<Long, String> chMap,
+                                           boolean isWatchNext, Set<String> seen, JSONArray out) {
+        if (rows == null) return;
+        for (int i = 0; i < rows.length() && out.length() < 32; i++) {
+            JSONObject r = rows.optJSONObject(i);
+            if (isEligibleBroadcastTrendRow(r, isWatchNext)) {
+                appendBroadcastTrendEntry(r, chMap, isWatchNext, seen, out);
+            }
+        }
+    }
+
+    private boolean isEligibleBroadcastTrendRow(JSONObject r, boolean isWatchNext) {
+        if (r == null || isValidNetflixContinueRow(r)) return false;
+        String pkg = r.optString("package_name", "");
+        if (pkg.isEmpty() || isExcludedProviderPkg(pkg)) return false;
+        if (isWatchNext && r.optLong("last_playback_position_millis", 0L) >= 60000L) return false;
+        String title = r.optString("title", "").trim();
+        return !title.isEmpty() && !title.equalsIgnoreCase(friendlyApp(pkg)) && !title.equalsIgnoreCase("Program");
+    }
+
+    private void appendBroadcastTrendEntry(JSONObject r, Map<Long, String> chMap,
+                                           boolean isWatchNext, Set<String> seen, JSONArray out) {
+        String title = r.optString("title", "").trim();
+        String norm = AuraDb.normalizeTitleKey(title);
+        if (norm.isEmpty() || !seen.add(norm)) return;
+        try {
+            out.put(buildBroadcastTrendJson(r, title, chMap, isWatchNext));
+        } catch (Exception ignored) {}
+    }
+
+    private JSONObject buildBroadcastTrendJson(JSONObject r, String title,
+                                               Map<Long, String> chMap, boolean isWatchNext) throws Exception {
+        String pkg = r.optString("package_name", "");
+        String intentUri = r.optString("intent_uri", "");
+        String chName = chMap != null ? chMap.getOrDefault(r.optLong("channel_id"), "") : "";
+        if (chName.isEmpty()) chName = resolveBroadcastChannelLabel(intentUri, isWatchNext);
+        return new JSONObject().put("title", title).put("app_pkg", pkg).put("app", friendlyApp(pkg))
+            .put("channel", chName).put("synopsis", r.optString("short_description", ""))
+            .put("poster_url", r.optString("poster_art_uri", "")).put("launch_uri", intentUri);
+    }
+
+    private String resolveBroadcastChannelLabel(String intentUri, boolean isWatchNext) {
+        String low = intentUri != null ? intentUri.toLowerCase() : "";
+        if (low.contains("trendingnow")) return "Trending Now";
+        if (low.contains("new.season")) return "New Season";
+        if (low.contains("recently.added")) return "Recently Added";
+        return isWatchNext ? "Recommended Next" : "App Featured";
     }
 
     private Map<Long, String> buildChannelMap(JSONArray chs) {
@@ -652,29 +713,36 @@ public class SessionInspector {
     private JSONArray queryTvProvider(String uriStr, boolean dedupByTitle) {
         JSONArray rows = new JSONArray();
         Set<String> seen = new HashSet<>();
-        boolean netflixOnly = uriStr.contains("preview_program");
+        boolean isPreview = uriStr.contains("preview_program");
         try (Cursor c = ctx.getContentResolver().query(Uri.parse(uriStr), null, null, null, "_id DESC")) {
-            if (c != null) collectCursorRows(c, rows, seen, dedupByTitle, netflixOnly);
+            if (c != null) collectCursorRows(c, rows, seen, dedupByTitle, isPreview);
         } catch (Exception ignored) {}
         return rows;
     }
 
     private void collectCursorRows(Cursor c, JSONArray rows, Set<String> seen,
-                                   boolean dedupByTitle, boolean netflixOnly) throws Exception {
+                                   boolean dedupByTitle, boolean isPreview) throws Exception {
         int pkgIdx = c.getColumnIndex("package_name");
+        int intentIdx = c.getColumnIndex("intent_uri");
+        Map<String, Integer> appCounts = new HashMap<>();
         int scanned = 0;
-        while (c.moveToNext() && scanned++ < 300 && rows.length() < 36) {
-            if (netflixOnly && !isNetflixCursorRow(c, pkgIdx)) continue;
+        while (c.moveToNext() && scanned++ < 400 && rows.length() < 48) {
+            if (isPreview && !shouldKeepPreviewCursorRow(c, pkgIdx, intentIdx, appCounts)) continue;
             JSONObject row = cursorRowToJson(c);
             if (dedupByTitle && !seen.add(buildProviderRowKey(row))) continue;
             rows.put(row);
         }
     }
 
-    private boolean isNetflixCursorRow(Cursor c, int pkgIdx) {
-        if (pkgIdx < 0) return false;
-        String pkg = c.getString(pkgIdx);
-        return pkg != null && pkg.contains("netflix");
+    private boolean shouldKeepPreviewCursorRow(Cursor c, int pkgIdx, int intentIdx, Map<String, Integer> appCounts) {
+        String pkg = pkgIdx >= 0 ? c.getString(pkgIdx) : null;
+        if (pkg == null || isExcludedProviderPkg(pkg)) return false;
+        String intent = intentIdx >= 0 ? c.getString(intentIdx) : "";
+        if (pkg.contains("netflix") && intent != null && intent.toLowerCase().contains("continuewatching")) return true;
+        int count = appCounts.getOrDefault(pkg, 0);
+        if (count >= 8) return false;
+        appCounts.put(pkg, count + 1);
+        return true;
     }
 
     private String buildProviderRowKey(JSONObject row) {

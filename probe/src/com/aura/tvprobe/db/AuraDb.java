@@ -317,7 +317,43 @@ public class AuraDb extends SQLiteOpenHelper {
         if (key.isEmpty()) return "";
         String fromHistory = findLaunchUriInHistory(key);
         if (!fromHistory.isEmpty()) return fromHistory;
-        return findLaunchUriInGtiCache(title);
+        String fromTrends = findLaunchUriInBroadcastTrends(key);
+        return !fromTrends.isEmpty() ? fromTrends : findLaunchUriInGtiCache(title);
+    }
+
+    public void saveAppBroadcastTrends(JSONArray items) {
+        if (items != null && items.length() > 0) {
+            setSetting("app_broadcast_trends", items.toString());
+        }
+    }
+
+    public JSONArray getAppBroadcastTrends() {
+        String raw = getSetting("app_broadcast_trends", "");
+        if (raw.isEmpty()) return new JSONArray();
+        try { return new JSONArray(raw); } catch (Exception e) { return new JSONArray(); }
+    }
+
+    public List<String> getAppBroadcastTrendSummary(int maxItems) {
+        JSONArray arr = getAppBroadcastTrends();
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < arr.length() && out.size() < maxItems; i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null && !o.optString("title").isEmpty()) {
+                out.add(o.optString("title") + " (" + o.optString("app", "OTT") + ")");
+            }
+        }
+        return out;
+    }
+
+    private String findLaunchUriInBroadcastTrends(String normKey) {
+        JSONArray arr = getAppBroadcastTrends();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null && normKey.equals(normalizeTitleKey(o.optString("title")))) {
+                return o.optString("launch_uri", "");
+            }
+        }
+        return "";
     }
 
     private String findLaunchUriInHistory(String normKey) {

@@ -80,4 +80,14 @@ public class SystemResourceMonitorTest {
         assertEquals("pmp", seed.optString("provider_code"));
         assertEquals("Paramount+", seed.optString("app"));
     }
+
+    @Test
+    public void testAppBroadcastTrendingReasonAndScoring() throws Exception {
+        org.json.JSONObject item = new org.json.JSONObject()
+            .put("title", "Black Doves").put("genres", "Crime, Thriller")
+            .put("broadcast_badge", "Trending Now on Netflix").put("source_channel", "app_trending");
+        String reason = HybridScorer.formatReason(item, null, 7.8, 42000);
+        assertTrue(reason.startsWith("Trending Now on Netflix"));
+        assertTrue(reason.contains("7.8"));
+    }
 }

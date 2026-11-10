@@ -25,7 +25,8 @@ public final class HybridScorer {
     }
 
     private static double computeLlmPlanBoost(JSONObject item) {
-        if (!"llm_planned".equals(item.optString("source_channel"))) return 0.0;
+        String src = item.optString("source_channel");
+        if (!"llm_planned".equals(src) && !"app_trending".equals(src)) return 0.0;
         int rank = Math.max(0, item.optInt("llm_rank", 0));
         double aw = item.optDouble("anchor_weight", 1.0);
         return Math.max(1.25, 2.05 - rank * 0.12) * aw;
@@ -122,10 +123,15 @@ public final class HybridScorer {
     public static String formatReason(JSONObject item, String seedAnchor, double imdb, int votes) {
         String genres = item.optString("genres", "Drama");
         String voteStr = votes >= 1000 ? String.format(Locale.US, " (%.1fk votes)", votes / 1000.0) : "";
-        boolean isLlm = "llm_planned".equals(item.optString("source_channel"));
-        String prefix = (seedAnchor != null && !seedAnchor.isEmpty())
-            ? ("Because you watched " + seedAnchor)
-            : (isLlm ? "AI Curated for You" : ("Acclaimed " + item.optInt("year")));
+        String prefix = resolveReasonPrefix(item, seedAnchor);
         return prefix + " \u00B7 " + genres + " \u00B7 \u2605 " + String.format(Locale.US, "%.1f", imdb) + voteStr;
+    }
+
+    private static String resolveReasonPrefix(JSONObject item, String seedAnchor) {
+        if (seedAnchor != null && !seedAnchor.isEmpty()) return "Because you watched " + seedAnchor;
+        String bcast = item.optString("broadcast_badge", "");
+        if (!bcast.isEmpty()) return bcast;
+        if ("llm_planned".equals(item.optString("source_channel"))) return "AI Curated for You";
+        return "Acclaimed " + item.optInt("year");
     }
 }
