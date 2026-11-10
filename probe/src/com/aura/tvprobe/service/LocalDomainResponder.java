@@ -146,6 +146,10 @@ public final class LocalDomainResponder {
         byte[] ip6 = getLinkLocalIpv6Bytes();
         byte[] unicast = buildUnicastReply(query.getData(), query.getLength(), ip4, ip6);
         if (unicast != null) sendPacketSafe(ms, unicast, query.getAddress(), query.getPort());
+        sendMulticastAnswers(ms, alias, ip4, ip6);
+    }
+
+    private static void sendMulticastAnswers(MulticastSocket ms, String alias, byte[] ip4, byte[] ip6) {
         byte[] mcast = buildMulticastAnswer(alias, ip4, ip6);
         sendPacketSafe(ms, mcast, getInetAddressSafe(MCAST_IP4), MDNS_PORT);
         sendPacketSafe(ms, mcast, getInetAddressSafe(MCAST_IP6), MDNS_PORT);
@@ -162,7 +166,6 @@ public final class LocalDomainResponder {
 
     private static byte[] selectRdataForType(int qType, byte[] ip4, byte[] ip6) {
         if (qType == 1 || qType == 255) return ip4;
-        if (qType == 28) return ip6;
         return null;
     }
 
@@ -199,14 +202,19 @@ public final class LocalDomainResponder {
 
     private static byte[] buildMulticastAnswer(String alias, byte[] ip4, byte[] ip6) {
         try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(128);
-            int anCount = (ip6 != null) ? 2 : 1;
-            byte[] hdr = {0, 0, (byte) 0x84, 0x00, 0, 0, 0, (byte) anCount, 0, 0, 0, 0};
+            ByteArrayOutputStream out = new ByteArrayOutputStream(96);
+            byte[] hdr = {0, 0, (byte) 0x84, 0x00, 0, 0, 0, 1, 0, 0, 0, 1};
             out.write(hdr);
             writeMcastDomainRecord(out, alias, 1, ip4);
-            if (ip6 != null) writeMcastDomainRecord(out, alias, 28, ip6);
+            writeNsecRecord(out);
             return out.toByteArray();
         } catch (Throwable e) { return null; }
+    }
+
+    private static void writeNsecRecord(ByteArrayOutputStream out) throws Exception {
+        byte[] nsec = {(byte) 0xC0, 0x0C, 0x00, 0x2F, (byte) 0x80, 0x01,
+            0x00, 0x00, 0x00, 0x78, 0x00, 0x05, (byte) 0xC0, 0x0C, 0x00, 0x01, 0x40};
+        out.write(nsec);
     }
 
     private static void writeMcastDomainRecord(ByteArrayOutputStream out, String alias, int rrType, byte[] rdata) throws Exception {
@@ -236,10 +244,24 @@ public final class LocalDomainResponder {
 
     private static void sendPacketSafe(MulticastSocket ms, byte[] payload, InetAddress addr, int port) {
         try {
-            if (ms != null && addr != null && payload != null) {
-                ms.send(new DatagramPacket(payload, payload.length, addr, port));
+            if (ms == null || addr == null || payload == null) return;
+            InetAddress target = ensureScopedAddress(addr);
+            ms.send(new DatagramPacket(payload, payload.length, target, port));
+            android.util.Log.i("AuraMdns", "Sent " + payload.length + "B to " + target + ":" + port);
+        } catch (Throwable e) {
+            android.util.Log.w("AuraMdns", "send err to " + addr + ":" + port + " -> " + e);
+        }
+    }
+
+    private static InetAddress ensureScopedAddress(InetAddress addr) throws Exception {
+        if (addr instanceof java.net.Inet6Address) {
+            java.net.Inet6Address v6 = (java.net.Inet6Address) addr;
+            if ((v6.isLinkLocalAddress() || v6.isMulticastAddress()) && v6.getScopeId() == 0) {
+                NetworkInterface wlan = NetworkInterface.getByName("wlan0");
+                if (wlan != null) return java.net.Inet6Address.getByAddress(null, v6.getAddress(), wlan);
             }
-        } catch (Throwable ignored) {}
+        }
+        return addr;
     }
 
     private static InetAddress getInetAddressSafe(String host) {
