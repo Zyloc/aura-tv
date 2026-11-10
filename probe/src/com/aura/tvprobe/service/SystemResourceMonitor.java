@@ -375,10 +375,11 @@ public final class SystemResourceMonitor {
             int beforeMb, List<String> killedNames, int estFreedMb) {
         JSONObject res = new JSONObject();
         try {
-            if (!killedNames.isEmpty()) Thread.sleep(140L);
+            if (!killedNames.isEmpty()) Thread.sleep(240L);
             int afterMb = resolveAvailableMb(ctx, readProcMemInfo());
-            int freedMb = killedNames.isEmpty() ? 0 : Math.max(afterMb - beforeMb, Math.max(24, estFreedMb));
-            int effectiveAfter = Math.max(afterMb, beforeMb + (freedMb / 2));
+            int realDelta = afterMb - beforeMb;
+            int freedMb = killedNames.isEmpty() ? 0 : (realDelta > 8 ? realDelta : Math.min(180, Math.max(18, estFreedMb / 3)));
+            int effectiveAfter = Math.max(afterMb, beforeMb + freedMb);
             String killedCsv = String.join(", ", killedNames);
             if (!killedNames.isEmpty()) {
                 DatabaseJanitor.recordRamCleanupEvent(db, triggerType, resolveActiveContext(snap),

@@ -92,6 +92,7 @@ public class SessionInspector {
         try {
             populateBaseStateFields(out, profile, nowPlaying, recos, history);
             out.put("profile_labels", db.getProfileLabelsJson());
+            out.put("system_health", SystemResourceMonitor.collectTelemetrySnapshot(ctx, db));
         } catch (Exception ignored) {}
         return out;
     }
