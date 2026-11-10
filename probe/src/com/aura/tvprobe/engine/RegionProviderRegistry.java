@@ -52,7 +52,9 @@ public final class RegionProviderRegistry {
         putPairs(m, "sony", "com.sonyliv", "zee", "com.graymatrix.did", "xstream", "tv.airtel.xstream.tvapp",
             "airtel", "tv.airtel.xstream.tvapp", "youtube", "com.google.android.youtube.tv", "smarttube", "org.smarttube.stable");
         putPairs(m, "iplayer", "bbc.iplayer.android", "itvx", "air.ITVMobilePlayer",
-            "u-next", "jp.unext.mediaplayer", "abema", "tv.abema");
+            "u-next", "jp.unext.mediaplayer", "abema", "tv.abema",
+            "peacock", "com.peacocktv.peacockandroid", "paramount", "com.cbs.ott",
+            "plex", "com.plexapp.android", "kodi", "org.xbmc.kodi");
         return Collections.unmodifiableMap(m);
     }
 

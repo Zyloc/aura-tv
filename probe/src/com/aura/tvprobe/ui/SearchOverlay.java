@@ -312,17 +312,6 @@ public final class SearchOverlay {
         return bar;
     }
 
-    private static TextView addVoiceMicToBar(Context ctx, LinearLayout bar, SearchCallback cb) {
-        TextView micBtn = VoiceSearchHelper.buildMicButton(ctx, () -> {
-            if (cb != null) cb.onVoiceSearchClicked();
-        });
-        micBtn.setTag(TAG_MIC_BTN);
-        LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36));
-        mLp.rightMargin = dp(ctx, 12);
-        bar.addView(micBtn, mLp);
-        return micBtn;
-    }
-
     private static LinearLayout createTopBarRow(Context ctx) {
         LinearLayout bar = new LinearLayout(ctx);
         bar.setOrientation(LinearLayout.HORIZONTAL);

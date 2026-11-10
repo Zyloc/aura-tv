@@ -217,7 +217,7 @@ public class AiRecommender {
     }
 
     private static final String[][] STRUCTURED_BUCKETS = {
-        {"spt", "doc"}, {"spt", "drm"}, {"scf", "trl"}, {"crm", "act"}, {"trl", "drm"}, {"drm", "hst", "war"}
+        {"scf", "trl"}, {"crm", "trl"}, {"act", "cmy"}, {"drm", "trl"}, {"scf", "drm"}, {"cmy", "rma"}
     };
 
     private void submitStructuredDiscoveryTasks(
@@ -564,7 +564,7 @@ public class AiRecommender {
         return queries.isEmpty() ? "(No recent searches)" : queries.toString();
     }
 
-    private String getEpochExplorationAngle(int epoch) {
+    public static String getEpochExplorationAngle(int epoch) {
         String[] angles = {
             "Cross-Genre Intersection: Bridge two distinct genres/themes from their highest-rated watches into hybrid series & films.",
             "Auteur & Lead-Cast Lineage: Surface acclaimed movies & shows starring lead actors or created by showrunners of their top watches.",
@@ -619,120 +619,12 @@ public class AiRecommender {
         return AgenticSearchOrchestrator.executeAgenticScatterGather(this, db, profileId, userQuery, plan, minModernYear);
     }
 
-    private String resolveEffectiveSimSeed(String profileId, String userQuery, int minModernYear, int currentYear) {
-        String directSeed = extractSimilaritySeed(userQuery);
-        if (!directSeed.isEmpty() || minModernYear >= currentYear - 1) return directSeed;
-        if (!isGenericNextOrTasteQuery(userQuery)) {
-            return userQuery.trim().split("\\s+").length <= 3 ? userQuery : "";
-        }
-        List<String> anchors = db.getDynamicTasteAnchors(profileId);
-        return !anchors.isEmpty() ? anchors.get(0) : "";
-    }
-
     public static boolean isGenericNextOrTasteQuery(String q) {
         if (q == null) return true;
         String low = q.trim().toLowerCase(Locale.US);
         return low.contains("what is next") || low.contains("what's next") || low.contains("whats next")
             || low.contains("next recommendation") || low.contains("watch next") || low.equals("next")
             || low.equals("more") || low.contains("something else") || low.contains("recommend something");
-    }
-
-    private Future<JSONArray> submitDirectSimilarFetch(String seedQuery) {
-        final String clean = seedQuery == null ? "" : seedQuery.trim();
-        return Executors.newSingleThreadExecutor().submit(() ->
-            clean.isEmpty() ? new JSONArray() : JustWatchGraph.fetchCollaborativeSimilar(clean, 2008));
-    }
-
-    private List<String> mergeSearchScatterGatherResults(
-            String profileId, Future<JSONArray> directSimFut, JSONArray gathered, JSONObject plan, int minModernYear) {
-        List<String> summaries = new ArrayList<>();
-        Set<String> seenNorm = initSearchExclusionKeys(profileId);
-        JSONArray directSim = awaitFutureJsonArray(directSimFut, 1500);
-        collectOrderedSearchSummaries(directSim, gathered, plan, minModernYear, seenNorm, summaries);
-        if (summaries.size() < 6) {
-            collectOrderedSearchSummaries(directSim, gathered, plan, minModernYear, new HashSet<>(db.getHistoryTitleKeys(profileId)), summaries);
-        }
-        if (!summaries.isEmpty()) AgentStatusNarrator.publishLiveStep("Verified " + summaries.size() + " streaming matches");
-        return summaries;
-    }
-
-    private Set<String> initSearchExclusionKeys(String profileId) {
-        int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
-        Set<String> keys = new HashSet<>(ImpressionTracker.getRecentCooldownKeys(db, epoch));
-        keys.addAll(db.getHistoryTitleKeys(profileId));
-        return keys;
-    }
-
-    private JSONArray awaitFutureJsonArray(Future<JSONArray> fut, long timeoutMs) {
-        try {
-            return fut.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (Exception e) {
-            return new JSONArray();
-        }
-    }
-
-    private void collectOrderedSearchSummaries(
-            JSONArray directSim, JSONArray gathered, JSONObject plan,
-            int minModernYear, Set<String> seenNorm, List<String> summaries) {
-        boolean isNewReleasesQuery = minModernYear >= JustWatchGraph.getCurrentYear() - 1;
-        if (!isNewReleasesQuery) appendPrimaryQueryLookups(plan, minModernYear, seenNorm, summaries);
-        appendSearchCandidateSummaries(directSim, minModernYear, seenNorm, summaries);
-        appendSearchCandidateSummaries(gathered, minModernYear, seenNorm, summaries);
-        if (isNewReleasesQuery) appendPrimaryQueryLookups(plan, minModernYear, seenNorm, summaries);
-        appendFallbackPlanCandidates(plan, minModernYear, seenNorm, summaries);
-    }
-
-    private void appendPrimaryQueryLookups(JSONObject plan, int minModernYear, Set<String> seenNorm, List<String> summaries) {
-        JSONArray pq = plan != null ? plan.optJSONArray("primary_queries") : null;
-        if (pq == null || pq.length() == 0) return;
-        JSONObject[] hits = lookupTitlesInParallel(pq, Math.min(10, pq.length()));
-        for (JSONObject h : hits) {
-            if (h != null && h.optBoolean("has_flatrate_offer", false)) addSearchCandidateSummary(h, minModernYear, seenNorm, summaries);
-        }
-    }
-
-    private JSONObject[] lookupTitlesInParallel(JSONArray titles, int count) {
-        final JSONObject[] hits = new JSONObject[count];
-        ExecutorService exec = Executors.newFixedThreadPool(Math.max(1, Math.min(6, count)));
-        for (int i = 0; i < count; i++) {
-            final int idx = i;
-            final String q = titles.optString(i, "").trim();
-            if (!q.isEmpty()) exec.submit(() -> hits[idx] = JustWatchGraph.lookupTitle(q));
-        }
-        exec.shutdown();
-        try { exec.awaitTermination(3000, TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
-        return hits;
-    }
-
-    private void appendSearchCandidateSummaries(JSONArray arr, int minModernYear, Set<String> seenNorm, List<String> summaries) {
-        if (arr == null || summaries.size() >= 36) return;
-        for (int i = 0; i < arr.length() && summaries.size() < 36; i++) {
-            JSONObject o = arr.optJSONObject(i);
-            if (o != null) addSearchCandidateSummary(o, minModernYear, seenNorm, summaries);
-        }
-    }
-
-    private void appendFallbackPlanCandidates(JSONObject plan, int minModernYear, Set<String> seenNorm, List<String> summaries) {
-        if (summaries.size() >= 10 || plan == null) return;
-        JSONArray pq = plan.optJSONArray("primary_queries");
-        if (pq == null) return;
-        for (int i = 0; i < pq.length() && i < 5; i++) {
-            String q = pq.optString(i).trim();
-            if (!q.isEmpty()) appendSearchCandidateSummaries(JustWatchGraph.fetchCollaborativeSimilar(q, Math.max(2008, minModernYear)), minModernYear, seenNorm, summaries);
-        }
-    }
-
-    private void addSearchCandidateSummary(JSONObject o, int minModernYear, Set<String> seenNorm, List<String> summaries) {
-        if (minModernYear >= JustWatchGraph.getCurrentYear() - 1 && o.optInt("year", 0) < minModernYear) return;
-        String t = o.optString("title", "").trim();
-        String norm = AuraDb.normalizeTitleKey(t);
-        if (t.isEmpty() || seenNorm.contains(norm) || db.isTitleWatched(t)) return;
-        seenNorm.add(norm);
-        db.saveCachedGti("jw_imdb_v6:" + t.toLowerCase(Locale.US), o.toString());
-        String syn = o.optString("synopsis", "");
-        if (syn.length() > 110) syn = syn.substring(0, 110) + "...";
-        String cast = o.optString("cast", "");
-        summaries.add(t + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("country") + ", " + o.optString("rating") + ", " + o.optString("app") + (cast.isEmpty() ? "" : ", Cast=" + cast) + ") — " + syn);
     }
 
     public List<String> executeMultiHopTraversal(String profileId, JSONObject searchPlan, int minModernYear) {
@@ -1068,31 +960,6 @@ public class AiRecommender {
         return new JSONObject().put("contents", contents).put("generationConfig", genCfg);
     }
 
-    private JSONArray callGemini(String model, String prompt) {
-        String apiKey = getApiKey();
-        if (apiKey.isEmpty()) return null;
-        String text = tryCallSingleGeminiModel(model, apiKey, prompt);
-        return text != null ? parseGeminiArrayFromText(text.trim()) : null;
-    }
-
-    private JSONArray parseGeminiArrayFromText(String text) {
-        try {
-            if (text.startsWith("[")) return new JSONArray(text);
-            if (text.startsWith("{")) return extractFirstJsonArrayField(new JSONObject(text));
-        } catch (Exception ignored) {}
-        return null;
-    }
-
-    private JSONArray extractFirstJsonArrayField(JSONObject obj) throws Exception {
-        JSONArray names = obj.names();
-        if (names == null) return null;
-        for (int i = 0; i < names.length(); i++) {
-            JSONArray arr = obj.optJSONArray(names.getString(i));
-            if (arr != null && arr.length() > 0) return arr;
-        }
-        return null;
-    }
-
     private static final ExecutorService HTTP_EXEC = Executors.newCachedThreadPool();
 
     private String httpGet(final String urlStr) throws Exception {
@@ -1159,61 +1026,61 @@ public class AiRecommender {
 
     private void addSeedBatchOne(JSONArray arr) {
         addSeed(arr, "Dexter: Resurrection", 2025, "Series", 55, 9.0, 164128, "Prime Video", "prv", "Crime, Drama, Thriller", "crm,drm,trl", "co_watch", 9.65,
-            "Because you watched Dead-End Job · Crime, Thriller · ★ 9.0 (164.1k votes)", "Set 10 weeks after Dexter: New Blood, Dexter Morgan chases a missing Harrison to New York City, where Captain Angel Batista is hot on their trail.",
-            "https://images.justwatch.com/poster/355231202/s718/dexter-resurrection.jpg", "https://images.justwatch.com/backdrop/321995044/s1920/dexter-resurrection.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.8500885e-a8bf-420a-bb55-eb33708aacee&time=0&territory=IN#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
+            "Critically Acclaimed Crime Thriller · ★ 9.0 (164.1k votes)", "Set 10 weeks after Dexter: New Blood, Dexter Morgan chases a missing Harrison to New York City, where Captain Angel Batista is hot on their trail.",
+            "https://images.justwatch.com/poster/355231202/s718/dexter-resurrection.jpg", "https://images.justwatch.com/backdrop/321995044/s1920/dexter-resurrection.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.8500885e-a8bf-420a-bb55-eb33708aacee&time=0#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
         addSeed(arr, "Severance", 2022, "Series", 49, 8.6, 414782, "Apple TV+", "atp", "Sci-Fi, Thriller, Drama", "drm,trl,scf", "co_watch", 9.52,
-            "Because you watched Oblivion · Sci-Fi, Thriller · ★ 8.6 (414.8k votes)", "Mark leads a team of office workers whose memories have been surgically divided between their work and personal lives.",
-            "https://images.justwatch.com/poster/324479701/s718/severance.jpg", "https://images.justwatch.com/backdrop/324479719/s1920/severance.jpg", "intent://tv.apple.com/in/episode/good-news-about-hell/umc.cmc.s80mx1ic96pu6ewupz8pfasf?showId=umc.cmc.1srk2goyh2q2zdxcx605w8vtx&playableId=tvs.sbd.4000%3AVSEVR0560101#Intent;launchFlags=0x00800000;scheme=https;end");
+            "Emmy-Winning Sci-Fi Mystery · ★ 8.6 (414.8k votes)", "Mark leads a team of office workers whose memories have been surgically divided between their work and personal lives.",
+            "https://images.justwatch.com/poster/324479701/s718/severance.jpg", "https://images.justwatch.com/backdrop/324479719/s1920/severance.jpg", "intent://tv.apple.com/episode/good-news-about-hell/umc.cmc.s80mx1ic96pu6ewupz8pfasf?showId=umc.cmc.1srk2goyh2q2zdxcx605w8vtx&playableId=tvs.sbd.4000%3AVSEVR0560101#Intent;launchFlags=0x00800000;scheme=https;end");
         addSeed(arr, "MobLand", 2025, "Series", 46, 8.3, 140134, "Disney+ Hotstar", "jhs", "Crime, Drama", "crm,drm", "co_watch", 9.38,
-            "Because you watched Dead-End Job · Crime, Drama · ★ 8.3 (140.1k votes)", "Two mob families clash in a war that threatens to topple empires and lives in Guy Ritchie's high-stakes crime series.",
-            "https://images.justwatch.com/poster/354739547/s718/mobland.jpg", "https://images.justwatch.com/backdrop/328945489/s1920/mobland.jpg", "https://www.hotstar.com/in/shows/mobland/1271397631");
+            "High-Stakes Crime Drama · ★ 8.3 (140.1k votes)", "Two mob families clash in a war that threatens to topple empires and lives in Guy Ritchie's high-stakes crime series.",
+            "https://images.justwatch.com/poster/354739547/s718/mobland.jpg", "https://images.justwatch.com/backdrop/328945489/s1920/mobland.jpg", "https://www.hotstar.com/shows/mobland/1271397631");
     }
 
     private void addSeedBatchTwo(JSONArray arr) {
         addSeed(arr, "The Diplomat", 2023, "Series", 50, 8.1, 108113, "Netflix", "nfx", "Thriller, Drama", "drm,trl,war", "co_watch", 9.25,
-            "Because you watched Dead-End Job · Political Thriller · ★ 8.1 (108.1k votes)", "In the midst of an international crisis, a career diplomat lands in a high-profile job with tectonic implications.",
+            "Acclaimed Political Thriller · ★ 8.1 (108.1k votes)", "In the midst of an international crisis, a career diplomat lands in a high-profile job with tectonic implications.",
             "https://images.justwatch.com/poster/304992451/s718/the-diplomat.jpg", "https://images.justwatch.com/backdrop/355789186/s1920/the-diplomat.jpg", "intent://www.netflix.com/watch/81288983#Intent;launchFlags=0x00800000;scheme=https;package=com.netflix.ninja;S.source=30;end");
         addSeed(arr, "The Gentlemen", 2024, "Series", 50, 8.0, 178420, "Netflix", "nfx", "Action, Crime, Comedy", "act,crm,cmy", "co_watch", 9.18,
-            "Because you watched Dead-End Job · Crime, Action · ★ 8.0 (178.4k votes)", "When aristocratic Eddie inherits the family estate, he discovers that it's home to a massive weed empire—and its proprietors aren't going anywhere.",
+            "Sharp Crime Action-Comedy · ★ 8.0 (178.4k votes)", "When aristocratic Eddie inherits the family estate, he discovers that it's home to a massive weed empire—and its proprietors aren't going anywhere.",
             "https://images.justwatch.com/poster/312465722/s718/the-gentlemen.jpg", "https://images.justwatch.com/backdrop/312465731/s1920/the-gentlemen.jpg", "intent://www.netflix.com/watch/81437051#Intent;launchFlags=0x00800000;scheme=https;package=com.netflix.ninja;S.source=30;end");
         addSeed(arr, "The Day of the Jackal", 2024, "Series", 51, 8.1, 139687, "Disney+ Hotstar", "jhs", "Action, Crime, Thriller", "act,crm,drm", "co_watch", 9.12,
-            "Because you watched Matchbox The Movie · Espionage Thriller · ★ 8.1 (139.7k votes)", "An elusive assassin who makes his living carrying out hits for the highest fee meets his match in a tenacious intelligence officer.",
+            "Propulsive Espionage Thriller · ★ 8.1 (139.7k votes)", "An elusive assassin who makes his living carrying out hits for the highest fee meets his match in a tenacious intelligence officer.",
             "https://images.justwatch.com/poster/322756732/s718/the-day-of-the-jackal.jpg", "https://images.justwatch.com/backdrop/322756746/s1920/the-day-of-the-jackal.jpg", "intent://content/1971311802#Intent;launchFlags=0x00800000;scheme=hotstar;end");
     }
 
     private void addSeedBatchThree(JSONArray arr) {
         addSeed(arr, "Silo", 2023, "Series", 51, 8.1, 253859, "Apple TV+", "atp", "Sci-Fi, Drama", "drm,scf", "co_watch", 9.08,
-            "Because you watched Oblivion · Dystopian Sci-Fi · ★ 8.1 (253.9k votes)", "Men and women live in a giant silo underground with strict regulations they believe protect them from the toxic world on the surface.",
-            "https://images.justwatch.com/poster/346669772/s718/silo.jpg", "https://images.justwatch.com/backdrop/346257620/s1920/silo.jpg", "intent://tv.apple.com/in/episode/freedom-day/umc.cmc.4v3gat04y129mm0smdu6ea3dh?showId=umc.cmc.3yksgc857px0k0rqe5zd4jice&playableId=tvs.sbd.4000%3AA0026501001#Intent;launchFlags=0x00800000;scheme=https;end");
+            "Gripping Dystopian Sci-Fi · ★ 8.1 (253.9k votes)", "Men and women live in a giant silo underground with strict regulations they believe protect them from the toxic world on the surface.",
+            "https://images.justwatch.com/poster/346669772/s718/silo.jpg", "https://images.justwatch.com/backdrop/346257620/s1920/silo.jpg", "intent://tv.apple.com/episode/freedom-day/umc.cmc.4v3gat04y129mm0smdu6ea3dh?showId=umc.cmc.3yksgc857px0k0rqe5zd4jice&playableId=tvs.sbd.4000%3AA0026501001#Intent;launchFlags=0x00800000;scheme=https;end");
         addSeed(arr, "Slow Horses", 2022, "Series", 46, 8.4, 169223, "Apple TV+", "atp", "Thriller, Drama", "drm,trl", "structured", 9.04,
-            "Acclaimed 2022 Thriller · ★ 8.4 (169.2k votes)", "Follow a dysfunctional team of MI5 agents and their notorious boss Jackson Lamb as they navigate the espionage world's smoke and mirrors.",
-            "https://images.justwatch.com/poster/349310634/s718/slow-horses.jpg", "https://images.justwatch.com/backdrop/272750278/s1920/slow-horses.jpg", "intent://tv.apple.com/in/episode/failures-contagious/umc.cmc.72legmwolm5ytctyq637r6x0?showId=umc.cmc.2szz3fdt71tl1ulnbp8utgq5o&playableId=tvs.sbd.4000%3AA0006401001#Intent;launchFlags=0x00800000;scheme=https;end");
+            "Acclaimed Spy Thriller · ★ 8.4 (169.2k votes)", "Follow a dysfunctional team of MI5 agents and their notorious boss Jackson Lamb as they navigate the espionage world's smoke and mirrors.",
+            "https://images.justwatch.com/poster/349310634/s718/slow-horses.jpg", "https://images.justwatch.com/backdrop/272750278/s1920/slow-horses.jpg", "intent://tv.apple.com/episode/failures-contagious/umc.cmc.72legmwolm5ytctyq637r6x0?showId=umc.cmc.2szz3fdt71tl1ulnbp8utgq5o&playableId=tvs.sbd.4000%3AA0006401001#Intent;launchFlags=0x00800000;scheme=https;end");
         addSeed(arr, "Black Warrant", 2025, "Series", 44, 7.9, 8836, "Netflix", "nfx", "Crime, Drama", "crm,drm", "co_watch", 8.95,
-            "Because you watched Dead-End Job · Indian Crime Thriller · ★ 7.9 (8.8k votes)", "When an upright officer accepts a job at Tihar Jail, he vows to make amends after witnessing cold-blooded corruption within its walls.",
+            "Gritty Prison Crime Drama · ★ 7.9 (8.8k votes)", "When an upright officer accepts a job at Tihar Jail, he vows to make amends after witnessing cold-blooded corruption within its walls.",
             "https://images.justwatch.com/poster/325958141/s718/black-warrant.jpg", "https://images.justwatch.com/backdrop/325958144/s1920/black-warrant.jpg", "intent://www.netflix.com/watch/81971071#Intent;launchFlags=0x00800000;scheme=https;package=com.netflix.ninja;S.source=30;end");
     }
 
     private void addSeedBatchFour(JSONArray arr) {
         addSeed(arr, "Reacher", 2022, "Series", 48, 8.0, 328430, "Prime Video", "prv", "Action, Crime, Drama", "act,crm,drm", "co_watch", 8.91,
-            "Because you watched Matchbox The Movie · Action Crime · ★ 8.0 (328.4k votes)", "Jack Reacher, a veteran military police investigator, enters civilian life as a drifter uncovering deep small-town conspiracies.",
-            "https://images.justwatch.com/poster/326970737/s718/jack-reacher.jpg", "https://images.justwatch.com/backdrop/348320196/s1920/jack-reacher.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.41f71162-2344-4089-accf-5ce0e9c12535&time=0&territory=IN#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
+            "High-Octane Action Mystery · ★ 8.0 (328.4k votes)", "Jack Reacher, a veteran military police investigator, enters civilian life as a drifter uncovering deep small-town conspiracies.",
+            "https://images.justwatch.com/poster/326970737/s718/jack-reacher.jpg", "https://images.justwatch.com/backdrop/348320196/s1920/jack-reacher.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.41f71162-2344-4089-accf-5ce0e9c12535&time=0#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
         addSeed(arr, "East of Eden", 2026, "Series", 59, 8.0, 36138, "Netflix", "nfx", "Drama", "drm", "structured", 8.86,
-            "Acclaimed 2026 Drama · ★ 8.0 (36.1k votes)", "A fiercely independent woman drives a rift between two brothers, igniting a sweeping multi-generational saga.",
+            "Acclaimed Period Drama · ★ 8.0 (36.1k votes)", "A fiercely independent woman drives a rift between two brothers, igniting a sweeping multi-generational saga.",
             "https://images.justwatch.com/poster/345990721/s718/east-of-eden.jpg", "https://images.justwatch.com/backdrop/345990726/s1920/east-of-eden.jpg", "intent://www.netflix.com/watch/81611854#Intent;launchFlags=0x00800000;scheme=https;package=com.netflix.ninja;S.source=30;end");
         addSeed(arr, "The Terminal List", 2022, "Series", 56, 7.9, 135744, "Prime Video", "prv", "Action, Thriller, Drama", "act,drm,trl", "co_watch", 8.80,
-            "Because you watched Matchbox The Movie · Action Thriller · ★ 7.9 (135.7k votes)", "A former Navy SEAL officer investigates why his entire platoon was ambushed during a high-stakes covert mission.",
-            "https://images.justwatch.com/poster/288434876/s718/the-terminal-list.jpg", "https://images.justwatch.com/backdrop/288444687/s1920/the-terminal-list.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.0c17249c-bd78-474d-9fe7-91edf9b71dfa&time=0&territory=IN#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
+            "Tactical Conspiracy Thriller · ★ 7.9 (135.7k votes)", "A former Navy SEAL officer investigates why his entire platoon was ambushed during a high-stakes covert mission.",
+            "https://images.justwatch.com/poster/288434876/s718/the-terminal-list.jpg", "https://images.justwatch.com/backdrop/288444687/s1920/the-terminal-list.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.0c17249c-bd78-474d-9fe7-91edf9b71dfa&time=0#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
     }
 
     private void addSeedBatchFive(JSONArray arr) {
         addSeed(arr, "FROM", 2022, "Series", 51, 7.7, 213849, "Prime Video", "prv", "Thriller, Horror, Drama", "drm,fnt,hrr", "structured", 8.74,
             "Acclaimed Mystery Thriller · ★ 7.7 (213.8k votes)", "Unravel the mystery of a nightmarish town in middle America that traps all those who enter.",
-            "https://images.justwatch.com/poster/344518661/s718/from.jpg", "https://images.justwatch.com/backdrop/344518677/s1920/from.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.68db6859-4422-41c3-9f75-292818b9eafa&time=0&territory=IN#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
+            "https://images.justwatch.com/poster/344518661/s718/from.jpg", "https://images.justwatch.com/backdrop/344518677/s1920/from.jpg", "intent://app.primevideo.com/watch?gti=amzn1.dv.gti.68db6859-4422-41c3-9f75-292818b9eafa&time=0#Intent;package=com.amazon.amazonvideo.livingroom;scheme=https;end");
         addSeed(arr, "Dark Matter", 2024, "Series", 54, 7.6, 86573, "Apple TV+", "atp", "Sci-Fi, Thriller, Drama", "drm,trl,scf", "co_watch", 8.68,
-            "Because you watched Oblivion · Sci-Fi Thriller · ★ 7.6 (86.6k votes)", "Jason Dessen is abducted into an alternate version of his life and embarks on a harrowing journey back to his real family.",
-            "https://images.justwatch.com/poster/354727700/s718/dark-matter-2024.jpg", "https://images.justwatch.com/backdrop/318995476/s1920/dark-matter-2024.jpg", "intent://tv.apple.com/in/episode/are-you-happy-in-your-life/umc.cmc.59p6kv4nynpisd1gl300a7810?showId=umc.cmc.4luj45vtqpmjsvb6sc2675oeg&playableId=tvs.sbd.4000%3AA0052201001#Intent;launchFlags=0x00800000;scheme=https;end");
+            "Mind-Bending Multiverse Sci-Fi · ★ 7.6 (86.6k votes)", "Jason Dessen is abducted into an alternate version of his life and embarks on a harrowing journey back to his real family.",
+            "https://images.justwatch.com/poster/354727700/s718/dark-matter-2024.jpg", "https://images.justwatch.com/backdrop/318995476/s1920/dark-matter-2024.jpg", "intent://tv.apple.com/episode/are-you-happy-in-your-life/umc.cmc.59p6kv4nynpisd1gl300a7810?showId=umc.cmc.4luj45vtqpmjsvb6sc2675oeg&playableId=tvs.sbd.4000%3AA0052201001#Intent;launchFlags=0x00800000;scheme=https;end");
         addSeed(arr, "3 Body Problem", 2024, "Series", 56, 7.5, 186951, "Netflix", "nfx", "Sci-Fi, Drama", "drm,fnt,scf", "co_watch", 8.62,
-            "Because you watched Oblivion · Hard Sci-Fi · ★ 7.5 (187.0k votes)", "Across continents and decades, five brilliant friends make earth-shattering discoveries as the laws of science unravel.",
+            "Epic Hard Sci-Fi Mystery · ★ 7.5 (187.0k votes)", "Across continents and decades, five brilliant friends make earth-shattering discoveries as the laws of science unravel.",
             "https://images.justwatch.com/poster/313070678/s718/3-body-problem.jpg", "https://images.justwatch.com/backdrop/348986715/s1920/3-body-problem.jpg", "intent://www.netflix.com/watch/81024821#Intent;launchFlags=0x00800000;scheme=https;package=com.netflix.ninja;S.source=30;end");
     }
 

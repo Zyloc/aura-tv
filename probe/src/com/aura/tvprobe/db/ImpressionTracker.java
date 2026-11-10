@@ -101,7 +101,8 @@ public final class ImpressionTracker {
     public static double computeNoveltyPenalty(String titleKey, int currentEpoch, Map<String, ImpressionRecord> history) {
         if (history == null || !history.containsKey(titleKey)) return 0.0;
         ImpressionRecord rec = history.get(titleKey);
-        int epochDelta = Math.max(0, currentEpoch - rec.lastEpoch);
+        int epochDelta = currentEpoch - rec.lastEpoch;
+        if (epochDelta < 0) return 0.0;
         if (epochDelta < COOLDOWN_EPOCHS) return -4.5 + (epochDelta * 0.45);
         return -Math.min(2.0, rec.shownCount * 0.45);
     }
@@ -109,7 +110,8 @@ public final class ImpressionTracker {
     public static boolean isRecentlyShown(String titleKey, int currentEpoch, Map<String, ImpressionRecord> history) {
         if (history == null || !history.containsKey(titleKey)) return false;
         ImpressionRecord rec = history.get(titleKey);
-        return (currentEpoch - rec.lastEpoch) < COOLDOWN_EPOCHS;
+        int delta = currentEpoch - rec.lastEpoch;
+        return delta >= 0 && delta < COOLDOWN_EPOCHS;
     }
 
     public static List<String> getRecentCooldownKeys(AuraDb auraDb, int currentEpoch) {

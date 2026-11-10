@@ -39,7 +39,7 @@ public final class AgenticSearchOrchestrator {
         return formatAndCachePoolSummaries(db, deMerged);
     }
 
-    private static void enforceGlobalRegionalBalance(String userQuery, JSONObject plan) {
+    public static void enforceGlobalRegionalBalance(String userQuery, JSONObject plan) {
         if (plan == null || hasExplicitRegionalIntent(userQuery)) return;
         JSONArray specs = plan.optJSONArray("queries");
         if (specs == null) return;
@@ -169,7 +169,7 @@ public final class AgenticSearchOrchestrator {
         return keys;
     }
 
-    private static void exemptTopExactSearchHits(String userQuery, JSONObject plan, Set<String> cooldownKeys) {
+    public static void exemptTopExactSearchHits(String userQuery, JSONObject plan, Set<String> cooldownKeys) {
         if (AiRecommender.isGenericNextOrTasteQuery(userQuery) || VoiceConcierge.isFollowUpRefinement(userQuery)) return;
         JSONArray pq = plan != null ? plan.optJSONArray("primary_queries") : null;
         if (pq == null) return;

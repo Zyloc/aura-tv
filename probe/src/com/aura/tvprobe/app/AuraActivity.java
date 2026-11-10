@@ -293,7 +293,8 @@ public class AuraActivity extends Activity implements
     protected void onDestroy() {
         if (sActiveInstance == this) sActiveInstance = null;
         sIsInForeground = false;
-        ui.removeCallbacks(hourlyRecoRefreshTask);
+        ui.removeCallbacksAndMessages(null);
+        bgPool.shutdownNow();
         try { unregisterReceiver(homeKeyReceiver); } catch (Exception ignored) {}
         super.onDestroy();
     }
@@ -607,25 +608,6 @@ public class AuraActivity extends Activity implements
                 imm.hideSoftInputFromWindow(v.getWindowToken(), 0);
             }
         } catch (Exception ignored) {}
-    }
-
-    private HorizontalScrollView buildChipsScroll() {
-        HorizontalScrollView hsv = new HorizontalScrollView(this);
-        hsv.setHorizontalScrollBarEnabled(false);
-        hsv.setFocusable(false);
-        hsv.setClipChildren(true);
-        hsv.setClipToPadding(true);
-        hsv.setPadding(dp(4), dp(2), dp(4), dp(2));
-        hsv.addView(buildChipsRowLayout());
-        return hsv;
-    }
-
-    private LinearLayout buildChipsRowLayout() {
-        chipsRow = new LinearLayout(this);
-        chipsRow.setOrientation(LinearLayout.HORIZONTAL);
-        chipsRow.setGravity(Gravity.CENTER_VERTICAL);
-        chipsRow.setClipChildren(false);
-        return chipsRow;
     }
 
     private void addOverlays() {

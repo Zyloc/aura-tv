@@ -21,6 +21,7 @@ public final class AuraTestSuiteRunner {
         RailNavigationMathTest.class,
         AndroidManifestContractTest.class,
         LlmRankingBenchmarkTest.class,
+        MultiDeviceProfileAndOrchestratorTest.class,
         // Integration Tests
         RecommendationPipelineIntegrationTest.class,
         VoiceAndContinueWatchingIntegrationTest.class,
