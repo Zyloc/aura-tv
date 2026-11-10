@@ -173,13 +173,13 @@ public final class SearchOverlay {
     }
 
     private static void animateLoadingPanel(View panel, boolean loading) {
-        if (panel == null) return;
+        if (panel == null || (loading && panel.getVisibility() == View.VISIBLE && panel.getAlpha() > 0.95f)) return;
+        panel.animate().cancel();
         if (loading) {
             panel.setVisibility(View.VISIBLE);
             panel.animate().alpha(1f).setDuration(160).start();
         } else {
-            panel.animate().alpha(0f).setDuration(150)
-                .withEndAction(() -> panel.setVisibility(View.GONE)).start();
+            panel.animate().alpha(0f).setDuration(150).withEndAction(() -> panel.setVisibility(View.GONE)).start();
         }
     }
 

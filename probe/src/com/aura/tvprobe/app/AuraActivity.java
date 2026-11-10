@@ -71,6 +71,7 @@ public class AuraActivity extends Activity implements
     private final Runnable idleScreensaverTask = this::activateScreensaver;
     private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
     private final Runnable hourlyRecoRefreshTask = this::runHourlyRecoRefreshLoop;
+    private volatile boolean refreshInFlight = false;
     private long lastRenderedRecoSec = 0L;
     private String lastRenderedHistorySignature = "";
 
@@ -152,7 +153,7 @@ public class AuraActivity extends Activity implements
     }
 
     private void maybeRefreshOnResume() {
-        if (!initialFocusSet) return;
+        if (!initialFocusSet || refreshInFlight) return;
         boolean stale = !db.isRecoCacheFresh(activeProfile);
         boolean updatedInBg = db.getRecoUpdatedAt(activeProfile) > lastRenderedRecoSec;
         if (stale || updatedInBg) {
@@ -183,12 +184,12 @@ public class AuraActivity extends Activity implements
     private void scheduleHourlyRecoRefresh() {
         ui.removeCallbacks(hourlyRecoRefreshTask);
         long ageSec = db != null ? db.getRecoCacheAgeSec(activeProfile) : -1L;
-        long remMs = ageSec < 0 ? 5_000L : Math.max(5_000L, HOURLY_REFRESH_MS - (ageSec * 1000L));
+        long remMs = ageSec < 0 ? 60_000L : Math.max(60_000L, HOURLY_REFRESH_MS - (ageSec * 1000L));
         ui.postDelayed(hourlyRecoRefreshTask, Math.min(remMs, 300_000L));
     }
 
     private void runHourlyRecoRefreshLoop() {
-        if (!db.isRecoCacheFresh(activeProfile)) {
+        if (!refreshInFlight && !db.isRecoCacheFresh(activeProfile)) {
             refreshAllData(true);
         }
         scheduleHourlyRecoRefresh();
@@ -621,24 +622,31 @@ public class AuraActivity extends Activity implements
         if (forceRefresh) setBannerText("Refreshing personalized recommendations for you\u2026", true);
         JSONArray cached = db.getProfileRecommendations(activeProfile);
         boolean hadFresh = cached.length() >= 12 && db.isRecoCacheFresh(activeProfile);
-        renderHomeContent(cached.length() > 0 ? cached : ai.getBuiltInSotaSeedCatalog(activeProfile));
+        if (!forceRefresh || railsContainer.getChildCount() == 0) {
+            renderHomeContent(cached.length() > 0 ? cached : ai.getBuiltInSotaSeedCatalog(activeProfile));
+        }
         submitBackgroundRefresh(forceRefresh, hadFresh);
     }
 
     private void submitBackgroundRefresh(boolean forceRefresh, boolean hadFresh) {
-        bgPool.submit(() -> {
-            String prevTop = getTopContinueWatchingTitle();
-            JSONObject np = syncNowPlayingSafe();
-            boolean topChanged = !getTopContinueWatchingTitle().equals(prevTop);
-            if (!forceRefresh && hadFresh && !topChanged) {
-                postContinueWatchingUpdateIfChanged();
-                return;
-            }
-            refreshRecommendationsInBackground(np, forceRefresh || topChanged, hadFresh);
-        });
+        if (refreshInFlight) return;
+        refreshInFlight = true;
+        bgPool.submit(() -> executeBackgroundRefreshTask(forceRefresh, hadFresh));
+    }
+
+    private void executeBackgroundRefreshTask(boolean forceRefresh, boolean hadFresh) {
+        String prevTop = getTopContinueWatchingTitle();
+        JSONObject np = syncNowPlayingSafe();
+        boolean topChanged = !getTopContinueWatchingTitle().equals(prevTop);
+        if (!forceRefresh && hadFresh && !topChanged) {
+            postContinueWatchingUpdateIfChanged();
+            return;
+        }
+        refreshRecommendationsInBackground(np, forceRefresh || topChanged, hadFresh);
     }
 
     private void postContinueWatchingUpdateIfChanged() {
+        refreshInFlight = false;
         if (!currentContinueWatchingSignature().equals(lastRenderedHistorySignature)) {
             ui.post(() -> renderHomeContent(db.getProfileRecommendations(activeProfile)));
         }
@@ -647,8 +655,13 @@ public class AuraActivity extends Activity implements
     private void refreshRecommendationsInBackground(JSONObject np, boolean forceRefresh, boolean hadFresh) {
         JSONArray history = db.listHistory(activeProfile);
         if (np == null && history.length() > 0) np = history.optJSONObject(0);
-        JSONArray fresh = ai.getOrRefreshForProfile(activeProfile, np, history, forceRefresh, null);
+        JSONArray fresh = ai.getOrRefreshForProfile(activeProfile, np, history, forceRefresh,
+            step -> postRefreshBannerStep(step, forceRefresh));
         ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, hadFresh));
+    }
+
+    private void postRefreshBannerStep(String step, boolean forceRefresh) {
+        if (forceRefresh) ui.post(() -> setBannerText(step, true));
     }
 
     private JSONObject syncNowPlayingSafe() {
@@ -656,10 +669,12 @@ public class AuraActivity extends Activity implements
     }
 
     private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh, boolean hadFresh) {
+        refreshInFlight = false;
         setBannerText("", false);
         if (fresh != null && fresh.length() > 0 && (forceRefresh || !hadFresh)) {
             renderHomeContent(fresh);
         }
+        scheduleHourlyRecoRefresh();
     }
 
     private void updateNavMetadata() {
@@ -691,7 +706,6 @@ public class AuraActivity extends Activity implements
 
     private void renderHomeContent(JSONArray recos) {
         lastRenderedRecoSec = Math.max(System.currentTimeMillis() / 1000L, db.getRecoUpdatedAt(activeProfile));
-        scheduleHourlyRecoRefresh();
         final int savedScrollY = mainScroll != null ? mainScroll.getScrollY() : 0;
         final int[] savedRailFocus = findFocusedRailAndCard();
         List<JSONObject> fullList = toJsonList(recos);
@@ -1317,7 +1331,7 @@ public class AuraActivity extends Activity implements
 
     private void showGlobalLoadingOverlay(String msg) {
         String clean = (msg != null && msg.startsWith("\u2726")) ? msg.substring(1).trim() : msg;
-        ui.postDelayed(hideLoaderSafetyTask, 6000);
+        ui.postDelayed(hideLoaderSafetyTask, 25000);
         if (globalLoaderText != null && clean != null && !clean.isEmpty()) {
             globalLoaderText.setText(clean);
         }

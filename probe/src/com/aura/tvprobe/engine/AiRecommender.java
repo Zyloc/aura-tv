@@ -41,6 +41,8 @@ public class AiRecommender {
         "gemini-flash-lite-latest",
         "gemini-flash-latest"
     };
+    private static final Object REFRESH_LOCK = new Object();
+    private static volatile long lastRefreshEndMs = 0L;
     private final AuraDb db;
 
     public AiRecommender(AuraDb db) {
@@ -58,11 +60,23 @@ public class AiRecommender {
     public JSONArray getOrRefreshForProfile(
         String profileId, JSONObject nowPlaying, JSONArray history, boolean forceManual, AgentProgressListener progress
     ) {
+        long entryMs = System.currentTimeMillis();
+        synchronized (REFRESH_LOCK) {
+            return runLockedRefresh(profileId, history, forceManual, progress, entryMs);
+        }
+    }
+
+    private JSONArray runLockedRefresh(
+        String profileId, JSONArray history, boolean forceManual, AgentProgressListener progress, long entryMs
+    ) {
         db.purgeUnreleasedFromRecos();
         JSONArray cached = db.getProfileRecommendations(profileId);
-        if (!forceManual && cached.length() >= 12 && db.isRecoCacheFresh(profileId)) return cached;
-        JSONArray sotaRanked = executeRefreshPipeline(profileId, history, progress);
-        return finalizeRecommendations(profileId, sotaRanked, cached);
+        if (cached.length() >= 12 && (lastRefreshEndMs > entryMs || (!forceManual && db.isRecoCacheFresh(profileId)))) {
+            return cached;
+        }
+        JSONArray out = finalizeRecommendations(profileId, executeRefreshPipeline(profileId, history, progress), cached);
+        lastRefreshEndMs = System.currentTimeMillis();
+        return out;
     }
 
     private JSONArray executeRefreshPipeline(String profileId, JSONArray history, AgentProgressListener progress) {

@@ -9,6 +9,7 @@ import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -34,9 +35,11 @@ public final class AgenticOrbView extends View {
     private final Path wavePathA = new Path();
     private final Path wavePathB = new Path();
     private final RectF arcRect = new RectF();
+    private final long startUptimeMs = SystemClock.uptimeMillis();
 
     private ValueAnimator animator;
     private float phase = 0f;
+    private float cachedGlowRadius = -1f;
 
     public AgenticOrbView(Context context) {
         super(context);
@@ -88,9 +91,11 @@ public final class AgenticOrbView extends View {
     }
 
     public void startLoop() {
-        if (!isShown() || (animator != null && animator.isRunning())) return;
-        animator = ValueAnimator.ofFloat(0f, (float) (Math.PI * 2.0));
-        animator.setDuration(2400);
+        if (!isShown()) return;
+        postInvalidateOnAnimation();
+        if (animator != null && animator.isRunning()) return;
+        animator = ValueAnimator.ofFloat(0f, 1f);
+        animator.setDuration(60000);
         animator.setRepeatCount(ValueAnimator.INFINITE);
         animator.setInterpolator(new LinearInterpolator());
         animator.addUpdateListener(this::onPhaseUpdate);
@@ -102,7 +107,7 @@ public final class AgenticOrbView extends View {
             stopLoop();
             return;
         }
-        phase = (float) a.getAnimatedValue();
+        phase = ((SystemClock.uptimeMillis() - startUptimeMs) % 360_000_000L) * 0.0026f;
         invalidate();
     }
 
@@ -117,9 +122,15 @@ public final class AgenticOrbView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         if (getWidth() <= 0 || getHeight() <= 0) return;
+        phase = ((SystemClock.uptimeMillis() - startUptimeMs) % 360_000_000L) * 0.0026f;
         float cx = getWidth() * 0.5f;
         float cy = getHeight() * 0.5f;
         float maxR = Math.min(getWidth(), getHeight()) * 0.44f;
+        drawAllOrbLayers(canvas, cx, cy, maxR);
+        if (isShown()) postInvalidateOnAnimation();
+    }
+
+    private void drawAllOrbLayers(Canvas canvas, float cx, float cy, float maxR) {
         drawAmbientAura(canvas, cx, cy, maxR);
         drawNeuralRings(canvas, cx, cy, maxR);
         drawOrbitalArcs(canvas, cx, cy, maxR);
@@ -128,12 +139,18 @@ public final class AgenticOrbView extends View {
 
     // 1. Breathing radial ambient aura
     private void drawAmbientAura(Canvas canvas, float cx, float cy, float maxR) {
+        ensureGlowShader(cx, cy, maxR);
         float pulse = 0.88f + 0.12f * (float) Math.sin(phase * 2f);
-        float glowR = Math.max(8f, maxR * 1.12f * pulse);
+        glowPaint.setAlpha((int) (255 * pulse));
+        canvas.drawCircle(cx, cy, Math.max(8f, maxR * 1.12f * pulse), glowPaint);
+    }
+
+    private void ensureGlowShader(float cx, float cy, float maxR) {
+        if (Math.abs(cachedGlowRadius - maxR) < 0.5f) return;
+        cachedGlowRadius = maxR;
         int[] colors = {Color.argb(120, 99, 102, 241), Color.argb(55, 56, 189, 248), Color.TRANSPARENT};
         float[] stops = {0f, 0.58f, 1f};
-        glowPaint.setShader(new RadialGradient(cx, cy, glowR, colors, stops, Shader.TileMode.CLAMP));
-        canvas.drawCircle(cx, cy, glowR, glowPaint);
+        glowPaint.setShader(new RadialGradient(cx, cy, Math.max(8f, maxR * 1.24f), colors, stops, Shader.TileMode.CLAMP));
     }
 
     // 2. Morphing Agentic Neural Ring A & B
