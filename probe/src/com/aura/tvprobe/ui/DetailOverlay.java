@@ -144,14 +144,11 @@ public final class DetailOverlay {
 
     public static void showRecapInDetail(FrameLayout overlay, JSONObject recap) {
         if (overlay == null || recap == null) return;
-        TextView synTv = findTagged(overlay, TAG_SYNOPSIS);
-        if (synTv != null) {
-            synTv.setMaxLines(6);
-            synTv.setText(recap.optString("spoken_narration", ""));
-        }
         TextView reasonTv = findTagged(overlay, TAG_REASON);
+        if (reasonTv == null) return;
+        String headline = recap.optString("headline", "Catch Me Up");
         String xray = recap.optString("cast_xray", "");
-        if (reasonTv != null && !xray.isEmpty()) reasonTv.setText("\uD83D\uDD0A X-Ray Cast: " + xray);
+        reasonTv.setText("\uD83D\uDD0A " + headline + (xray.isEmpty() ? "" : " \u00B7 X-Ray Cast: " + xray));
     }
 
     // ── Studio Layout Construction ───────────────────────────────────────

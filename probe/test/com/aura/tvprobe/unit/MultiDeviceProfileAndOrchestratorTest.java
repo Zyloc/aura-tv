@@ -174,4 +174,26 @@ public class MultiDeviceProfileAndOrchestratorTest {
         assertEquals("Clean TTS text must strip markdown/icons",
             "MobLand S1E4 Audio Recap", AuraTtsNarrator.cleanSpokenText("🔊 **MobLand** `S1E4` Audio Recap"));
     }
+
+    @Test
+    public void testGlobalVoiceInterceptionFromBackgroundAppAndLiveSubtitleWordBounds() {
+        // Katniss YouTube media.PLAY_MEDIA and LIBAS_CLIENT_OPS_RECEIVED takeover logs must be intercepted
+        assertTrue(VoiceSearchHelper.isKatnissResponseTakeoverLog(
+            "11-10 20:01:18.182 17402 17431 I katniss_interactor_MediaClientOpHandler: Preparing ClientOp: media.PLAY_MEDIA"));
+        assertTrue(VoiceSearchHelper.isKatnissResponseTakeoverLog(
+            "11-10 20:01:17.694 17402 17446 I katniss_interactor_LibAssistantAppFlowLogger: LIBAS_CLIENT_OPS_RECEIVED"));
+
+        // Show Companion queries ("can you catch me up") must ALWAYS be handled even when in Netflix background
+        assertTrue(AuraActivity.shouldHandleGlobalVoiceQuery("can you catch me up"));
+
+        // LiveSubtitleBar sentence splitting and word-by-word highlight boundary calculation
+        List<String> sentences = AuraTtsNarrator.splitIntoSentences(
+            "Harry Da Souza met Conrad at the docks. Maeve warned Kevin about Richie! What happens next?");
+        assertEquals(3, sentences.size());
+        assertEquals("Harry Da Souza met Conrad at the docks.", sentences.get(0));
+        assertEquals("Maeve warned Kevin about Richie!", sentences.get(1));
+
+        int[] bounds = AuraTtsNarrator.findWordBoundsAt("Harry Da Souza met Conrad", 10);
+        assertEquals("Souza", "Harry Da Souza met Conrad".substring(bounds[0], bounds[1]));
+    }
 }

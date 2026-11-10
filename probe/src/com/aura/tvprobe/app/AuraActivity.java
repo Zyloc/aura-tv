@@ -66,6 +66,7 @@ public class AuraActivity extends Activity implements
     private static volatile long sLastOutboundLaunchMs = 0L;
     private static volatile String sLastGlobalVoiceQuery = "";
     private static volatile long sLastGlobalVoiceMs = 0L;
+    private static volatile long sLastTakeoverBurstMs = 0L;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService bgPool = Executors.newFixedThreadPool(
         Math.max(4, Runtime.getRuntime().availableProcessors() * 2));
@@ -101,6 +102,7 @@ public class AuraActivity extends Activity implements
     private FrameLayout modalContainer;
     private FrameLayout loadingOverlay;
     private FrameLayout screensaverOverlay;
+    private FrameLayout liveSubtitleBar;
     private TextView globalLoaderText;
     private View lastFocusedView;
     private int[] lastRailFocus;
@@ -279,7 +281,6 @@ public class AuraActivity extends Activity implements
         super.onPause();
         sIsInForeground = false;
         sLastActiveWallMs = System.currentTimeMillis();
-        AuraTtsNarrator.stop(this);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         ui.removeCallbacks(homeSearchHintTask);
         ui.removeCallbacks(idleScreensaverTask);
@@ -288,6 +289,7 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onStop() {
         super.onStop();
+        AuraTtsNarrator.stop(this);
         ImageLoader.trimMemory();
     }
 
@@ -305,23 +307,49 @@ public class AuraActivity extends Activity implements
         String q = rawQuery != null ? rawQuery.trim() : "";
         if (!shouldHandleGlobalVoiceQuery(q)) return;
         AuraActivity inst = sActiveInstance;
-        if (inst == null) return;
+        if (inst == null) {
+            coldLaunchAuraWithVoiceQuery(ctx, q);
+            return;
+        }
         VoiceSearchHelper.silenceAssistantAudio(ctx, inst.ui);
         inst.ui.post(() -> inst.runSearchQuery(q));
         scheduleBringAuraToFront(inst.ui, ctx);
     }
 
-    public static void suppressKatnissOverlayNow(Context ctx) {
-        if ((System.currentTimeMillis() - sLastGlobalVoiceMs) > 9_000L) return;
-        AuraActivity inst = sActiveInstance;
-        if (inst != null) VoiceSearchHelper.silenceAssistantAudio(ctx, inst.ui);
-        bringAuraToFrontNow(ctx);
+    private static void coldLaunchAuraWithVoiceQuery(Context ctx, String q) {
+        try {
+            Handler mainH = new Handler(Looper.getMainLooper());
+            VoiceSearchHelper.silenceAssistantAudio(ctx, mainH);
+            Intent i = new Intent(ctx, AuraActivity.class).setAction(Intent.ACTION_SEARCH);
+            i.putExtra(android.app.SearchManager.QUERY, q);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            ctx.startActivity(i);
+            scheduleBringAuraToFront(mainH, ctx);
+        } catch (Throwable ignored) {}
     }
 
-    private static boolean shouldHandleGlobalVoiceQuery(String q) {
+    public static void suppressKatnissOverlayNow(Context ctx) {
         long now = System.currentTimeMillis();
-        boolean activeOrJustPaused = sIsInForeground || (now - sLastActiveWallMs) < 90_000L;
-        if (q.length() < 2 || !activeOrJustPaused) return false;
+        if ((now - sLastGlobalVoiceMs) > 14_000L || (now - sLastTakeoverBurstMs) < 2_200L) return;
+        sLastTakeoverBurstMs = now;
+        AuraActivity inst = sActiveInstance;
+        Handler h = inst != null ? inst.ui : new Handler(Looper.getMainLooper());
+        VoiceSearchHelper.silenceAssistantAudio(ctx, h);
+        scheduleShortTakeoverBurst(h, ctx);
+    }
+
+    private static void scheduleShortTakeoverBurst(Handler h, Context ctx) {
+        bringAuraToFrontNow(ctx);
+        for (int step = 1; step <= 12; step++) {
+            h.postDelayed(() -> bringAuraToFrontNow(ctx), step * 160L);
+        }
+    }
+
+    public static boolean shouldHandleGlobalVoiceQuery(String q) {
+        long now = System.currentTimeMillis();
+        boolean companionQuery = ShowCompanionAgent.isShowCompanionQuery(q);
+        boolean activeOrJustPaused = sIsInForeground || (now - sLastActiveWallMs) < 90_000L || companionQuery;
+        if (q == null || q.length() < 2 || !activeOrJustPaused) return false;
         if (q.equalsIgnoreCase(sLastGlobalVoiceQuery) && (now - sLastGlobalVoiceMs) < 3_500L) return false;
         sLastGlobalVoiceQuery = q;
         sLastGlobalVoiceMs = now;
@@ -331,8 +359,8 @@ public class AuraActivity extends Activity implements
 
     private static void scheduleBringAuraToFront(Handler h, Context ctx) {
         bringAuraToFrontNow(ctx);
-        for (int step = 1; step <= 34; step++) {
-            h.postDelayed(() -> bringAuraToFrontNow(ctx), step * 140L);
+        for (int step = 1; step <= 40; step++) {
+            h.postDelayed(() -> bringAuraToFrontNow(ctx), step * 180L);
         }
     }
 
@@ -340,6 +368,8 @@ public class AuraActivity extends Activity implements
         try {
             killKatnissBackgroundSafe(ctx);
             ctx.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+            AuraActivity inst = sActiveInstance;
+            if (inst != null && sIsInForeground && inst.hasWindowFocus()) return;
             Intent i = new Intent(ctx, AuraActivity.class).putExtra("aura_bring_to_front", true);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
@@ -350,7 +380,11 @@ public class AuraActivity extends Activity implements
     private static void killKatnissBackgroundSafe(Context ctx) {
         try {
             android.app.ActivityManager am = (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
-            if (am != null) am.killBackgroundProcesses("com.google.android.katniss");
+            if (am == null) return;
+            am.killBackgroundProcesses("com.google.android.katniss");
+            if ((System.currentTimeMillis() - sLastGlobalVoiceMs) < 14_000L) {
+                am.killBackgroundProcesses("com.google.android.youtube.tv");
+            }
         } catch (Throwable ignored) {}
     }
 
@@ -619,7 +653,17 @@ public class AuraActivity extends Activity implements
         modalContainer.setVisibility(View.GONE);
         loadingOverlay = buildGlobalLoadingOverlay();
         screensaverOverlay = buildScreensaverOverlayView();
+        liveSubtitleBar = LiveSubtitleBar.build(this);
+        bindLiveSubtitleListener();
         attachAllOverlaysToRoot();
+    }
+
+    private void bindLiveSubtitleListener() {
+        AuraTtsNarrator.setSubtitleListener(new AuraTtsNarrator.SubtitleListener() {
+            @Override public void onSentenceStart(String s) { LiveSubtitleBar.animateNewSentence(liveSubtitleBar, s); }
+            @Override public void onWordHighlight(String s, int ws, int we) { LiveSubtitleBar.updateWordHighlight(liveSubtitleBar, s, ws, we); }
+            @Override public void onNarrationStop() { LiveSubtitleBar.hide(liveSubtitleBar); }
+        });
     }
 
     private FrameLayout buildScreensaverOverlayView() {
@@ -638,6 +682,7 @@ public class AuraActivity extends Activity implements
         rootLayout.addView(modalContainer, full);
         rootLayout.addView(loadingOverlay, full);
         rootLayout.addView(screensaverOverlay, full);
+        rootLayout.addView(liveSubtitleBar, full);
     }
 
     private FrameLayout buildGlobalLoadingOverlay() {

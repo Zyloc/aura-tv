@@ -22,15 +22,18 @@ public class VoiceConcierge {
         this.sync = sync;
     }
 
-    public synchronized JSONObject handleTurn(String profileId, String userText, boolean reset) {
+    public JSONObject handleTurn(String profileId, String userText, boolean reset) {
         return handleTurn(profileId, userText, reset, null);
     }
 
-    public synchronized JSONObject handleTurn(
+    public JSONObject handleTurn(
         String profileId, String userText, boolean reset, AiRecommender.AgentProgressListener progress
     ) {
         String prof = resolveValidProfile(profileId);
         if (reset) return resetSession(prof);
+        if (ShowCompanionAgent.isShowCompanionQuery(userText)) {
+            return executeShowCompanionTurn(prof, userText.trim());
+        }
         sync.syncWithHost();
         List<String> activeFilters = db.getActiveFilters(prof);
         String effectiveQuery = resolveEffectiveQuery(userText, activeFilters);
@@ -138,9 +141,9 @@ public class VoiceConcierge {
 
     private JSONObject executeShowCompanionTurn(String profileId, String userText) {
         JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, profileId, userText, null);
-        String spoken = recap.optString("spoken_narration", "");
         String xray = recap.optString("cast_xray", "");
-        String reply = "\uD83D\uDD0A " + recap.optString("headline", "Catch Me Up") + " — " + spoken + (xray.isEmpty() ? "" : " [Cast X-Ray: " + xray + "]");
+        String reply = "\uD83D\uDD0A " + recap.optString("headline", "Catch Me Up")
+            + (xray.isEmpty() ? " \u00B7 Live narration active below\u2026" : " \u00B7 Cast X-Ray: " + xray);
         JSONArray results = recap.optJSONArray("results");
         if (results == null || results.length() == 0) results = db.getProfileRecommendations(profileId);
         saveCompanionVoiceSession(profileId, userText, reply, results, recap);

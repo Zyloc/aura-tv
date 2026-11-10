@@ -172,22 +172,38 @@ public final class VoiceSearchHelper {
         return (end > start) ? logLine.substring(start, end).trim() : "";
     }
 
+    private static volatile boolean sTtsUnmutedOverride = false;
+
     public static boolean isKatnissResponseTakeoverLog(String line) {
         if (line == null) return false;
-        return line.contains("Starting the connection")
-            || line.contains("VIEW_ADD_TEXT_START")
-            || line.contains("TEXT_FRAGMENT")
-            || line.contains("PreviewTextResponseFragment")
-            || line.contains("LIBAS_TTS_PLAYBACK_STARTED");
+        return isKatnissTextOrTtsTakeover(line) || isKatnissClientOpTakeover(line);
+    }
+
+    private static boolean isKatnissTextOrTtsTakeover(String line) {
+        return line.contains("Starting the connection") || line.contains("VIEW_ADD_TEXT_START")
+            || line.contains("TEXT_FRAGMENT") || line.contains("PreviewTextResponseFragment")
+            || line.contains("LIBAS_TTS_PLAYBACK_STARTED") || line.contains("onRespondingStarted");
+    }
+
+    private static boolean isKatnissClientOpTakeover(String line) {
+        return line.contains("LIBAS_CLIENT_OPS_RECEIVED") || line.contains("Preparing ClientOp:")
+            || line.contains("Executing ClientOp:") || line.contains("MEDIA_HANDLER_EXECUTION_PREPARED")
+            || line.contains("ASSISTANT_TV_EXECUTE_ACTION") || line.contains("ASSISTANT_TV_INTERACTION_EXECUTION_START");
     }
 
     public static void silenceAssistantAudio(Context ctx, android.os.Handler ui) {
         if (ctx == null || ui == null) return;
+        sTtsUnmutedOverride = false;
         muteAssistantStreamsNow(ctx, true);
         for (long d : new long[]{700L, 1500L, 2400L, 3300L, 4100L}) {
-            ui.postDelayed(() -> muteAssistantStreamsNow(ctx, true), d);
+            ui.postDelayed(() -> { if (!sTtsUnmutedOverride) muteAssistantStreamsNow(ctx, true); }, d);
         }
         ui.postDelayed(() -> muteAssistantStreamsNow(ctx, false), 5000L);
+    }
+
+    public static void unmuteStreamMusicNow(Context ctx) {
+        sTtsUnmutedOverride = true;
+        muteAssistantStreamsNow(ctx, false);
     }
 
     private static void muteAssistantStreamsNow(Context ctx, boolean mute) {

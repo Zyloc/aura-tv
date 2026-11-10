@@ -89,18 +89,20 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
 
     private void streamKatnissTranscriptsOnce() {
         try {
-            katnissLogProcess = new ProcessBuilder(
-                "logcat", "-T", "1", "-s",
-                "katniss_interactor_StreamingTextView:I",
-                "katniss_interactor_KatnissConversationStateListenerImpl:I",
-                "katniss_search_KatnissIpcConnection:I",
-                "katniss_search_PreviewTextResponseFragment:I",
-                "katniss_interactor_AppFlowEventHandlerInteractor:I").start();
+            katnissLogProcess = startKatnissLogcatProcess();
             readKatnissProcessStream(katnissLogProcess);
         } catch (Throwable ignored) {
         } finally {
             stopKatnissLogProcessSafe();
         }
+    }
+
+    private Process startKatnissLogcatProcess() throws Exception {
+        return new ProcessBuilder("logcat", "-T", "1", "-s",
+            "katniss_interactor_StreamingTextView:I", "katniss_interactor_KatnissConversationStateListenerImpl:I",
+            "katniss_search_KatnissIpcConnection:I", "katniss_interactor_KatnissIpcConnection:I",
+            "katniss_search_PreviewTextResponseFragment:I", "katniss_interactor_AppFlowEventHandlerInteractor:I",
+            "katniss_interactor_MediaClientOpHandler:I", "katniss_interactor_UiClientOpHandler:I").start();
     }
 
     private void readKatnissProcessStream(Process proc) throws Exception {
@@ -116,6 +118,7 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private void handleKatnissLogLine(String line) {
         String spoken = VoiceSearchHelper.extractKatnissRecognizedText(line);
         if (!spoken.isEmpty()) {
+            if (ShowCompanionAgent.isShowCompanionQuery(spoken)) inspector.recordActivePlaybackOnly();
             AuraActivity.onGlobalVoiceSearchQuery(ctx, spoken);
         } else if (VoiceSearchHelper.isKatnissResponseTakeoverLog(line)) {
             AuraActivity.suppressKatnissOverlayNow(ctx);
