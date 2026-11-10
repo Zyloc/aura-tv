@@ -28,11 +28,9 @@ public final class QrRemoteBuilder {
     }
 
     public static View buildQrCard(Context ctx, String tvIpAddress, int port, String publicUrl) {
-        String lanUrl = "http://" + tvIpAddress + ":" + port;
-        boolean hasPublic = publicUrl != null && publicUrl.startsWith("http") && publicUrl.length() <= 78;
-        String qrTarget = hasPublic ? publicUrl : lanUrl;
-        String subText = hasPublic ? ("LAN: " + lanUrl + "  \u00B7  Works on Wi-Fi & 5G") : "Scan or visit to control TV";
-        return assembleQrCard(ctx, qrTarget, subText);
+        String domainUrl = "http://mitv.local:" + port;
+        String subText = "http://mitv:" + port + "  \u00B7  http://" + tvIpAddress + ":" + port;
+        return assembleQrCard(ctx, domainUrl, subText);
     }
 
     private static View assembleQrCard(Context ctx, String qrTarget, String subText) {
@@ -46,21 +44,33 @@ public final class QrRemoteBuilder {
     }
 
     public static void nudgeLanArpTable(String tvIp) {
-        if (tvIp == null || !tvIp.contains(".")) return;
-        String prefix = tvIp.substring(0, tvIp.lastIndexOf('.') + 1);
-        for (int host = 1; host <= 10; host++) {
-            nudgeSingleHostAsync(prefix + host);
+        new Thread(() -> {
+            for (String peerIp : getLiveArpPeers()) {
+                pingSingleHostQuietly(peerIp);
+            }
+        }, "AuraArpNudge").start();
+    }
+
+    public static java.util.List<String> getLiveArpPeers() {
+        java.util.List<String> peers = new java.util.ArrayList<>();
+        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader("/proc/net/arp"))) {
+            String line;
+            while ((line = br.readLine()) != null) addLiveArpPeerFromLine(line, peers);
+        } catch (Throwable ignored) {}
+        return peers;
+    }
+
+    private static void addLiveArpPeerFromLine(String line, java.util.List<String> peers) {
+        String[] parts = line.trim().split("\\s+");
+        if (parts.length >= 4 && "0x2".equalsIgnoreCase(parts[2]) && !"00:00:00:00:00:00".equals(parts[3])) {
+            peers.add(parts[0]);
         }
     }
 
-    private static void nudgeSingleHostAsync(String ip) {
-        new Thread(() -> {
-            try { Runtime.getRuntime().exec(new String[]{"/system/bin/ping", "-c", "1", "-W", "1", ip}).waitFor(); }
-            catch (Throwable ignored) {}
-            try (java.net.Socket s = new java.net.Socket()) {
-                s.connect(new java.net.InetSocketAddress(ip, 65432), 350);
-            } catch (Throwable ignored) {}
-        }).start();
+    private static void pingSingleHostQuietly(String ip) {
+        try {
+            Runtime.getRuntime().exec(new String[]{"/system/bin/ping", "-c", "1", "-W", "1", ip}).waitFor();
+        } catch (Throwable ignored) {}
     }
 
     /** Returns the device's WiFi or LAN IPv4 address as a dotted string. */

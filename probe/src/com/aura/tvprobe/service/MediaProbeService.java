@@ -85,9 +85,12 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private synchronized void startHttpServer() {
+        LocalDomainResponder.ensureStarted(this);
+        if (db != null) db.setSetting("remote_url", "");
         if (running && serverSocket != null && !serverSocket.isClosed() && serverSocket.isBound()) return;
         running = true;
-        new Thread(this::acceptLoop, "AuraHttpProbe").start();
+        new Thread(() -> acceptLoop(8765, true), "AuraHttpProbe").start();
+        new Thread(() -> acceptLoop(8080, false), "AuraHttp8080").start();
         new Thread(this::runLanArpKeepAliveLoop, "AuraLanArpKeepAlive").start();
     }
 
@@ -95,41 +98,48 @@ public class MediaProbeService extends NotificationListenerService {
         while (running) {
             try {
                 QrRemoteBuilder.nudgeLanArpTable(QrRemoteBuilder.getTvIpAddress(this));
-                Thread.sleep(12000L);
+                LocalDomainResponder.announceAllDomainsNow(this);
+                Thread.sleep(10000L);
             } catch (Exception ignored) {}
         }
     }
 
-    private void acceptLoop() {
+    private void acceptLoop(int port, boolean isPrimary) {
         while (running) {
-            runServerSocketOnce();
+            runServerSocketOnce(port, isPrimary);
             if (running) try { Thread.sleep(1000L); } catch (InterruptedException ignored) {}
         }
     }
 
-    private void runServerSocketOnce() {
+    private void runServerSocketOnce(int port, boolean isPrimary) {
+        ServerSocket ss = null;
         try {
-            openReusableServerSocket();
-            while (running && serverSocket != null && !serverSocket.isClosed()) {
-                Socket client = serverSocket.accept();
-                httpPool.submit(() -> handleClient(client));
-            }
+            ss = openBoundServerSocket(port, isPrimary);
+            acceptClientsUntilClosed(ss);
         } catch (Exception ignored) {
         } finally {
-            closeServerSocketSafe();
+            closeSocketQuietly(ss);
         }
     }
 
-    private void openReusableServerSocket() throws Exception {
-        closeServerSocketSafe();
-        ServerSocket ss = new ServerSocket();
-        ss.setReuseAddress(true);
-        ss.bind(new java.net.InetSocketAddress("0.0.0.0", 8765), 32);
-        serverSocket = ss;
+    private void acceptClientsUntilClosed(ServerSocket ss) throws Exception {
+        while (running && ss != null && !ss.isClosed()) {
+            Socket client = ss.accept();
+            httpPool.submit(() -> handleClient(client));
+        }
     }
 
-    private void closeServerSocketSafe() {
-        try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
+    private ServerSocket openBoundServerSocket(int port, boolean isPrimary) throws Exception {
+        if (isPrimary) closeSocketQuietly(serverSocket);
+        ServerSocket ss = new ServerSocket();
+        ss.setReuseAddress(true);
+        ss.bind(new java.net.InetSocketAddress("0.0.0.0", port), 50);
+        if (isPrimary) serverSocket = ss;
+        return ss;
+    }
+
+    private void closeSocketQuietly(ServerSocket ss) {
+        try { if (ss != null) ss.close(); } catch (Exception ignored) {}
     }
 
     private void handleClient(Socket client) {
@@ -138,14 +148,20 @@ public class MediaProbeService extends NotificationListenerService {
             s.setTcpNoDelay(true);
             java.io.InputStream rawIn = s.getInputStream();
             String reqLine = readAsciiLine(rawIn);
-            if (reqLine == null) { closeNonHttpSocket(s, rawIn); return; }
+            if (reqLine == null) { closeNonHttpSocket(s); return; }
             processHttpRequest(s, rawIn, reqLine);
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            android.util.Log.w("AuraHttp", "Client err: " + e.getMessage());
+        }
     }
 
-    private void closeNonHttpSocket(Socket s, java.io.InputStream rawIn) {
-        android.util.Log.i("AuraHttp", s.getRemoteSocketAddress() + " -> [TLS/Empty closed]");
-        finishSocketCleanly(s, rawIn, 60);
+    private void closeNonHttpSocket(Socket s) {
+        android.util.Log.i("AuraHttp", s.getRemoteSocketAddress() + " -> [TLS/Empty rejected]");
+        try {
+            s.getOutputStream().write(new byte[]{0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28});
+            s.getOutputStream().flush();
+            s.setSoLinger(true, 0);
+        } catch (Exception ignored) {}
     }
 
     private void processHttpRequest(Socket s, java.io.InputStream rawIn, String reqLine) throws Exception {
@@ -154,7 +170,7 @@ public class MediaProbeService extends NotificationListenerService {
         String reqBody = readHttpRequestBody(rawIn, readContentLength(rawIn));
         routeAndWrite(s.getOutputStream(), parts.length > 0 ? parts[0] : "GET",
             parts.length > 1 ? parts[1] : "/", reqBody);
-        finishSocketCleanly(s, rawIn, 250);
+        finishSocketCleanly(s, rawIn, 2500);
     }
 
     private void finishSocketCleanly(Socket s, java.io.InputStream rawIn, int drainMs) {

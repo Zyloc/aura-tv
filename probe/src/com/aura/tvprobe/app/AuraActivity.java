@@ -968,9 +968,9 @@ public class AuraActivity extends Activity implements
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
         String ip = QrRemoteBuilder.getTvIpAddress(this);
-        String publicUrl = db != null ? db.getSetting("remote_url", "") : "";
-        bgPool.submit(() -> QrRemoteBuilder.nudgeLanArpTable(ip));
-        ModalOverlayBuilder.showQrRemoteModal(modalContainer, this, ip, REMOTE_PORT, publicUrl, this);
+        LocalDomainResponder.ensureStarted(this);
+        bgPool.submit(() -> { QrRemoteBuilder.nudgeLanArpTable(ip); LocalDomainResponder.announceAllDomainsNow(this); });
+        ModalOverlayBuilder.showQrRemoteModal(modalContainer, this, ip, REMOTE_PORT, "", this);
     }
 
     @Override
