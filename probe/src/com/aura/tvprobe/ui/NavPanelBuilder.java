@@ -169,29 +169,12 @@ public final class NavPanelBuilder {
     private static void populateTelemetryCard(LinearLayout statusBox, Context ctx, String footerMeta) {
         statusBox.removeAllViews();
         JSONObject snap = SystemResourceMonitor.collectTelemetrySnapshot(ctx, null);
-        int pct = snap.optInt("used_ram_pct", 76);
-        String ramLine = "RAM " + snap.optInt("used_ram_mb", 1400) + "/" + snap.optInt("total_ram_mb", 1831)
-            + "M (" + snap.optInt("avail_ram_mb", 430) + "M Free)";
-        String cpuLine = "CPU " + snap.optInt("cpu_load_pct", 24) + "% \u00B7 " + snap.optString("cpu_freq_str", "4\u00D71.1GHz")
-            + " \u00B7 Aura " + snap.optInt("aura_pss_mb", 16) + "M";
-        statusBox.addView(GlassTheme.makeText(ctx, ramLine, 9.5f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1));
-        statusBox.addView(buildMiniRamBar(ctx, pct));
-        statusBox.addView(GlassTheme.makeText(ctx, cpuLine, 9f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_MEDIUM, 1));
-        statusBox.addView(GlassTheme.makeText(ctx, footerMeta, 8.5f, GlassTheme.TEXT_MUTED, GlassTheme.FONT_MEDIUM, 1));
-    }
-
-    private static View buildMiniRamBar(Context ctx, int pct) {
-        FrameLayout track = new FrameLayout(ctx);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 5));
-        lp.topMargin = dp(ctx, 3);
-        lp.bottomMargin = dp(ctx, 3);
-        track.setLayoutParams(lp);
-        track.setBackground(GlassTheme.solidRounded(Color.argb(55, 255, 255, 255), dp(ctx, 3)));
-        View fill = new View(ctx);
-        int col = pct >= 85 ? Color.rgb(255, 107, 107) : (pct >= 72 ? GlassTheme.GOLD_ACCENT : Color.rgb(72, 219, 151));
-        fill.setBackground(GlassTheme.solidRounded(col, dp(ctx, 3)));
-        track.addView(fill, new FrameLayout.LayoutParams(dp(ctx, (190 * Math.min(100, Math.max(8, pct))) / 100), ViewGroup.LayoutParams.MATCH_PARENT));
-        return track;
+        String top = snap.optInt("avail_ram_mb", 430) + " MB Free  \u00B7  CPU " + snap.optInt("cpu_load_pct", 24) + "%";
+        statusBox.addView(GlassTheme.makeText(ctx, top, 9.5f, GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1));
+        View chart = TelemetryGraphView.createMiniSparkline(ctx, snap.optJSONArray("ram_series"), snap.optJSONArray("cpu_series"));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 20));
+        lp.topMargin = dp(ctx, 4);
+        statusBox.addView(chart, lp);
     }
 
     private static PanelState getState(FrameLayout wrapper) {
