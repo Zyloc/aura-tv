@@ -20,6 +20,11 @@ AURA_BUNDLE_ENV="${AURA_BUNDLE_ENV:-1}" "$ROOT_DIR/scripts/build_apk.sh"
 
 echo "Connecting to Android TV at $TV_IP:5555..."
 "$ADB" connect "$TV_IP:5555"
+TV_BRAND="$("$ADB" -s "$TV_IP:5555" shell getprop ro.product.brand | tr -d '\r' || true)"
+TV_MODEL="$("$ADB" -s "$TV_IP:5555" shell getprop ro.product.model | tr -d '\r' || true)"
+TV_SDK="$("$ADB" -s "$TV_IP:5555" shell getprop ro.build.version.sdk | tr -d '\r' || true)"
+TV_LOCALE="$("$ADB" -s "$TV_IP:5555" shell getprop persist.sys.locale | tr -d '\r' || true)"
+echo "Detected Target TV: Brand=${TV_BRAND:-Unknown} Model=${TV_MODEL:-Unknown} SDK=${TV_SDK:-?} Locale=${TV_LOCALE:-auto}"
 PRE_INSTALL_FG="$("$ADB" -s "$TV_IP:5555" shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true)"
 "$ADB" -s "$TV_IP:5555" install -r "$ROOT_DIR/probe/aura-probe.apk"
 

@@ -264,6 +264,13 @@ public class AuraDb extends SQLiteOpenHelper {
         else if ("AURA_MEMBER3_NAME".equals(k)) setSetting("profile_name_member3", v);
         else if ("AURA_KIDS_NAME".equals(k)) setSetting("profile_name_kids", v);
         else if ("AURA_FAMILY_NAME".equals(k)) setSetting("profile_name_family", v);
+        else applyEnvRegionAndBrand(k, v);
+    }
+
+    private void applyEnvRegionAndBrand(String k, String v) {
+        if ("AURA_REGION".equals(k)) setSetting("region_country", v.toUpperCase());
+        else if ("AURA_LANGUAGE".equals(k)) setSetting("region_language", v.toLowerCase());
+        else if ("AURA_BRAND".equals(k)) setSetting("tv_brand_override", v);
     }
 
     public String getProfileLabel(String profileId) {

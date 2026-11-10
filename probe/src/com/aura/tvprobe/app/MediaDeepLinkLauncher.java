@@ -243,7 +243,9 @@ public final class MediaDeepLinkLauncher {
         int safePort = Math.max(1, Math.min(3, port));
         String suffix = "HW" + (safePort + 1);
         String queried = querySystemHdmiInputId(ctx, suffix);
-        return queried != null ? queried : "com.mediatek.tvinput/.hdmi.HDMIInputService/" + suffix;
+        if (queried != null) return queried;
+        String oem = TvDeviceProfile.detectRuntimeOemFamily(AuraDb.peekInstance());
+        return TvDeviceProfile.resolveFallbackHdmiInputId(oem, safePort);
     }
 
     private static String querySystemHdmiInputId(Context ctx, String suffix) {

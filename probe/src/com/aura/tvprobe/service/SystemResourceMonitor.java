@@ -68,6 +68,7 @@ public final class SystemResourceMonitor {
             out.put("candidates", candidates);
             out.put("reclaimable_est_mb", sumReclaimableMb(candidates));
             out.put("auto_guard", isAutoGuardEnabled(db));
+            out.put("device_profile", TvDeviceProfile.buildDeviceProfileJson(ctx, db));
             out.put("history", DatabaseJanitor.listRamCleanupHistory(db, 15));
         } catch (Exception ignored) {}
         return out;
@@ -200,17 +201,11 @@ public final class SystemResourceMonitor {
     }
 
     private static boolean isTier0ProtectedSystemPkg(String p) {
-        return p.equals("com.aura.tvprobe") || p.contains("katniss") || p.contains("google.android.tts")
-            || p.equals("com.google.android.gms") || p.contains("inputmethod") || p.contains("tv.remote")
-            || p.contains("systemui") || p.contains("providers.tv") || p.contains("mediatek")
-            || p.contains("xiaomi") || p.contains("mstar") || p.equals("android");
+        return TvDeviceProfile.isProtectedSystemOrOemPackage(p);
     }
 
     private static boolean isTier1HeavyOttPkg(String p) {
-        return p.contains("netflix") || p.contains("hotstar") || p.contains("amazonvideo")
-            || p.contains("youtube.tv") || p.contains("smarttube") || p.contains("graymatrix")
-            || p.contains("sonyliv") || p.contains("apple.atve") || p.contains("xstream")
-            || p.contains("mxtech") || p.contains("stremio");
+        return TvDeviceProfile.isKnownHeavyOttPackage(p);
     }
 
     public static boolean shouldKillCandidate(
@@ -258,7 +253,7 @@ public final class SystemResourceMonitor {
         Map<String, Long> lastUsedMap = queryRecentUsageMap(ctx);
         String playingPkg = findPackageBySessionState(sessionStates, PlaybackState.STATE_PLAYING);
         String pausedPkg = findPackageBySessionState(sessionStates, PlaybackState.STATE_PAUSED);
-        Set<String> allPkgs = collectCandidatePackages(sessionStates, lastUsedMap);
+        Set<String> allPkgs = collectCandidatePackages(ctx, sessionStates, lastUsedMap);
         JSONArray arr = new JSONArray();
         for (String pkg : allPkgs) {
             JSONObject row = buildCandidateJson(pkg, sessionStates, lastUsedMap, playingPkg, pausedPkg, lowRam);
@@ -267,10 +262,13 @@ public final class SystemResourceMonitor {
         return arr;
     }
 
-    private static Set<String> collectCandidatePackages(Map<String, Integer> sessions, Map<String, Long> usage) {
+    private static Set<String> collectCandidatePackages(Context ctx, Map<String, Integer> sessions, Map<String, Long> usage) {
         Set<String> pkgs = new LinkedHashSet<>(sessions.keySet());
         for (String k : KNOWN_BG_CANDIDATES) {
             if (usage.containsKey(k) || "com.android.vending".equals(k)) pkgs.add(k);
+        }
+        for (String dyn : TvDeviceProfile.discoverInstalledOttPackages(ctx)) {
+            if (usage.containsKey(dyn)) pkgs.add(dyn);
         }
         pkgs.add("com.aura.tvprobe");
         pkgs.add("com.google.android.katniss");

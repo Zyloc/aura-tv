@@ -55,4 +55,17 @@ public class SystemResourceMonitorTest {
         assertFalse(SystemResourceMonitor.shouldKillCandidate(
             "com.netflix.ninja", "in.startv.hotstar", "", 0L, 600_000L, lastUsed, lastKilled, true, false));
     }
+
+    @Test
+    public void testMultiBrandOemAndRegionAutoDetection() {
+        assertEquals("SONY", TvDeviceProfile.detectOemFamily("Sony", "BRAVIA", "mt5895"));
+        assertEquals("TCL", TvDeviceProfile.detectOemFamily("TCL", "TCL", "rt2851"));
+        assertEquals("HISENSE", TvDeviceProfile.detectOemFamily("Hisense", "Hisense", "amlogic"));
+        assertEquals("XIAOMI", TvDeviceProfile.detectOemFamily("Xiaomi", "MiTV", "mstar"));
+        assertTrue(TvDeviceProfile.isProtectedSystemOrOemPackage("com.sony.dtv.tvinput"));
+        assertTrue(TvDeviceProfile.isProtectedSystemOrOemPackage("com.tcl.tvinput"));
+        assertTrue(TvDeviceProfile.isKnownHeavyOttPackage("bbc.iplayer.android"));
+        assertTrue(TvDeviceProfile.isKnownHeavyOttPackage("jp.unext.mediaplayer"));
+        assertEquals("com.sony.dtv.tvinput/.hdmi.HdmiInputService/HW2", TvDeviceProfile.resolveFallbackHdmiInputId("SONY", 2));
+    }
 }

@@ -28,9 +28,18 @@ cd "$PROBE_DIR"
 rm -rf build assets
 mkdir -p build/gen build/obj build/dex build/res assets
 
-# Optionally bundle .env into untracked assets/aura.env only when AURA_BUNDLE_ENV=1
+# Optionally bundle .env and build-time region/brand overrides into untracked assets/aura.env
 if [[ "${AURA_BUNDLE_ENV:-0}" == "1" && -f "$ROOT_DIR/.env" ]]; then
   cp "$ROOT_DIR/.env" assets/aura.env
+fi
+if [[ -n "${AURA_REGION:-}" ]]; then
+  echo "AURA_REGION=${AURA_REGION}" >> assets/aura.env
+fi
+if [[ -n "${AURA_LANGUAGE:-}" ]]; then
+  echo "AURA_LANGUAGE=${AURA_LANGUAGE}" >> assets/aura.env
+fi
+if [[ -n "${AURA_BRAND:-}" ]]; then
+  echo "AURA_BRAND=${AURA_BRAND}" >> assets/aura.env
 fi
 
 # Generate debug.keystore if not present
@@ -56,5 +65,13 @@ cp build/dex/classes.dex build/classes.dex
 "$BT/zipalign" -f 4 build/unaligned.apk build/aligned.apk
 "$BT/apksigner" sign --ks debug.keystore --ks-pass pass:android \
   --key-pass pass:android --out aura-probe.apk build/aligned.apk
+
+if [[ -n "${AURA_REGION:-}" || -n "${AURA_BRAND:-}" ]]; then
+  mkdir -p "$PROBE_DIR/dist"
+  FLAVOR_TAG="${AURA_BRAND:-universal}-${AURA_REGION:-global}"
+  FLAVOR_TAG="$(echo "$FLAVOR_TAG" | tr '[:upper:]' '[:lower:]')"
+  cp aura-probe.apk "$PROBE_DIR/dist/aura-tv-${FLAVOR_TAG}.apk"
+  echo "Exported flavored build: $PROBE_DIR/dist/aura-tv-${FLAVOR_TAG}.apk"
+fi
 
 echo "Built APK successfully: $PROBE_DIR/aura-probe.apk"
