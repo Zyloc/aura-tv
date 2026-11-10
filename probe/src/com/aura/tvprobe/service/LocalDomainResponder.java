@@ -17,7 +17,8 @@ import java.nio.charset.StandardCharsets;
  * and RFC 1035 / RFC 6762 sec 6.7 unicast queries for mitv.local, aura.local, and mitv.
  */
 public final class LocalDomainResponder {
-    private static final String MCAST_IP = "224.0.0.251";
+    private static final String MCAST_IP4 = "224.0.0.251";
+    private static final String MCAST_IP6 = "ff02::fb";
     private static final int MDNS_PORT = 5353;
     private static final String[] HOST_ALIASES = {"mitv", "aura", "auratv"};
     private static volatile boolean sRunning = false;
@@ -36,12 +37,13 @@ public final class LocalDomainResponder {
     }
 
     public static void announceAllDomainsNow(Context ctx) {
-        byte[] ipBytes = parseIpv4Bytes(QrRemoteBuilder.getTvIpAddress(ctx));
-        if (ipBytes == null || sSocket == null || sSocket.isClosed()) return;
-        refreshIgmpMembershipSafe(sSocket);
+        byte[] ip4 = parseAddressBytes(QrRemoteBuilder.getTvIpAddress(ctx));
+        if (ip4 == null || sSocket == null || sSocket.isClosed()) return;
+        byte[] ip6 = getLinkLocalIpv6Bytes();
         for (String alias : HOST_ALIASES) {
-            byte[] pkt = buildMulticastAnswer(alias, ipBytes);
-            sendPacketSafe(sSocket, pkt, getInetAddressSafe(MCAST_IP), MDNS_PORT);
+            byte[] pkt = buildMulticastAnswer(alias, ip4, ip6);
+            sendPacketSafe(sSocket, pkt, getInetAddressSafe(MCAST_IP4), MDNS_PORT);
+            sendPacketSafe(sSocket, pkt, getInetAddressSafe(MCAST_IP6), MDNS_PORT);
         }
     }
 
@@ -96,18 +98,18 @@ public final class LocalDomainResponder {
 
     private static void joinMulticastGroupSafe(MulticastSocket ms) {
         try {
-            InetAddress group = InetAddress.getByName(MCAST_IP);
             NetworkInterface wlan = NetworkInterface.getByName("wlan0");
             if (wlan != null) ms.setNetworkInterface(wlan);
-            ms.joinGroup(group);
+            joinGroupOnWlan(ms, MCAST_IP4, wlan);
+            joinGroupOnWlan(ms, MCAST_IP6, wlan);
         } catch (Throwable ignored) {}
     }
 
-    private static void refreshIgmpMembershipSafe(MulticastSocket ms) {
+    private static void joinGroupOnWlan(MulticastSocket ms, String groupIp, NetworkInterface wlan) {
         try {
-            InetAddress group = InetAddress.getByName(MCAST_IP);
-            ms.leaveGroup(group);
-            ms.joinGroup(group);
+            InetAddress group = InetAddress.getByName(groupIp);
+            if (wlan != null) ms.joinGroup(new InetSocketAddress(group, MDNS_PORT), wlan);
+            else ms.joinGroup(group);
         } catch (Throwable ignored) {}
     }
 
@@ -139,20 +141,29 @@ public final class LocalDomainResponder {
     }
 
     private static void replyToQuery(Context appCtx, MulticastSocket ms, DatagramPacket query, String alias) {
-        byte[] ipBytes = parseIpv4Bytes(QrRemoteBuilder.getTvIpAddress(appCtx));
-        if (ipBytes == null) return;
-        byte[] unicast = buildUnicastReply(query.getData(), query.getLength(), ipBytes);
+        byte[] ip4 = parseAddressBytes(QrRemoteBuilder.getTvIpAddress(appCtx));
+        if (ip4 == null) return;
+        byte[] ip6 = getLinkLocalIpv6Bytes();
+        byte[] unicast = buildUnicastReply(query.getData(), query.getLength(), ip4, ip6);
         if (unicast != null) sendPacketSafe(ms, unicast, query.getAddress(), query.getPort());
-        byte[] mcast = buildMulticastAnswer(alias, ipBytes);
-        sendPacketSafe(ms, mcast, getInetAddressSafe(MCAST_IP), MDNS_PORT);
+        byte[] mcast = buildMulticastAnswer(alias, ip4, ip6);
+        sendPacketSafe(ms, mcast, getInetAddressSafe(MCAST_IP4), MDNS_PORT);
+        sendPacketSafe(ms, mcast, getInetAddressSafe(MCAST_IP6), MDNS_PORT);
     }
 
-    private static byte[] buildUnicastReply(byte[] q, int len, byte[] ipBytes) {
+    private static byte[] buildUnicastReply(byte[] q, int len, byte[] ip4, byte[] ip6) {
         int nameEnd = findQuestionNameEnd(q, len);
         if (nameEnd < 0 || nameEnd + 4 > len) return null;
         int qType = ((q[nameEnd] & 0xFF) << 8) | (q[nameEnd + 1] & 0xFF);
-        boolean includeA = (qType == 1 || qType == 255);
-        return assembleUnicastBytes(q, nameEnd, includeA, ipBytes);
+        byte[] rdata = selectRdataForType(qType, ip4, ip6);
+        int rrType = (qType == 28) ? 28 : 1;
+        return assembleUnicastBytes(q, nameEnd, rrType, rdata);
+    }
+
+    private static byte[] selectRdataForType(int qType, byte[] ip4, byte[] ip6) {
+        if (qType == 1 || qType == 255) return ip4;
+        if (qType == 28) return ip6;
+        return null;
     }
 
     private static int findQuestionNameEnd(byte[] q, int len) {
@@ -166,48 +177,61 @@ public final class LocalDomainResponder {
         return -1;
     }
 
-    private static byte[] assembleUnicastBytes(byte[] q, int nameEnd, boolean includeA, byte[] ipBytes) {
+    private static byte[] assembleUnicastBytes(byte[] q, int nameEnd, int rrType, byte[] rdata) {
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream(128);
-            byte[] hdr = {q[0], q[1], (byte) 0x84, 0x00, 0x00, 0x01, 0x00, (byte) (includeA ? 1 : 0), 0, 0, 0, 0};
+            int anCount = (rdata != null) ? 1 : 0;
+            byte flags0 = (byte) (0x84 | (q[2] & 0x01));
+            byte[] hdr = {q[0], q[1], flags0, 0x00, 0x00, 0x01, 0x00, (byte) anCount, 0, 0, 0, 0};
             out.write(hdr);
             out.write(q, 12, (nameEnd + 4) - 12);
-            if (includeA) writeUnicastARecord(out, q, nameEnd, ipBytes);
+            if (rdata != null) writeUnicastRecord(out, q, nameEnd, rrType, rdata);
             return out.toByteArray();
         } catch (Throwable e) { return null; }
     }
 
-    private static void writeUnicastARecord(ByteArrayOutputStream out, byte[] q, int nameEnd, byte[] ip) throws Exception {
+    private static void writeUnicastRecord(ByteArrayOutputStream out, byte[] q, int nameEnd, int rrType, byte[] rdata) throws Exception {
         out.write(q, 12, nameEnd - 12);
-        byte[] meta = {0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x04};
+        byte[] meta = {0x00, (byte) rrType, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, (byte) rdata.length};
         out.write(meta);
-        out.write(ip);
+        out.write(rdata);
     }
 
-    private static byte[] buildMulticastAnswer(String alias, byte[] ipBytes) {
+    private static byte[] buildMulticastAnswer(String alias, byte[] ip4, byte[] ip6) {
         try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(96);
-            byte[] hdr = {0, 0, (byte) 0x84, 0x00, 0, 0, 0, 1, 0, 0, 0, 1};
+            ByteArrayOutputStream out = new ByteArrayOutputStream(128);
+            int anCount = (ip6 != null) ? 2 : 1;
+            byte[] hdr = {0, 0, (byte) 0x84, 0x00, 0, 0, 0, (byte) anCount, 0, 0, 0, 0};
             out.write(hdr);
-            writeMcastDomainAndA(out, alias, ipBytes);
-            writeNsecRecord(out);
+            writeMcastDomainRecord(out, alias, 1, ip4);
+            if (ip6 != null) writeMcastDomainRecord(out, alias, 28, ip6);
             return out.toByteArray();
         } catch (Throwable e) { return null; }
     }
 
-    private static void writeMcastDomainAndA(ByteArrayOutputStream out, String alias, byte[] ip) throws Exception {
+    private static void writeMcastDomainRecord(ByteArrayOutputStream out, String alias, int rrType, byte[] rdata) throws Exception {
         byte[] label = alias.getBytes(StandardCharsets.US_ASCII);
         out.write(label.length);
         out.write(label);
         out.write(new byte[]{0x05, 'l', 'o', 'c', 'a', 'l', 0x00});
-        out.write(new byte[]{0x00, 0x01, (byte) 0x80, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x04});
-        out.write(ip);
+        out.write(new byte[]{0x00, (byte) rrType, (byte) 0x80, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, (byte) rdata.length});
+        out.write(rdata);
     }
 
-    private static void writeNsecRecord(ByteArrayOutputStream out) throws Exception {
-        byte[] nsec = {(byte) 0xC0, 0x0C, 0x00, 0x2F, (byte) 0x80, 0x01,
-            0x00, 0x00, 0x00, 0x78, 0x00, 0x05, (byte) 0xC0, 0x0C, 0x00, 0x01, 0x40};
-        out.write(nsec);
+    private static byte[] getLinkLocalIpv6Bytes() {
+        try {
+            NetworkInterface wlan = NetworkInterface.getByName("wlan0");
+            return wlan != null ? findLinkLocalOnInterface(wlan) : null;
+        } catch (Throwable e) { return null; }
+    }
+
+    private static byte[] findLinkLocalOnInterface(NetworkInterface wlan) {
+        java.util.Enumeration<InetAddress> addrs = wlan.getInetAddresses();
+        while (addrs.hasMoreElements()) {
+            InetAddress a = addrs.nextElement();
+            if (a instanceof java.net.Inet6Address && a.isLinkLocalAddress()) return a.getAddress();
+        }
+        return null;
     }
 
     private static void sendPacketSafe(MulticastSocket ms, byte[] payload, InetAddress addr, int port) {
@@ -222,7 +246,7 @@ public final class LocalDomainResponder {
         try { return InetAddress.getByName(host); } catch (Throwable e) { return null; }
     }
 
-    private static byte[] parseIpv4Bytes(String ip) {
+    private static byte[] parseAddressBytes(String ip) {
         try {
             if (ip == null || ip.startsWith("0.")) return null;
             return InetAddress.getByName(ip).getAddress();

@@ -56,9 +56,36 @@ public final class QrRemoteBuilder {
     private static void runCrossBandArpNudge(String tvIp) {
         try {
             for (String peerIp : buildCrossBandPeers(tvIp)) pingSingleHostQuietly(peerIp);
+            nudgeIpv6NeighborsQuietly();
         } finally {
             sNudging.set(false);
         }
+    }
+
+    private static void nudgeIpv6NeighborsQuietly() {
+        for (String v6 : getLiveIpv6Peers()) pingIpv6HostQuietly(v6);
+    }
+
+    private static java.util.List<String> getLiveIpv6Peers() {
+        java.util.List<String> peers = new java.util.ArrayList<>();
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"/system/bin/ip", "-6", "neigh", "show", "dev", "wlan0"});
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = br.readLine()) != null) addIpv6PeerFromLine(line, peers);
+        } catch (Throwable ignored) {}
+        return peers;
+    }
+
+    private static void addIpv6PeerFromLine(String line, java.util.List<String> peers) {
+        String[] parts = line.trim().split("\\s+");
+        if (parts.length > 0 && parts[0].startsWith("fe80:")) peers.add(parts[0]);
+    }
+
+    private static void pingIpv6HostQuietly(String v6) {
+        try {
+            Runtime.getRuntime().exec(new String[]{"/system/bin/ping6", "-c", "1", "-W", "1", v6 + "%wlan0"}).waitFor();
+        } catch (Throwable ignored) {}
     }
 
     private static java.util.Set<String> buildCrossBandPeers(String tvIp) {
