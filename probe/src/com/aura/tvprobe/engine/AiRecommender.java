@@ -118,11 +118,11 @@ public class AiRecommender {
             String profileId, JSONObject seedPlan, int minModernYear, int currentYear, int epoch) {
         final List<JSONObject> pool = Collections.synchronizedList(new ArrayList<>());
         final UserTasteProfile taste = new UserTasteProfile(db, profileId, epoch);
-        final Set<String> seenKeys = initSeenTitleKeys(profileId, taste);
-        runParallelCandidateRetrieval(taste, seedPlan, minModernYear, currentYear, seenKeys, pool);
+        runParallelCandidateRetrieval(taste, seedPlan, minModernYear, currentYear, initSeenTitleKeys(profileId, taste), pool);
+        List<JSONObject> deMerged = AgenticSearchOrchestrator.deMergeCandidates(db, profileId, "", db.getActiveFilters(profileId), seedPlan, minModernYear, pool, false);
         taste.ensureDefaultGenreWeightsIfEmpty();
-        scoreAndRerankPool(pool, taste, currentYear);
-        List<JSONObject> slate = filterAndRerankPoolWithLlm(profileId, pool, epoch);
+        scoreAndRerankPool(deMerged, taste, currentYear);
+        List<JSONObject> slate = filterAndRerankPoolWithLlm(profileId, deMerged, epoch);
         ImpressionTracker.recordSlateImpressions(db, epoch, slate.subList(0, Math.min(16, slate.size())));
         return packRankedItems(slate);
     }
@@ -131,6 +131,7 @@ public class AiRecommender {
         Set<String> seenKeys = Collections.synchronizedSet(new HashSet<>());
         seenKeys.addAll(db.getWatchedTitleKeys());
         seenKeys.addAll(db.getHistoryTitleKeys(profileId));
+        seenKeys.addAll(ImpressionTracker.getRecentCooldownKeys(db, taste.getCurrentEpoch()));
         for (String a : taste.getAnchors()) {
             seenKeys.add(AuraDb.normalizeTitleKey(a));
         }
@@ -144,9 +145,7 @@ public class AiRecommender {
         submitDynamicSpecTasks(exec, taste, seedPlan, seenKeys, pool);
         submitCoWatchTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
         submitPlannedQueryTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
-        if (seedPlan == null || seedPlan.optJSONArray("queries") == null) {
-            submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
-        }
+        submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
         exec.shutdown();
         try { exec.awaitTermination(12, TimeUnit.SECONDS); } catch (Exception ignored) {}
     }
@@ -168,9 +167,9 @@ public class AiRecommender {
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray hits = JustWatchGraph.executeDynamicQuerySpec(spec);
         String anchor = spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim();
-        for (int k = 0; k < hits.length() && k < 10; k++) {
-            JSONObject cand = hits.optJSONObject(k);
-            if (cand != null) addSotaCandidate(cand, anchor.isEmpty() ? null : anchor, weight, taste, seenKeys, pool);
+        int added = 0;
+        for (int k = 0; k < hits.length() && added < 10; k++) {
+            if (addSotaCandidate(hits.optJSONObject(k), anchor.isEmpty() ? null : anchor, weight, taste, seenKeys, pool)) added++;
         }
     }
 
@@ -201,11 +200,11 @@ public class AiRecommender {
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray sim = JustWatchGraph.fetchCollaborativeSimilar(anchor, minModernYear);
         recordFirstNeighborSeedMeta(sim, taste, weight);
-        for (int k = 0; k < sim.length() && k < 4; k++) {
+        int added = 0;
+        for (int k = 0; k < sim.length() && added < 5; k++) {
             JSONObject cand = sim.optJSONObject(k);
-            if (cand == null) continue;
-            boolean isDirect = cand.optBoolean("is_direct_sim", false);
-            addSotaCandidate(cand, isDirect ? anchor : null, isDirect ? weight : 0.85, taste, seenKeys, pool);
+            boolean isDirect = cand != null && cand.optBoolean("is_direct_sim", false);
+            if (addSotaCandidate(cand, isDirect ? anchor : null, isDirect ? weight : 0.85, taste, seenKeys, pool)) added++;
         }
     }
 
@@ -244,7 +243,7 @@ public class AiRecommender {
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray pq = seedPlan != null ? seedPlan.optJSONArray("primary_queries") : null;
         if (pq == null) return;
-        for (int i = 0; i < pq.length() && i < 5; i++) {
+        for (int i = 0; i < pq.length() && i < 10; i++) {
             final int rankIdx = i;
             final String q = pq.optString(i).trim();
             if (!q.isEmpty() && !taste.getAnchors().contains(q)) {
@@ -256,11 +255,15 @@ public class AiRecommender {
     private void retrievePlannedQueryHits(
             String query, int rankIdx, int minModernYear, UserTasteProfile taste,
             Set<String> seenKeys, List<JSONObject> pool) {
+        JSONObject direct = JustWatchGraph.lookupTitle(query);
+        if (direct != null && direct.optBoolean("has_flatrate_offer", false)) {
+            markAsLlmPlannedCandidate(direct, rankIdx);
+            addSotaCandidate(direct, null, Math.max(0.85, 1.15 - rankIdx * 0.04), taste, seenKeys, pool);
+            return;
+        }
         JSONArray hits = JustWatchGraph.fetchDeterministicSearchCandidates(query, minModernYear);
         for (int k = 0; k < hits.length() && k < 2; k++) {
-            JSONObject hit = hits.optJSONObject(k);
-            if (hit != null && k == 0) markAsLlmPlannedCandidate(hit, rankIdx);
-            addSotaCandidate(hit, null, Math.max(0.85, 1.10 - rankIdx * 0.05), taste, seenKeys, pool);
+            addSotaCandidate(hits.optJSONObject(k), null, Math.max(0.85, 1.10 - rankIdx * 0.05), taste, seenKeys, pool);
         }
     }
 
@@ -288,16 +291,17 @@ public class AiRecommender {
         return buildSotaRecommendations(profileId, buildFastSeedPlan(profileId, ""), minModernYear, currentYear);
     }
 
-    private void addSotaCandidate(
+    private boolean addSotaCandidate(
             JSONObject o, String seedAnchor, double anchorWeight,
             UserTasteProfile taste, Set<String> seenKeys, List<JSONObject> pool) {
-        if (!isEligibleCandidate(o, seedAnchor, taste, seenKeys)) return;
+        if (!isEligibleCandidate(o, seedAnchor, taste, seenKeys)) return false;
         String t = o.optString("title").trim();
         String norm = AuraDb.normalizeTitleKey(t);
         String slugKey = o.optString("slug_key", "");
-        if (!seenKeys.add(norm)) return;
+        if (!seenKeys.add(norm)) return false;
         if (!slugKey.isEmpty()) seenKeys.add(slugKey);
         enrichAndStoreCandidate(o, t, seedAnchor, anchorWeight, pool);
+        return true;
     }
 
     private boolean isEligibleCandidate(
@@ -377,13 +381,25 @@ public class AiRecommender {
         if (userQuery == null || userQuery.trim().isEmpty()) return "";
         String q = userQuery.trim();
         String stripped = q.replaceAll("(?i)^(?:show me |find |recommend |search |watch )?(?:shows and movies |movies and shows |movies |movie |shows |show |series |films |film |titles |something |anything )?(?:similar to|more like|like)\\s+", "").trim();
-        if (!stripped.equalsIgnoreCase(q) && !stripped.isEmpty()) return stripped;
+        String cand = (!stripped.equalsIgnoreCase(q) && !stripped.isEmpty()) ? stripped : extractTrailingLikeClause(q);
+        return isCompoundConstraintSeed(cand) ? "" : cand;
+    }
+
+    private static String extractTrailingLikeClause(String q) {
         int idx = q.toLowerCase(Locale.US).lastIndexOf(" like ");
         return idx >= 0 ? q.substring(idx + 6).trim() : "";
     }
 
+    private static boolean isCompoundConstraintSeed(String s) {
+        if (s == null || s.isEmpty() || s.split("\\s+").length > 5) return true;
+        String low = " " + s.toLowerCase(Locale.US) + " ";
+        return s.contains(",") || s.contains(";") || low.contains(" but ") || low.contains(" or ")
+            || low.contains(" with ") || low.contains(" without ") || low.contains(" where ")
+            || low.contains(" starring ") || low.contains(" set in ") || low.contains(" under ");
+    }
+
     private void addQueryToSeedPlan(String userQuery, JSONArray pq, JSONArray seeds) {
-        if (userQuery == null || userQuery.trim().isEmpty()) return;
+        if (userQuery == null || userQuery.trim().isEmpty() || isGenericNextOrTasteQuery(userQuery)) return;
         String cleanQ = userQuery.trim();
         String simSeed = extractSimilaritySeed(cleanQ);
         String target = !simSeed.isEmpty() ? simSeed : cleanQ;
@@ -463,12 +479,19 @@ public class AiRecommender {
     private JSONObject tryParsePlannerResponse(String profileId, String raw) {
         try {
             JSONObject plan = new JSONObject(raw);
-            JSONArray chips = plan.optJSONArray("traversal_chips");
-            if (chips != null && chips.length() > 0) db.saveTraversalChips(profileId, chips);
+            AgentStatusNarrator.publishPlanSteps(plan);
+            savePlannerArtifacts(profileId, plan);
             return plan;
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private void savePlannerArtifacts(String profileId, JSONObject plan) {
+        JSONArray chips = plan.optJSONArray("traversal_chips");
+        if (chips != null && chips.length() > 0) db.saveTraversalChips(profileId, chips);
+        String hypo = plan.optString("taste_hypothesis", "").trim();
+        if (!hypo.isEmpty()) db.setSetting("evolved_taste_memo_" + profileId, hypo);
     }
 
     public JSONArray buildRichWatchedContext(String profileId) {
@@ -515,66 +538,103 @@ public class AiRecommender {
         int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
         List<String> recentSuggested = ImpressionTracker.getRecentCooldownKeys(db, epoch);
         String personalGuide = db.getProfileTaste(profileId);
-        String richHistStr = isSearch ? "[] (Direct Search Mode)" : buildRichWatchedContext(profileId).toString();
+        String richHistStr = isSearch ? db.getRotatingTasteAnchors(profileId, epoch).toString() : buildRichWatchedContext(profileId).toString();
         return "You are Aura's Unified Dynamic JustWatch GraphQL Query & Filter Planner Agent. Current Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
             "Profile: '" + db.getProfileLabel(profileId) + "'. Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
-            "User Ratings Feedback: " + (isSearch ? "(None)" : db.getRatingFeedbackSummary()) + "\n" +
+            "User Ratings Feedback: " + db.getRatingFeedbackSummary() + "\n" +
+            "Recent User Search Curiosity: " + extractRecentSearchCuriosity(profileId) + "\n" +
+            "Previous Evolved Taste Memo: " + db.getSetting("evolved_taste_memo_" + profileId, "(Initial Evolution Round)") + "\n" +
             "Active Filters: " + db.getActiveFilters(profileId).toString() + "\n" +
-            "Refresh Epoch #" + epoch + " Freshness Angle: " + getEpochExplorationAngle(epoch) + "\n" +
-            "User's Watched & In-Progress Shows (with Title, Type, Genres, Country, and Plot Synopsis): " + richHistStr + "\n" +
+            "Refresh Epoch #" + epoch + " Evolution Lens: " + getEpochExplorationAngle(epoch) + "\n" +
+            "User's Watched & In-Progress Shows: " + richHistStr + "\n" +
             "Already Watched & Rated Exclusion List (NEVER suggest): " + watchedList.toString() + "\n" +
-            "Recently Suggested in Last 3 Days / Last 3 Refreshes (AVOID repeating; explore fresh peer titles): " + recentSuggested.toString() + "\n" +
-            "User Search Query (empty = Refresh Home Picks): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
+            "Recently Suggested in Last 8 Rounds (AVOID repeating; explore fresh peer titles): " + recentSuggested.toString() + "\n" +
+            "User Search Query (empty = Evolving Hourly/Manual Refresh): \"" + (userQuery == null ? "" : userQuery) + "\"\n\n" +
             buildJustWatchSchemaPromptSection(minModernYear, currentYear);
+    }
+
+    private String extractRecentSearchCuriosity(String profileId) {
+        JSONArray turns = db.getVoiceSession(profileId).optJSONArray("turns");
+        if (turns == null || turns.length() == 0) return "(No recent searches)";
+        List<String> queries = new ArrayList<>();
+        for (int i = turns.length() - 1; i >= 0 && queries.size() < 3; i--) {
+            JSONObject t = turns.optJSONObject(i);
+            if (t != null && "user".equals(t.optString("role"))) queries.add(t.optString("text"));
+        }
+        return queries.isEmpty() ? "(No recent searches)" : queries.toString();
     }
 
     private String getEpochExplorationAngle(int epoch) {
         String[] angles = {
-            "Explore fresh high-concept mysteries, espionage thrillers, and international breakout series.",
-            "Explore mind-bending sci-fi, speculative fantasy, and dark psychological investigations.",
-            "Explore pulse-pounding survival dramas, crime procedurals, and sharp character-driven dramas.",
-            "Explore critically acclaimed recent releases, supernatural thrillers, and witty high-stakes series."
+            "Cross-Genre Intersection: Bridge two distinct genres/themes from their highest-rated watches into hybrid series & films.",
+            "Auteur & Lead-Cast Lineage: Surface acclaimed movies & shows starring lead actors or created by showrunners of their top watches.",
+            "Counterfactual Tone Shift: Take the core high-concept premise of their favorite anchor show and shift it into a fresh subgenre or witty tone.",
+            "Search Curiosity Synthesis: Blend their Recent User Search Curiosity with their long-term rated favorites.",
+            "Tight High-Momentum Narratives: Prioritize brisk under-2-hour feature movies and razor-sharp 1-season limited series with zero filler.",
+            "Global & International Prestige Breakouts: Surface critically acclaimed international thrillers, mysteries, and sci-fi across regions.",
+            "Puzzle-Box & Mind-Game Storytelling: Focus on unreliable narrators, time loops, closed-circle whodunits, and covert conspiracies.",
+            "Critically Acclaimed Sleeper Gems: Surface IMDb 7.8+ hidden masterpieces that contrast with mainstream repeats."
         };
         return angles[Math.abs(epoch) % angles.length];
     }
 
     private String buildJustWatchSchemaPromptSection(int minModernYear, int currentYear) {
+        String region = RegionProviderRegistry.getRegionDisplayName(db);
+        String pkgCodes = RegionProviderRegistry.getProviderCodesForRegion(db);
         return "JUSTWATCH GRAPHQL TITLEFILTER SCHEMA:\n" +
-            "Each query object in 'queries' is executed in parallel (scatter-gather) against JustWatch India GraphQL and accepts:\n" +
+            "Each query object in 'queries' is executed in parallel (scatter-gather) against JustWatch GraphQL (" + region + " catalog) and accepts:\n" +
             "- 'searchQuery': string (specific seed title/movie/show/franchise to match or traverse, OR \"\" for pure genre/country filter discovery)\n" +
             "- 'includeSimilar': boolean (true to traverse JustWatch's similarTitles co-watch graph for 'searchQuery')\n" +
             "- 'objectTypes': array of [\"MOVIE\"], [\"SHOW\"], or [\"MOVIE\", \"SHOW\"] (e.g. if user asks for movies, MUST be [\"MOVIE\"])\n" +
             "- 'genres': array of valid JustWatch genre codes from [\"act\",\"scf\",\"fnt\",\"trl\",\"crm\",\"drm\",\"cmy\",\"rma\",\"hrr\",\"ani\",\"doc\",\"spt\",\"hst\",\"war\"]\n" +
-            "- 'packages': array of JustWatch package codes from [\"nfx\",\"prv\",\"jhs\",\"atp\",\"snl\",\"zee\"]\n" +
-            "- 'minYear': integer (e.g. " + minModernYear + " for modern discovery, or 2008-2015 when searching iconic movie franchises like Avengers/Marvel)\n" +
+            "- 'packages': array of JustWatch package codes from " + pkgCodes + "\n" +
+            "- 'minYear': integer (e.g. " + minModernYear + " for modern discovery, or 2000-2015 when searching iconic movie franchises/classics)\n" +
             "- 'maxYear': integer (" + currentYear + ")\n" +
-            "- 'productionCountries': optional array of 2-letter ISO codes (e.g. [\"IN\"], [\"US\"], [\"KR\"], [\"JP\"], [\"GB\"])\n" +
+            "- 'productionCountries': optional array of 2-letter ISO codes (e.g. [\"US\"], [\"GB\"], [\"KR\"], [\"JP\"], [\"IN\"], [\"ES\"])\n" +
             "- 'seedAnchor': string naming which watched show or search intent inspired this query.\n\n" +
             buildPlannerTaskInstructions(minModernYear, currentYear);
     }
 
     private String buildPlannerTaskInstructions(int minModernYear, int currentYear) {
         return "Task:\n" +
-            "1. Plan 'queries': 6 diverse JustWatch GraphQL query spec objects for parallel scatter-gather retrieval. " +
-            "If 'User Search Query' asks for 'new', 'latest', 'recent', or broad genre/platform discovery without naming a specific title or actor (e.g. 'new movies', 'latest shows'), set 'searchQuery': \"\" and 'includeSimilar': false on ALL 6 'queries' specs with 'minYear': " + minModernYear + " across diverse genres and productionCountries ([\"US\",\"GB\"] and [\"IN\"]), and set 'primary_queries': [] so live " + minModernYear + "\u2013" + currentYear + " JustWatch catalog titles are discovered instead of older training-cutoff titles. " +
-            "If 'User Search Query' is an actor, director, or franchise query (e.g. 'Amitabh Bachchan movies', 'Jason Statham comedy movies'), set 'includeSimilar': false on the 6 'queries' specs (using the actor/director name with 'genres': [] and 5 of their iconic films as 'searchQuery') and list 10 of their specific movies/shows in 'primary_queries' (including action-comedies, heist films, and lighthearted hits starring that person). " +
-            "If 'User Search Query' is a 'like X' similarity query, set 'searchQuery' to X and 5 iconic peer titles in that exact sub-genre with 'includeSimilar': true. " +
-            "If 'User Search Query' is empty, generate the 6 query specs from the plot synopses, genres, countries, and types of the User's Watched & In-Progress Shows.\n" +
-            "2. Plan 'primary_queries': 10 specific show/movie titles directly matching the request or watched history (or [] for 'new'/'latest' release queries).\n" +
-            "3. Plan 'watched_traversal_seeds': 3 seed titles for co-watch traversal.\n" +
-            "4. Plan 'traversal_chips': 3 short clickable search phrases (max 24 chars each).\n" +
-            "Return ONLY a JSON object with keys: 'queries', 'primary_queries', 'watched_traversal_seeds', 'traversal_chips'.";
+            "1. MULTI-HOP INTENT DECOMPOSITION: Decompose 'User Search Query' (or Profile Watch History & Ratings when query is empty) across ALL nested constraints: Format ('MOVIE' vs 'SHOW'), Counterfactual/Tone-Shifted Similarity (e.g. 'like X but romantic comedy' -> select titles that combine X's high-concept premise with the requested romantic comedy tone), Cross-Show Cast References (e.g. 'actor from Show X in a Genre Y movie' -> first identify the MAIN lead actors of Show X, then select their Genre Y movies), Plot Clues, Runtime, Platform, and Negative Constraints (e.g. 'no space travel', 'no zombie gore').\n" +
+            "2. GLOBAL & REGIONAL DIVERSITY: Unless 'User Search Query' explicitly asks for a specific country/language, include globally acclaimed international/Hollywood classics alongside regional titles; at most 1 of the 6 'queries' specs may set 'productionCountries'.\n" +
+            "3. Plan 'format': \"MOVIE\" if user asks for movies/films, \"SHOW\" if user asks for shows/series, or \"ANY\".\n" +
+            "4. Plan 'cast_seed_titles': array of 0 to 2 exact Show/Movie titles if the user asks for an actor/actress/star from a specific show or movie (e.g. [\"The Office\"], [\"Peaky Blinders\", \"Succession\"], [\"La La Land\"]), or [] otherwise.\n" +
+            "5. Plan 'queries': 6 JustWatch GraphQL query spec objects. CRITICAL: JustWatch 'searchQuery' ONLY matches an exact Movie/Show Title or exact Actor/Director Name (NEVER put descriptive phrases in 'searchQuery'). " +
+            "If 'User Search Query' asks for 'new', 'latest', 'recent', or broad genre/platform discovery without naming a specific title/actor/clue, set 'searchQuery': \"\" and 'includeSimilar': false on ALL 6 specs with 'minYear': " + minModernYear + " and 'primary_queries': []. " +
+            "Otherwise, set 'searchQuery' on the 6 specs to the top resolved Movie/Show Titles (with 'includeSimilar': true) and/or resolved MAIN Lead Actor/Director Names (with 'includeSimilar': false), and set 'objectTypes': [\"MOVIE\"] or [\"SHOW\"] matching 'format'.\n" +
+            "6. Plan 'primary_queries': 12 exact Movie/Show titles that satisfy the intersection of ALL nested constraints (put exact decoded matches first, followed by closest globally diverse peers; NEVER include watched or cooldown titles; or [] for 'new'/'latest' release queries).\n" +
+            "7. Plan 'watched_traversal_seeds': 3 seed titles for co-watch traversal.\n" +
+            "8. Plan 'taste_hypothesis': 1 nuanced sentence evolving 'Previous Evolved Taste Memo' by combining their watched/rated shows, 'Recent User Search Curiosity', and the current 'Refresh Epoch Evolution Lens'.\n" +
+            "9. Plan 'narrator_steps': 5 short dynamic status phrases (3 to 5 words each) narrating each reasoning hop you just performed.\n" +
+            "10. Plan 'traversal_chips': 3 short clickable follow-up search phrases (max 24 chars each).\n" +
+            "Return ONLY a JSON object with keys: 'format', 'cast_seed_titles', 'queries', 'primary_queries', 'watched_traversal_seeds', 'taste_hypothesis', 'narrator_steps', 'traversal_chips'.";
     }
 
     public List<String> executeScatterGatherForSearch(String profileId, String userQuery, int minModernYear) {
         int currentYear = JustWatchGraph.getCurrentYear();
         List<String> watched = collectWatchedTitles(db.listHistory(profileId));
-        String directSeed = extractSimilaritySeed(userQuery);
-        String simSeed = minModernYear >= currentYear - 1 ? directSeed : (!directSeed.isEmpty() ? directSeed : userQuery);
-        Future<JSONArray> directSimFut = submitDirectSimilarFetch(simSeed);
         JSONObject plan = planAgentSearchStrategy(profileId, userQuery, watched, minModernYear, currentYear);
-        JSONArray gathered = JustWatchGraph.executeScatterGatherSpecs(plan.optJSONArray("queries"));
-        return mergeSearchScatterGatherResults(directSimFut, gathered, plan, minModernYear);
+        return AgenticSearchOrchestrator.executeAgenticScatterGather(this, db, profileId, userQuery, plan, minModernYear);
+    }
+
+    private String resolveEffectiveSimSeed(String profileId, String userQuery, int minModernYear, int currentYear) {
+        String directSeed = extractSimilaritySeed(userQuery);
+        if (!directSeed.isEmpty() || minModernYear >= currentYear - 1) return directSeed;
+        if (!isGenericNextOrTasteQuery(userQuery)) {
+            return userQuery.trim().split("\\s+").length <= 3 ? userQuery : "";
+        }
+        List<String> anchors = db.getDynamicTasteAnchors(profileId);
+        return !anchors.isEmpty() ? anchors.get(0) : "";
+    }
+
+    public static boolean isGenericNextOrTasteQuery(String q) {
+        if (q == null) return true;
+        String low = q.trim().toLowerCase(Locale.US);
+        return low.contains("what is next") || low.contains("what's next") || low.contains("whats next")
+            || low.contains("next recommendation") || low.contains("watch next") || low.equals("next")
+            || low.equals("more") || low.contains("something else") || low.contains("recommend something");
     }
 
     private Future<JSONArray> submitDirectSimilarFetch(String seedQuery) {
@@ -584,16 +644,42 @@ public class AiRecommender {
     }
 
     private List<String> mergeSearchScatterGatherResults(
-            Future<JSONArray> directSimFut, JSONArray gathered, JSONObject plan, int minModernYear) {
+            String profileId, Future<JSONArray> directSimFut, JSONArray gathered, JSONObject plan, int minModernYear) {
         List<String> summaries = new ArrayList<>();
-        Set<String> seenNorm = new HashSet<>();
+        Set<String> seenNorm = initSearchExclusionKeys(profileId);
+        JSONArray directSim = awaitFutureJsonArray(directSimFut, 1500);
+        collectOrderedSearchSummaries(directSim, gathered, plan, minModernYear, seenNorm, summaries);
+        if (summaries.size() < 6) {
+            collectOrderedSearchSummaries(directSim, gathered, plan, minModernYear, new HashSet<>(db.getHistoryTitleKeys(profileId)), summaries);
+        }
+        if (!summaries.isEmpty()) AgentStatusNarrator.publishLiveStep("Verified " + summaries.size() + " streaming matches");
+        return summaries;
+    }
+
+    private Set<String> initSearchExclusionKeys(String profileId) {
+        int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
+        Set<String> keys = new HashSet<>(ImpressionTracker.getRecentCooldownKeys(db, epoch));
+        keys.addAll(db.getHistoryTitleKeys(profileId));
+        return keys;
+    }
+
+    private JSONArray awaitFutureJsonArray(Future<JSONArray> fut, long timeoutMs) {
+        try {
+            return fut.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
+    private void collectOrderedSearchSummaries(
+            JSONArray directSim, JSONArray gathered, JSONObject plan,
+            int minModernYear, Set<String> seenNorm, List<String> summaries) {
         boolean isNewReleasesQuery = minModernYear >= JustWatchGraph.getCurrentYear() - 1;
         if (!isNewReleasesQuery) appendPrimaryQueryLookups(plan, minModernYear, seenNorm, summaries);
-        try { appendSearchCandidateSummaries(directSimFut.get(1500, TimeUnit.MILLISECONDS), minModernYear, seenNorm, summaries); } catch (Exception ignored) {}
+        appendSearchCandidateSummaries(directSim, minModernYear, seenNorm, summaries);
         appendSearchCandidateSummaries(gathered, minModernYear, seenNorm, summaries);
         if (isNewReleasesQuery) appendPrimaryQueryLookups(plan, minModernYear, seenNorm, summaries);
         appendFallbackPlanCandidates(plan, minModernYear, seenNorm, summaries);
-        return summaries;
     }
 
     private void appendPrimaryQueryLookups(JSONObject plan, int minModernYear, Set<String> seenNorm, List<String> summaries) {
@@ -611,7 +697,7 @@ public class AiRecommender {
         for (int i = 0; i < count; i++) {
             final int idx = i;
             final String q = titles.optString(i, "").trim();
-            if (!q.isEmpty()) exec.submit(() -> hits[idx] = JustWatchGraph.lookupTitleInIndia(q));
+            if (!q.isEmpty()) exec.submit(() -> hits[idx] = JustWatchGraph.lookupTitle(q));
         }
         exec.shutdown();
         try { exec.awaitTermination(3000, TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
@@ -691,7 +777,7 @@ public class AiRecommender {
             if (ImpressionTracker.isRecentlyShown(key, epoch, impressions)) recycled.add(item);
             else fresh.add(item);
         }
-        for (int i = 0; i < recycled.size() && fresh.size() < 20; i++) fresh.add(recycled.get(i));
+        for (int i = 0; i < recycled.size() && fresh.size() < 12; i++) fresh.add(recycled.get(i));
         return fresh.size() > limit ? fresh.subList(0, limit) : fresh;
     }
 
@@ -786,12 +872,15 @@ public class AiRecommender {
         String ratingsFeedback = db.getRatingFeedbackSummary();
         List<String> activeFilters = db.getActiveFilters(profileId);
         List<String> recentSuggested = ImpressionTracker.getRecentCooldownKeys(db, epoch);
-        return "You are Aura's Stage-3 Post-Filter & Reranking Agent for Android TV in India.\n" +
-            "Current Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'. Refresh Epoch #" + epoch + " (" + getEpochExplorationAngle(epoch) + ")\n" +
+        String region = RegionProviderRegistry.getRegionDisplayName(db);
+        String memo = db.getSetting("evolved_taste_memo_" + profileId, getEpochExplorationAngle(epoch));
+        return "You are Aura's Stage-3 Post-Filter & Reranking Agent for Android TV in " + region + ".\n" +
+            "Current Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'. Refresh Epoch #" + epoch + "\n" +
+            "0. EVOLVING TASTE HYPOTHESIS & RECENT SEARCH CURIOSITY: " + memo + " | Recent Searches: " + extractRecentSearchCuriosity(profileId) + "\n" +
             "1. PERSONAL GUIDE AI: " + (personalGuide.isEmpty() ? "(Use Default Guide AI and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
             "2. DEFAULT GUIDE AI: \"" + db.getDefaultTasteGuide() + "\"\n3. USER RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
             "4. ACTIVE FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +
-            "5. RECENTLY SUGGESTED IN LAST 3 DAYS (DO NOT REPEAT THESE): " + recentSuggested.toString() + "\n" +
+            "5. RECENTLY SUGGESTED IN LAST 8 ROUNDS (STRICT COOLDOWN — DO NOT REPEAT THESE): " + recentSuggested.toString() + "\n" +
             "6. USER'S WATCHED SHOWS (WITH PLOT SYNOPSIS, GENRES, TYPE, COUNTRY): " + richHistory.toString() + "\n";
     }
 
@@ -895,7 +984,7 @@ public class AiRecommender {
         String cacheKey = "jw_imdb_v6:" + title.trim().toLowerCase();
         JSONObject cachedObj = tryReadCachedOpenMeta(cacheKey);
         if (cachedObj != null) return cachedObj;
-        JSONObject res = JustWatchGraph.lookupTitleInIndia(title);
+        JSONObject res = JustWatchGraph.lookupTitle(title);
         int maxYear = JustWatchGraph.getCurrentYear();
         if (!res.optString("poster_url").isEmpty() && res.optInt("year", maxYear) <= maxYear) {
             db.saveCachedGti(cacheKey, res.toString());
@@ -949,11 +1038,16 @@ public class AiRecommender {
     public String callGeminiJson(String prompt) {
         String apiKey = getApiKey();
         if (apiKey.isEmpty()) return null;
-        for (String model : MODELS) {
-            String text = tryCallSingleGeminiModel(model, apiKey, prompt);
-            if (text != null) return text;
-        }
-        return null;
+        String fast = tryCallLiteWithRetry(MODELS[0], apiKey, prompt);
+        if (fast != null) return fast;
+        return MODELS.length > 1 ? tryCallSingleGeminiModel(MODELS[1], apiKey, prompt) : null;
+    }
+
+    private String tryCallLiteWithRetry(String model, String apiKey, String prompt) {
+        String first = tryCallSingleGeminiModel(model, apiKey, prompt);
+        if (first != null) return first;
+        try { Thread.sleep(800); } catch (Exception ignored) {}
+        return tryCallSingleGeminiModel(model, apiKey, prompt);
     }
 
     private String tryCallSingleGeminiModel(String model, String apiKey, String prompt) {
@@ -1022,7 +1116,7 @@ public class AiRecommender {
     private String httpPost(final String urlStr, final String jsonBody) throws Exception {
         java.util.concurrent.Future<String> fut = HTTP_EXEC.submit(() -> executeHttpPost(urlStr, jsonBody));
         try {
-            return fut.get(15000, TimeUnit.MILLISECONDS);
+            return fut.get(20000, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             fut.cancel(true);
             throw e;
@@ -1031,8 +1125,8 @@ public class AiRecommender {
 
     private String executeHttpPost(String urlStr, String jsonBody) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-        conn.setConnectTimeout(3500);
-        conn.setReadTimeout(14500);
+        conn.setConnectTimeout(4500);
+        conn.setReadTimeout(18000);
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");

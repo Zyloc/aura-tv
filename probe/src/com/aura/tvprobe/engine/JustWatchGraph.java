@@ -97,8 +97,12 @@ public class JustWatchGraph {
         return RegionProviderRegistry.getDefaultPackagesJson();
     }
 
-    public static JSONObject lookupTitleInIndia(String title) {
+    public static JSONObject lookupTitle(String title) {
         return lookupTitle(title, RegionProviderRegistry.getCountryCode(null), RegionProviderRegistry.getLanguageCode(null));
+    }
+
+    public static JSONObject lookupTitleInIndia(String title) {
+        return lookupTitle(title);
     }
 
     public static JSONObject lookupTitle(String title, String country, String language) {
@@ -127,13 +131,76 @@ public class JustWatchGraph {
             JSONObject parsed = parseNode(edges.optJSONObject(i).optJSONObject("node"), lang);
             if (!isLookupEligible(parsed)) continue;
             if (matchesTargetTitleOrSlug(parsed, normTarget)) return parsed;
-            if (best == null && CandidateValidator.isValidCoWatchCandidate(parsed, 1950, 5.5)) best = parsed;
+            if (best == null && isCloseLookupMatch(parsed, normTarget)) best = parsed;
         }
         return best != null ? best : new JSONObject();
     }
 
+    private static boolean isCloseLookupMatch(JSONObject parsed, String normTarget) {
+        String titleKey = AuraDb.normalizeTitleKey(parsed.optString("title"));
+        String slugKey = parsed.optString("slug_key", "");
+        return isCloseSeedMatch(titleKey, slugKey, normTarget)
+            && CandidateValidator.isValidCoWatchCandidate(parsed, 1950, 5.5);
+    }
+
     private static boolean isLookupEligible(JSONObject parsed) {
-        return parsed.optBoolean("has_flatrate_offer", false) && parsed.optInt("year", 9999) <= getCurrentYear();
+        return CandidateValidator.hasRequiredBaseFields(parsed, 1950, 5.2);
+    }
+
+    public static JSONArray fetchCastSeedCandidates(JSONArray castSeedTitles, String format) {
+        if (castSeedTitles == null || castSeedTitles.length() == 0) return new JSONArray();
+        JSONArray actorSpecs = buildActorSpecsFromSeedTitles(castSeedTitles, format);
+        return executeScatterGatherSpecs(actorSpecs);
+    }
+
+    private static JSONArray buildActorSpecsFromSeedTitles(JSONArray castSeedTitles, String format) {
+        JSONArray specs = new JSONArray();
+        for (int i = 0; i < castSeedTitles.length() && i < 2; i++) {
+            List<String> actors = fetchLeadCastForTitle(castSeedTitles.optString(i, "").trim());
+            appendActorSearchSpecs(actors, format, specs);
+        }
+        return specs;
+    }
+
+    private static void appendActorSearchSpecs(List<String> actors, String format, JSONArray specs) {
+        for (int i = 0; i < actors.size() && specs.length() < 6; i++) {
+            try {
+                JSONObject s = new JSONObject().put("searchQuery", actors.get(i)).put("includeSimilar", false);
+                if ("MOVIE".equalsIgnoreCase(format) || "SHOW".equalsIgnoreCase(format)) s.put("objectTypes", new JSONArray().put(format.toUpperCase(Locale.US)));
+                specs.put(s);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public static List<String> fetchLeadCastForTitle(String seedTitle) {
+        if (seedTitle == null || seedTitle.isEmpty()) return new ArrayList<>();
+        try {
+            String lang = RegionProviderRegistry.getLanguageCode(null);
+            JSONObject vars = new JSONObject().put("searchQuery", seedTitle).put("country", RegionProviderRegistry.getCountryCode(null)).put("language", lang);
+            return extractCastFromMatchingNode(extractEdges(postGraphQl(SIMILAR_QUERY, vars)), AuraDb.normalizeTitleKey(seedTitle), lang);
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    private static List<String> extractCastFromMatchingNode(JSONArray edges, String normSeed, String lang) {
+        if (edges == null) return new ArrayList<>();
+        for (int i = 0; i < edges.length() && i < 4; i++) {
+            JSONObject p = parseNode(edges.optJSONObject(i).optJSONObject("node"), lang);
+            if (isCloseSeedMatch(AuraDb.normalizeTitleKey(p.optString("title", "")), p.optString("slug_key", ""), normSeed)) {
+                return splitFirstActors(p.optString("cast", ""), 4);
+            }
+        }
+        return new ArrayList<>();
+    }
+
+    private static List<String> splitFirstActors(String castCsv, int max) {
+        List<String> out = new ArrayList<>();
+        if (castCsv == null || castCsv.isEmpty()) return out;
+        for (String part : castCsv.split(",")) {
+            if (!part.trim().isEmpty() && out.size() < max) out.add(part.trim());
+        }
+        return out;
     }
 
     private static boolean matchesTargetTitleOrSlug(JSONObject parsed, String normTarget) {
@@ -443,10 +510,27 @@ public class JustWatchGraph {
         List<String> pkgs = inferPackageCodesFromText(q);
         if (!genres.isEmpty() || !pkgs.isEmpty() || q.contains("->") || q.length() > 28) {
             List<String> gList = genres.isEmpty() ? Arrays.asList("trl", "crm", "scf", "drm") : genres;
-            JSONArray structured = fetchStructuredGenreCandidates(gList, pkgs, minYear, getCurrentYear());
+            JSONArray structured = fetchTypedGenreCandidates(q, gList, pkgs, minYear);
             if (structured.length() > 0) return structured;
         }
         return executeDirectKeywordSearch(q, minYear);
+    }
+
+    private static JSONArray fetchTypedGenreCandidates(String q, List<String> gList, List<String> pkgs, int minYear) {
+        if (!VoiceConcierge.wantsMoviesOnly(q) && !VoiceConcierge.wantsSeriesOnly(q)) {
+            return fetchStructuredGenreCandidates(gList, pkgs, minYear, getCurrentYear());
+        }
+        try {
+            return executeDynamicQuerySpec(buildTypedGenreSpec(q, gList, pkgs, minYear));
+        } catch (Exception e) {
+            return fetchStructuredGenreCandidates(gList, pkgs, minYear, getCurrentYear());
+        }
+    }
+
+    private static JSONObject buildTypedGenreSpec(String q, List<String> gList, List<String> pkgs, int minYear) throws Exception {
+        JSONObject spec = new JSONObject().put("genres", new JSONArray(gList)).put("minYear", minYear).put("maxYear", getCurrentYear());
+        if (!pkgs.isEmpty()) spec.put("packages", new JSONArray(pkgs));
+        return spec.put("objectTypes", new JSONArray().put(VoiceConcierge.wantsMoviesOnly(q) ? "MOVIE" : "SHOW"));
     }
 
     private static JSONArray executeDirectKeywordSearch(String query, int minYear) {
@@ -691,12 +775,18 @@ public class JustWatchGraph {
     private static String extractTopCreditsCsv(JSONArray credits) {
         if (credits == null || credits.length() == 0) return "";
         List<String> names = new ArrayList<>();
-        for (int i = 0; i < credits.length() && names.size() < 6; i++) {
-            JSONObject c = credits.optJSONObject(i);
-            String n = c != null ? c.optString("name", "").trim() : "";
-            if (!n.isEmpty() && !names.contains(n)) names.add(n);
+        for (int i = 0; i < credits.length() && names.size() < 10; i++) {
+            appendCreditIfActorOrDirector(credits.optJSONObject(i), names);
         }
         return String.join(", ", names);
+    }
+
+    private static void appendCreditIfActorOrDirector(JSONObject c, List<String> names) {
+        if (c == null) return;
+        String role = c.optString("role", "").toUpperCase(Locale.US);
+        if (!role.isEmpty() && !"ACTOR".equals(role) && !"DIRECTOR".equals(role)) return;
+        String n = c.optString("name", "").trim();
+        if (!n.isEmpty() && !names.contains(n)) names.add(n);
     }
 
     private static void populateBasicContent(JSONObject content, String objType, String lang, JSONObject res) throws Exception {
@@ -848,7 +938,7 @@ public class JustWatchGraph {
     }
 
     private static void inferPrimaryGenres(String lower, List<String> codes) {
-        if (containsAny(lower, "sci-fi", "scifi", "science", "cyber", "space", "dystopia")) codes.add("scf");
+        if (containsAny(lower, "sci-fi", "scifi", "science", "cyber", "space", "dystopia", "time travel", "time loop", "multiverse", "alien", "future")) codes.add("scf");
         if (containsAny(lower, "thriller", "suspense", "mystery", "dark", "gritt", "mind", "psych")) codes.add("trl");
         if (containsAny(lower, "crime", "heist", "mafia", "gang", "detective", "murder", "noir")) codes.add("crm");
         if (containsAny(lower, "action", "octane", "combat", "spy", "espionage", "adventure")) codes.add("act");

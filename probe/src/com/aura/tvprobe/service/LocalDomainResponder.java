@@ -144,9 +144,18 @@ public final class LocalDomainResponder {
         byte[] ip4 = parseAddressBytes(QrRemoteBuilder.getTvIpAddress(appCtx));
         if (ip4 == null) return;
         byte[] ip6 = getLinkLocalIpv6Bytes();
+        logIncomingQuery(query, alias);
         byte[] unicast = buildUnicastReply(query.getData(), query.getLength(), ip4, ip6);
         if (unicast != null) sendPacketSafe(ms, unicast, query.getAddress(), query.getPort());
         sendMulticastAnswers(ms, alias, ip4, ip6);
+    }
+
+    private static void logIncomingQuery(DatagramPacket q, String alias) {
+        byte[] d = q.getData();
+        int ne = findQuestionNameEnd(d, q.getLength());
+        int qt = (ne > 0 && ne + 4 <= q.getLength()) ? (((d[ne] & 0xFF) << 8) | (d[ne + 1] & 0xFF)) : -1;
+        int ar = ((d[10] & 0xFF) << 8) | (d[11] & 0xFF);
+        android.util.Log.i("AuraMdns", "RECV " + q.getAddress() + ":" + q.getPort() + " alias=" + alias + " qType=" + qt + " arCount=" + ar);
     }
 
     private static void sendMulticastAnswers(MulticastSocket ms, String alias, byte[] ip4, byte[] ip6) {
@@ -159,14 +168,58 @@ public final class LocalDomainResponder {
         int nameEnd = findQuestionNameEnd(q, len);
         if (nameEnd < 0 || nameEnd + 4 > len) return null;
         int qType = ((q[nameEnd] & 0xFF) << 8) | (q[nameEnd + 1] & 0xFF);
-        byte[] rdata = selectRdataForType(qType, ip4, ip6);
-        int rrType = (qType == 28) ? 28 : 1;
-        return assembleUnicastBytes(q, nameEnd, rrType, rdata);
+        int optStart = findOptStart(q, len, nameEnd + 4);
+        if (qType == 1 || qType == 255) return assembleUnicastAReply(q, len, nameEnd, optStart, ip4);
+        return assembleUnicastNoDataReply(q, len, nameEnd, optStart);
     }
 
-    private static byte[] selectRdataForType(int qType, byte[] ip4, byte[] ip6) {
-        if (qType == 1 || qType == 255) return ip4;
-        return null;
+    private static int findOptStart(byte[] q, int len, int afterQuestion) {
+        int arCount = ((q[10] & 0xFF) << 8) | (q[11] & 0xFF);
+        if (arCount == 1 && len >= afterQuestion + 11 && q[afterQuestion] == 0
+                && q[afterQuestion + 1] == 0 && q[afterQuestion + 2] == 0x29) {
+            return afterQuestion;
+        }
+        return -1;
+    }
+
+    private static byte[] assembleUnicastAReply(byte[] q, int len, int nameEnd, int optStart, byte[] ip4) {
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(160);
+            byte ar = (byte) (optStart > 0 ? 1 : 0);
+            byte[] hdr = {q[0], q[1], (byte) (0x84 | (q[2] & 0x01)), 0x00, 0, 1, 0, 1, 0, 0, 0, ar};
+            out.write(hdr);
+            out.write(q, 12, (nameEnd + 4) - 12);
+            writeUnicastRecord(out, q, nameEnd, 1, ip4);
+            if (optStart > 0) out.write(q, optStart, len - optStart);
+            return out.toByteArray();
+        } catch (Throwable e) { return null; }
+    }
+
+    private static byte[] assembleUnicastNoDataReply(byte[] q, int len, int nameEnd, int optStart) {
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(160);
+            byte ar = (byte) (optStart > 0 ? 1 : 0);
+            byte[] hdr = {q[0], q[1], (byte) (0x84 | (q[2] & 0x01)), 0x00, 0, 1, 0, 0, 0, 1, 0, ar};
+            out.write(hdr);
+            out.write(q, 12, (nameEnd + 4) - 12);
+            writeUnicastSoaAuthority(out, q, nameEnd);
+            if (optStart > 0) out.write(q, optStart, len - optStart);
+            return out.toByteArray();
+        } catch (Throwable e) { return null; }
+    }
+
+    private static void writeUnicastSoaAuthority(ByteArrayOutputStream out, byte[] q, int nameEnd) throws Exception {
+        out.write(q, 12, nameEnd - 12);
+        byte[] soa = {0x00, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x18,
+            (byte) 0xC0, 0x0C, (byte) 0xC0, 0x0C, 0, 0, 0, 1, 0, 0, 0, 120, 0, 0, 0, 60, 0, 0, 0, 120, 0, 0, 0, 60};
+        out.write(soa);
+    }
+
+    private static void writeUnicastRecord(ByteArrayOutputStream out, byte[] q, int nameEnd, int rrType, byte[] rdata) throws Exception {
+        out.write(q, 12, nameEnd - 12);
+        byte[] meta = {0x00, (byte) rrType, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, (byte) rdata.length};
+        out.write(meta);
+        out.write(rdata);
     }
 
     private static int findQuestionNameEnd(byte[] q, int len) {
@@ -178,26 +231,6 @@ public final class LocalDomainResponder {
             pos += 1 + b;
         }
         return -1;
-    }
-
-    private static byte[] assembleUnicastBytes(byte[] q, int nameEnd, int rrType, byte[] rdata) {
-        try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(128);
-            int anCount = (rdata != null) ? 1 : 0;
-            byte flags0 = (byte) (0x84 | (q[2] & 0x01));
-            byte[] hdr = {q[0], q[1], flags0, 0x00, 0x00, 0x01, 0x00, (byte) anCount, 0, 0, 0, 0};
-            out.write(hdr);
-            out.write(q, 12, (nameEnd + 4) - 12);
-            if (rdata != null) writeUnicastRecord(out, q, nameEnd, rrType, rdata);
-            return out.toByteArray();
-        } catch (Throwable e) { return null; }
-    }
-
-    private static void writeUnicastRecord(ByteArrayOutputStream out, byte[] q, int nameEnd, int rrType, byte[] rdata) throws Exception {
-        out.write(q, 12, nameEnd - 12);
-        byte[] meta = {0x00, (byte) rrType, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, (byte) rdata.length};
-        out.write(meta);
-        out.write(rdata);
     }
 
     private static byte[] buildMulticastAnswer(String alias, byte[] ip4, byte[] ip6) {

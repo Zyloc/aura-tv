@@ -60,10 +60,12 @@ public final class CandidateValidator {
     public static boolean hasRequiredBaseFields(JSONObject parsed, int minYear, double minImdb) {
         if (parsed == null || parsed.optString("title").isEmpty()) return false;
         int year = parsed.optInt("year", 9999);
-        if (year > getCurrentYear() || year < minYear) return false;
-        if (!parsed.optBoolean("has_flatrate_offer", false)) return false;
-        if (parsed.optString("poster_url").isEmpty()) return false;
-        return parsed.optDouble("imdb_raw", 0.0) >= minImdb;
+        int curYear = getCurrentYear();
+        if (year > curYear || year < minYear) return false;
+        if (!parsed.optBoolean("has_flatrate_offer", false) || parsed.optString("poster_url").isEmpty()) return false;
+        int votes = parsed.optInt("imdb_votes", 0);
+        if (year == curYear && votes < 800) return false;
+        return votes >= 400 && parsed.optDouble("imdb_raw", 0.0) >= minImdb;
     }
 
     public static boolean isValidCatalogCandidate(JSONObject parsed, int minYear, double minImdb) {

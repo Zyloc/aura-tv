@@ -78,7 +78,7 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private void refreshHourlyRecosIfNeeded() {
-        String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String prof = db.getValidActiveProfile();
         if (!db.isRecoCacheFresh(prof)) {
             inspector.syncAndBuildState(true);
         }
@@ -144,7 +144,7 @@ public class MediaProbeService extends NotificationListenerService {
 
     private void handleClient(Socket client) {
         try (Socket s = client) {
-            s.setSoTimeout(15000);
+            s.setSoTimeout(90000);
             s.setTcpNoDelay(true);
             java.io.InputStream rawIn = s.getInputStream();
             String reqLine = readAsciiLine(rawIn);
@@ -287,7 +287,7 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private boolean handleToggleFilterRoute(OutputStream out, Uri uri) throws Exception {
-        String prof = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String prof = db.getValidActiveProfile();
         String f = optParam(uri, "filter", "");
         if ("clear".equals(f)) db.clearFilters(prof);
         else if (!f.isEmpty()) db.toggleFilter(prof, f);
@@ -317,7 +317,7 @@ public class MediaProbeService extends NotificationListenerService {
 
     private boolean handleChatRoute(OutputStream out, Uri uri, String reqBody) throws Exception {
         JSONObject req = !reqBody.isEmpty() ? new JSONObject(reqBody) : new JSONObject();
-        String prof = req.optString("profile", db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE));
+        String prof = req.optString("profile", db.getValidActiveProfile());
         String msg = req.optString("message", optParam(uri, "message", ""));
         boolean reset = req.optBoolean("reset", "1".equals(optParam(uri, "reset", "0")));
         writeHttpResponse(out, "application/json", voice.handleTurn(prof, msg, reset).toString());

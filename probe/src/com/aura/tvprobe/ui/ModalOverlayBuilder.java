@@ -499,7 +499,7 @@ public final class ModalOverlayBuilder {
     };
 
     private static final String[] PREFERRED_LANGS = {
-        "English", "Hindi", "Tamil", "Telugu", "Malayalam", "Korean", "Japanese"
+        "English", "Spanish", "French", "German", "Hindi", "Korean", "Japanese", "Tamil", "Telugu"
     };
 
     private static void addRankingAlgorithmSection(LinearLayout body, Context ctx, AuraDb db,
@@ -612,7 +612,7 @@ public final class ModalOverlayBuilder {
 
     private static final String[] VIBE_PRESETS = {
         "Mind-Bending Sci-Fi", "Gripping Crime Thrillers", "Dark Psychological", "High-Octane Action",
-        "Indian Prestige Series", "Slow-Burn Mystery", "IMDb 8.0+ Masterpieces", "Feel-Good & Witty"
+        "Global Prestige Series", "Slow-Burn Mystery", "IMDb 8.0+ Masterpieces", "Feel-Good & Witty"
     };
 
     public static void showGuideAiModal(

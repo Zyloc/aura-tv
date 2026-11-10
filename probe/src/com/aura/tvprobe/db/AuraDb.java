@@ -31,6 +31,10 @@ public class AuraDb extends SQLiteOpenHelper {
         return sInstance;
     }
 
+    public static AuraDb peekInstance() {
+        return sInstance;
+    }
+
     public AuraDb(Context ctx) {
         super(ctx.getApplicationContext(), "aura_tv_local.db", null, 8);
         setWriteAheadLoggingEnabled(true);
@@ -129,12 +133,36 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private void ensureDefaultProfileExists() {
-        List<JSONObject> existing = listProfilesRaw();
-        if (!existing.isEmpty()) return;
-        String starterName = getSetting("profile_name_member1", "Explorer");
-        String starterTaste = getSetting("profile_taste_member1", "");
-        saveProfileRecord(DEFAULT_PROFILE, starterName, starterTaste);
-        setSetting("active_profile", DEFAULT_PROFILE);
+        if (listProfilesRaw().isEmpty()) {
+            saveProfileRecord(DEFAULT_PROFILE, getSetting("profile_name_member1", "Explorer"), getSetting("profile_taste_member1", ""));
+            setSetting("active_profile", DEFAULT_PROFILE);
+        }
+        migrateOrphanedHistoryToProfile(getValidActiveProfile());
+    }
+
+    public String getValidActiveProfile() {
+        String cur = getSetting("active_profile", DEFAULT_PROFILE);
+        List<JSONObject> profiles = listProfilesRaw();
+        if (isProfileInList(cur, profiles) || profiles.isEmpty()) return cur;
+        String valid = profiles.get(0).optString("id", DEFAULT_PROFILE);
+        setSetting("active_profile", valid);
+        migrateOrphanedHistoryToProfile(valid);
+        return valid;
+    }
+
+    private boolean isProfileInList(String profileId, List<JSONObject> profiles) {
+        for (JSONObject p : profiles) {
+            if (profileId != null && profileId.equals(p.optString("id"))) return true;
+        }
+        return false;
+    }
+
+    private void migrateOrphanedHistoryToProfile(String validProfileId) {
+        try {
+            getWritableDatabase().execSQL(
+                "UPDATE watch_history SET profile_id = ? WHERE profile_id NOT IN (SELECT profile_id FROM user_profiles)",
+                new Object[]{validProfileId});
+        } catch (Exception ignored) {}
     }
 
     private List<JSONObject> listProfilesRaw() {
@@ -350,7 +378,7 @@ public class AuraDb extends SQLiteOpenHelper {
         int curYear = JustWatchGraph.getCurrentYear();
         int minYear = JustWatchGraph.getDefaultMinModernYear();
         if (def.isEmpty()) {
-            return "Modern critically acclaimed releases (" + minYear + "-" + curYear + ", IMDb 7.5+), gripping storytelling, smart pacing, streaming on Netflix, Prime Video, Disney+ Hotstar, or Apple TV+";
+            return "Modern critically acclaimed releases (" + minYear + "-" + curYear + ", IMDb 7.5+), gripping storytelling, smart pacing, streaming on " + RegionProviderRegistry.getProviderDisplayListForRegion(this);
         }
         return def;
     }
@@ -798,12 +826,16 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     public JSONArray listHistory(String profileId) {
-        JSONArray arr = new JSONArray();
         Set<String> watchedKeys = getWatchedTitleKeys();
         boolean hasProf = profileId != null && !profileId.isEmpty();
-        String sql = "SELECT * FROM watch_history " + (hasProf ? "WHERE profile_id = ? " : "")
-            + "ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY;
-        try (Cursor c = getReadableDatabase().rawQuery(sql, hasProf ? new String[]{profileId} : null)) {
+        JSONArray arr = queryHistoryRows(hasProf ? profileId : null, watchedKeys);
+        return (hasProf && arr.length() < 3) ? queryHistoryRows(null, watchedKeys) : arr;
+    }
+
+    private JSONArray queryHistoryRows(String profileId, Set<String> watchedKeys) {
+        JSONArray arr = new JSONArray();
+        String sql = "SELECT * FROM watch_history " + (profileId != null ? "WHERE profile_id = ? " : "") + "ORDER BY updated_at DESC LIMIT " + MAX_TV_HISTORY;
+        try (Cursor c = getReadableDatabase().rawQuery(sql, profileId != null ? new String[]{profileId} : null)) {
             while (c.moveToNext()) arr.put(parseHistoryRowWithWatchedFlag(c, watchedKeys));
         } catch (Exception ignored) {}
         return arr;

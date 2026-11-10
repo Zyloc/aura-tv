@@ -42,14 +42,22 @@ public class SlateAllocatorTest {
         List<JSONObject> pool = new ArrayList<>();
         pool.add(makeItem("Stale Pick", "SeedA", "scf", 12.0));
         pool.add(makeItem("Fresh Pick", "SeedB", "scf", 10.5));
-
         Map<String, ImpressionTracker.ImpressionRecord> history = new HashMap<>();
-        String staleKey = AuraDb.normalizeTitleKey("Stale Pick");
-        history.put(staleKey, new ImpressionTracker.ImpressionRecord(2, 2, System.currentTimeMillis() / 1000L));
-
+        history.put(AuraDb.normalizeTitleKey("Stale Pick"),
+            new ImpressionTracker.ImpressionRecord(2, 2, System.currentTimeMillis() / 1000L));
         List<JSONObject> slate = SlateAllocator.allocateBalancedSlate(pool, 3, history);
-        assertEquals("Fresh unshown title must be prioritized ahead of cooldown item",
-            "Fresh Pick", slate.get(0).optString("title"));
+        assertEquals("Fresh Pick", slate.get(0).optString("title"));
+    }
+
+    @Test
+    public void testEightRoundCooldownAndAutoDeletionWindow() throws Exception {
+        assertEquals("Cooldown window must be 8 rounds (5-10 range)", 8, ImpressionTracker.COOLDOWN_EPOCHS);
+        Map<String, ImpressionTracker.ImpressionRecord> history = new HashMap<>();
+        history.put("duneprophecy", new ImpressionTracker.ImpressionRecord(2, 1, System.currentTimeMillis() / 1000L));
+        assertTrue("Shown at round 2 must be on cooldown at round 9", ImpressionTracker.isRecentlyShown("duneprophecy", 9, history));
+        assertFalse("Shown at round 2 must be recycled at round 10", ImpressionTracker.isRecentlyShown("duneprophecy", 10, history));
+        assertFalse("Should not delete before 8 rounds", ImpressionTracker.shouldDeleteImpression(2, 9));
+        assertTrue("Must delete and recycle at 8+ rounds", ImpressionTracker.shouldDeleteImpression(2, 10));
     }
 
     private static int countSeed(List<JSONObject> list, String seed) {

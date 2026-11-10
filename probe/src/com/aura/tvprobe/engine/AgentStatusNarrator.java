@@ -1,21 +1,23 @@
 package com.aura.tvprobe;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Generates and streams live, non-technical, conversational progress messages
- * from Gemini for the AgenticOrbView during Voice Search, Similar Exploration,
- * and Home Recommendation Refreshes.
+ * Streams real-time dynamic LLM reasoning and retrieval status messages
+ * to the AgenticOrbView during Voice Search, Similar Exploration, and Home Refresh.
  */
 public final class AgentStatusNarrator {
 
+    private static volatile AgentStatusNarrator currentActive;
     private final AtomicBoolean active = new AtomicBoolean(true);
     private final List<String> stepQueue = Collections.synchronizedList(new ArrayList<>());
     private final AiRecommender.AgentProgressListener listener;
+    private final long startMs = System.currentTimeMillis();
 
     private AgentStatusNarrator(AiRecommender.AgentProgressListener listener) {
         this.listener = listener;
@@ -25,53 +27,97 @@ public final class AgentStatusNarrator {
         AiRecommender ai, AuraDb db, String profileId, String userQuery, AiRecommender.AgentProgressListener progress
     ) {
         AgentStatusNarrator narrator = new AgentStatusNarrator(progress);
+        currentActive = narrator;
         if (progress != null) narrator.launchAsyncNarration(ai, db, profileId, userQuery);
         return narrator;
     }
 
+    public static void publishPlanSteps(JSONObject plan) {
+        AgentStatusNarrator cur = currentActive;
+        if (cur == null || plan == null || !cur.active.get()) return;
+        cur.appendSteps(plan.optJSONArray("narrator_steps"));
+        JSONArray pq = plan.optJSONArray("primary_queries");
+        if (pq != null && pq.length() > 0) cur.addSingleStep("Matched " + pq.optString(0, ""));
+    }
+
+    public static void publishLiveStep(String rawStep) {
+        AgentStatusNarrator cur = currentActive;
+        if (cur != null && cur.active.get()) cur.addSingleStep(rawStep);
+    }
+
     public void stop() {
+        if (listener != null) {
+            long rem = 2800L - (System.currentTimeMillis() - startMs);
+            if (rem > 0) sleepQuietly(rem);
+        }
         active.set(false);
     }
 
     public void appendSteps(JSONArray arr) {
         if (arr == null || !active.get()) return;
         for (int i = 0; i < arr.length(); i++) {
-            String clean = sanitizeStep(arr.optString(i, ""));
-            if (!clean.isEmpty() && !stepQueue.contains(clean)) stepQueue.add(clean);
+            addSingleStep(arr.optString(i, ""));
+        }
+    }
+
+    public void addSingleStep(String raw) {
+        String clean = sanitizeStep(raw);
+        if (!clean.isEmpty() && !stepQueue.contains(clean)) {
+            stepQueue.add(clean);
         }
     }
 
     private void launchAsyncNarration(AiRecommender ai, AuraDb db, String profileId, String userQuery) {
-        Thread worker = new Thread(() -> runNarrationLoop(ai, db, profileId, userQuery), "aura-orb-narrator");
+        Thread fetcher = new Thread(() -> fetchLlmStatusSteps(ai, db, profileId, userQuery), "aura-orb-llm");
+        fetcher.setDaemon(true);
+        fetcher.start();
+        Thread worker = new Thread(this::runNarrationLoop, "aura-orb-narrator");
         worker.setDaemon(true);
         worker.start();
     }
 
-    private void runNarrationLoop(AiRecommender ai, AuraDb db, String profileId, String userQuery) {
-        fetchLlmStatusSteps(ai, db, profileId, userQuery);
+    private void runNarrationLoop() {
         int idx = 0;
-        while (active.get() && idx < stepQueue.size()) {
-            emitStepIfActive(stepQueue.get(idx++));
-            sleepQuietly(2400L);
+        while (active.get()) {
+            if (idx < stepQueue.size()) {
+                emitStepIfActive(stepQueue.get(idx++));
+                sleepQuietly(950L);
+            } else {
+                sleepQuietly(200L);
+            }
         }
     }
 
     private void fetchLlmStatusSteps(AiRecommender ai, AuraDb db, String profileId, String userQuery) {
         try {
-            String prompt = buildNarrationPrompt(db, profileId, userQuery);
-            String raw = ai.callGeminiJson(prompt);
-            if (raw != null && !raw.isEmpty()) appendSteps(new JSONArray(raw));
+            if (ai == null || db == null) return;
+            if (userQuery == null || !userQuery.startsWith("Similar to ")) sleepQuietly(1200L);
+            if (!stepQueue.isEmpty() || !active.get()) return;
+            String raw = ai.callGeminiJson(buildNarrationPrompt(db, profileId, userQuery));
+            if (raw != null && !raw.isEmpty()) appendSteps(parseStepsJson(raw.trim()));
         } catch (Exception ignored) {}
+    }
+
+    private JSONArray parseStepsJson(String trimmed) throws Exception {
+        if (trimmed.startsWith("[")) return new JSONArray(trimmed);
+        JSONObject obj = new JSONObject(trimmed);
+        JSONArray names = obj.names();
+        if (names == null) return null;
+        for (int i = 0; i < names.length(); i++) {
+            JSONArray arr = obj.optJSONArray(names.getString(i));
+            if (arr != null && arr.length() > 0) return arr;
+        }
+        return null;
     }
 
     private String buildNarrationPrompt(AuraDb db, String profileId, String userQuery) {
         List<String> anchors = db.getDynamicTasteAnchors(profileId);
         List<String> recent = anchors.subList(0, Math.min(3, anchors.size()));
         String q = userQuery == null ? "" : userQuery.trim();
-        String taskDesc = q.isEmpty() ? "refreshing recommendations from " + recent : "searching for \"" + q + "\"";
-        return "You are a concise TV status label generator.\nTask: " + taskDesc + ".\n" +
-            "Generate 3 ultra-short status phrases (3 to 5 words MAX each, ending with '\u2026', e.g. 'Finding feel-good movies\u2026', 'Checking your streaming apps\u2026', 'Picking top matches\u2026').\n" +
-            "NEVER use technical words (AI, LLM, GraphQL, graph, JustWatch, vector, algorithm, metadata). Return ONLY a JSON array of 3 strings.";
+        String taskDesc = q.isEmpty() ? "refreshing recommendations from " + recent : "understanding intent for \"" + q + "\"";
+        return "You are narrating what the search engine is doing right now.\nTask: " + taskDesc + ".\n" +
+            "Decode any actor, show, or plot clue in the query and generate 4 specific status phrases (3 to 5 words MAX each, e.g. 'Matching Brooklyn cast clue', 'Found About Time movie', 'Checking streaming apps', 'Ranking top time-travel films').\n" +
+            "Return ONLY a JSON object: {\"steps\": [\"...\", \"...\", \"...\", \"...\"]}.";
     }
 
     private void emitStepIfActive(String msg) {

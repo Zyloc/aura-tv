@@ -35,10 +35,10 @@ public final class SlateAllocator {
         Set<String> usedKeys = new HashSet<>();
         Map<String, Integer> seedCounts = new HashMap<>();
         fillFromPool(filterByFreshness(pool, currentEpoch, impressions, true), selected, usedKeys, seedCounts);
+        selected.sort((a, b) -> Double.compare(b.optDouble("slate_score", 0.0), a.optDouble("slate_score", 0.0)));
         if (selected.size() < TARGET_SLATE_SIZE) {
             fillFromPool(filterByFreshness(pool, currentEpoch, impressions, false), selected, usedKeys, seedCounts);
         }
-        selected.sort((a, b) -> Double.compare(b.optDouble("slate_score", 0.0), a.optDouble("slate_score", 0.0)));
         return selected;
     }
 

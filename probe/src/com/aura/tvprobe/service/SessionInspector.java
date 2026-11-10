@@ -45,7 +45,7 @@ public class SessionInspector {
     }
 
     public void recordActivePlaybackOnly() {
-        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String profile = db.getValidActiveProfile();
         JSONObject raw = new JSONObject();
         try { raw.put("sessions", getMediaSessions()); } catch (Exception ignored) {}
         resolveNowPlaying(raw, profile);
@@ -70,7 +70,7 @@ public class SessionInspector {
     }
 
     public JSONObject buildFastCachedState() {
-        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String profile = db.getValidActiveProfile();
         JSONArray history = db.listHistory(profile);
         JSONArray recos = getCachedOrSeedRecos(profile);
         JSONObject nowPlaying = history.length() > 0 ? history.optJSONObject(0) : new JSONObject();
@@ -124,7 +124,7 @@ public class SessionInspector {
     }
 
     public JSONObject syncAndBuildState(boolean forceAiRefresh) {
-        String profile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        String profile = db.getValidActiveProfile();
         if (forceAiRefresh) lastProviderSyncMs = 0L;
         JSONObject nowPlaying = syncProvidersAndNowPlaying(profile);
         JSONArray history = db.listHistory(profile);

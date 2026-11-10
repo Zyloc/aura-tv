@@ -452,7 +452,7 @@ public class AuraActivity extends Activity implements
         sync = new SyncManager(db);
         voice = new VoiceConcierge(db, ai, sync);
         inspector = new SessionInspector(this, new ComponentName(this, MediaProbeService.class), db, ai);
-        activeProfile = db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE);
+        activeProfile = db.getValidActiveProfile();
         startMediaProbeServiceSafe();
     }
 
@@ -1071,9 +1071,13 @@ public class AuraActivity extends Activity implements
     }
 
     private void executeSimilarTraversal(String seed, long startMs) {
-        JSONArray sim = ai.traverseSimilarToWatched(activeProfile, seed,
+        int epoch = ImpressionTracker.advanceEpoch(db, activeProfile);
+        JSONArray rawSim = ai.traverseSimilarToWatched(activeProfile, seed,
             msg -> ui.post(() -> setBannerText(msg, true)));
-        enforceMinLoadingDuration(startMs, 1750L);
+        JSONArray sim = ImpressionTracker.filterOutRecentImpressions(
+            rawSim, epoch, ImpressionTracker.loadActiveImpressions(db), 4);
+        ImpressionTracker.recordJsonArrayImpressions(db, epoch, sim);
+        enforceMinLoadingDuration(startMs, 3200L);
         persistSimilarVoiceSession(seed, sim);
         ui.post(() -> presentSimilarResults(sim));
     }
@@ -1317,7 +1321,7 @@ public class AuraActivity extends Activity implements
     private void maybeUpgradeDetailPoster(JSONObject item, String title) {
         String curPoster = item.optString("poster_url", "");
         if (!curPoster.isEmpty() && curPoster.contains("/s718/")) return;
-        String freshPoster = JustWatchGraph.lookupTitleInIndia(title).optString("poster_url", "");
+        String freshPoster = JustWatchGraph.lookupTitle(title).optString("poster_url", "");
         if (freshPoster.isEmpty()) return;
         try { item.put("poster_url", freshPoster); } catch (Exception ignored) {}
         ui.post(() -> {
@@ -1433,10 +1437,22 @@ public class AuraActivity extends Activity implements
         String clean = (msg != null && msg.startsWith("\u2726")) ? msg.substring(1).trim() : msg;
         ui.postDelayed(hideLoaderSafetyTask, 25000);
         if (globalLoaderText != null && clean != null && !clean.isEmpty()) {
-            globalLoaderText.setText(clean);
+            updateGlobalLoaderTextSmooth(clean);
         }
         if (mainScroll != null) mainScroll.animate().alpha(0.08f).setDuration(180).start();
         fadeInGlobalLoadingOverlay();
+    }
+
+    private void updateGlobalLoaderTextSmooth(String clean) {
+        CharSequence cur = globalLoaderText.getText();
+        if (loadingOverlay.getVisibility() != View.VISIBLE || cur == null || cur.toString().equals(clean)) {
+            globalLoaderText.setText(clean);
+            return;
+        }
+        globalLoaderText.animate().alpha(0.2f).setDuration(130).withEndAction(() -> {
+            globalLoaderText.setText(clean);
+            globalLoaderText.animate().alpha(1f).setDuration(170).start();
+        }).start();
     }
 
     private void fadeInGlobalLoadingOverlay() {

@@ -29,16 +29,23 @@ public class VoiceConcierge {
     public synchronized JSONObject handleTurn(
         String profileId, String userText, boolean reset, AiRecommender.AgentProgressListener progress
     ) {
-        if (reset) return resetSession(profileId);
+        String prof = resolveValidProfile(profileId);
+        if (reset) return resetSession(prof);
         sync.syncWithHost();
-        List<String> activeFilters = db.getActiveFilters(profileId);
+        List<String> activeFilters = db.getActiveFilters(prof);
         String effectiveQuery = resolveEffectiveQuery(userText, activeFilters);
-        JSONObject localRes = runAgenticSearchTurn(profileId, effectiveQuery, activeFilters, progress);
-        if (hasResults(localRes)) {
-            new Thread(sync::syncWithHost).start();
-            return localRes;
-        }
-        return fallbackToRemoteHost(profileId, effectiveQuery, localRes);
+        JSONObject localRes = runAgenticSearchTurn(prof, effectiveQuery, activeFilters, progress);
+        return hasResults(localRes) ? syncAndReturn(localRes) : fallbackToRemoteHost(prof, effectiveQuery, localRes);
+    }
+
+    private String resolveValidProfile(String profileId) {
+        if (profileId != null && !profileId.isEmpty() && db.getProfileLabelsJson().has(profileId)) return profileId;
+        return db.getValidActiveProfile();
+    }
+
+    private JSONObject syncAndReturn(JSONObject res) {
+        new Thread(sync::syncWithHost).start();
+        return res;
     }
 
     private JSONObject resetSession(String profileId) {
@@ -82,8 +89,8 @@ public class VoiceConcierge {
 
     private HttpURLConnection openChatPostConnection(String urlStr, String body) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-        conn.setConnectTimeout(2500);
-        conn.setReadTimeout(12000);
+        conn.setConnectTimeout(3500);
+        conn.setReadTimeout(60000);
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
@@ -114,23 +121,26 @@ public class VoiceConcierge {
     }
 
     private JSONObject executeAgenticTurnBody(String profileId, String userText, List<String> activeFilters) {
+        int epoch = ImpressionTracker.advanceEpoch(db, profileId);
         JSONArray turns = isFollowUpRefinement(userText) ? getOrInitTurns(profileId) : new JSONArray();
         int currentYear = JustWatchGraph.getCurrentYear();
         String contextualQuery = buildContextualQuery(turns, userText);
         int minModernYear = resolveSearchMinYear(contextualQuery, currentYear, JustWatchGraph.getDefaultMinModernYear());
         List<String> cfPool = runRetrievalSteps(profileId, contextualQuery, minModernYear);
-        String prompt = buildPrompt(profileId, turns, userText, activeFilters, collectWatchedNames(profileId), cfPool, minModernYear, currentYear);
-        String rawJson = ai.callGeminiJson(prompt);
-        persistTurnResult(profileId, turns, userText, contextualQuery, activeFilters, rawJson, minModernYear, currentYear);
+        AgentStatusNarrator.publishLiveStep("Ranking top matches for " + db.getProfileLabel(profileId));
+        String prompt = buildPrompt(profileId, turns, userText, activeFilters, collectWatchedNames(profileId), cfPool, minModernYear, currentYear, epoch);
+        persistTurnResult(profileId, turns, userText, contextualQuery, activeFilters, cfPool, ai.callGeminiJson(prompt), minModernYear, currentYear, epoch);
         return db.getVoiceSession(profileId);
     }
 
     public static boolean isFollowUpRefinement(String userText) {
-        if (userText == null || !AiRecommender.extractSimilaritySeed(userText).isEmpty()) return false;
+        if (userText == null || userText.trim().split("\\s+").length > 6) return false;
+        if (!AiRecommender.extractSimilaritySeed(userText).isEmpty()) return false;
         String low = userText.trim().toLowerCase();
         return low.contains("only on") || low.contains("under 2") || low.contains("shorter")
             || low.contains("darker") || low.contains("grittier") || low.contains("more like")
-            || low.contains("top releases") || low.contains("high-pace") || low.startsWith("on ");
+            || low.contains("top releases") || low.contains("high-pace") || low.startsWith("on ")
+            || low.contains("next") || low.contains("more") || low.contains("else") || low.contains("another");
     }
 
     private JSONArray getOrInitTurns(String profileId) {
@@ -148,26 +158,31 @@ public class VoiceConcierge {
 
     private void persistTurnResult(
         String profileId, JSONArray turns, String userText, String contextualQuery,
-        List<String> activeFilters, String rawJson, int minModernYear, int currentYear
+        List<String> activeFilters, List<String> cfPool, String rawJson, int minModernYear, int currentYear, int epoch
     ) {
         try {
             turns.put(new JSONObject().put("role", "user").put("text", userText));
-            JSONObject synth = synthesizeTurnOutput(profileId, userText, contextualQuery, activeFilters, rawJson, minModernYear, currentYear);
+            JSONObject synth = synthesizeTurnOutput(profileId, userText, contextualQuery, activeFilters, cfPool, rawJson, minModernYear, currentYear, epoch);
             turns.put(new JSONObject().put("role", "assistant").put("text", synth.optString("reply")));
-            synth.put("turns", trimTurns(turns, 8));
-            db.saveTraversalChips(profileId, synth.optJSONArray("follow_ups"));
-            db.saveVoiceSession(profileId, synth);
+            finalizeAndSaveTurnSession(profileId, epoch, turns, synth);
         } catch (Exception ignored) {}
+    }
+
+    private void finalizeAndSaveTurnSession(String profileId, int epoch, JSONArray turns, JSONObject synth) throws Exception {
+        synth.put("turns", trimTurns(turns, 8));
+        ImpressionTracker.recordJsonArrayImpressions(db, epoch, synth.optJSONArray("results"));
+        db.saveTraversalChips(profileId, synth.optJSONArray("follow_ups"));
+        db.saveVoiceSession(profileId, synth);
     }
 
     private JSONObject synthesizeTurnOutput(
         String profileId, String userText, String contextualQuery, List<String> activeFilters,
-        String rawJson, int minModernYear, int currentYear
+        List<String> cfPool, String rawJson, int minModernYear, int currentYear, int epoch
     ) throws Exception {
-        JSONObject out = parseGeminiTurnOrDefault(rawJson, userText, activeFilters, minModernYear, currentYear);
+        JSONObject out = parseGeminiTurnOrDefault(rawJson, userText, activeFilters, minModernYear, currentYear, epoch);
         JSONArray finalResults = out.getJSONArray("results");
-        if (finalResults.length() == 0) {
-            backfillWithDeterministicSearch(profileId, userText, contextualQuery, activeFilters, minModernYear, finalResults);
+        if (finalResults.length() < 2) {
+            backfillWithDeterministicSearch(profileId, userText, contextualQuery, activeFilters, cfPool, minModernYear, epoch, finalResults);
             if (rawJson == null) {
                 out.put("reply", "Ranked top matches for \"" + userText + "\" by taste similarity & Bayesian IMDb.");
             }
@@ -176,30 +191,30 @@ public class VoiceConcierge {
     }
 
     private JSONObject parseGeminiTurnOrDefault(
-        String rawJson, String userText, List<String> activeFilters, int minModernYear, int currentYear
+        String rawJson, String userText, List<String> activeFilters, int minModernYear, int currentYear, int epoch
     ) throws Exception {
         JSONObject out = new JSONObject();
         out.put("reply", "Curated top matches across your streaming apps.");
         out.put("results", new JSONArray());
         out.put("follow_ups", defaultFollowUps(currentYear));
         if (rawJson != null) {
-            applyParsedGeminiTurn(new JSONObject(rawJson), userText, activeFilters, minModernYear, currentYear, out);
+            applyParsedGeminiTurn(new JSONObject(rawJson), userText, activeFilters, minModernYear, currentYear, epoch, out);
         }
         return out;
     }
 
     private void applyParsedGeminiTurn(
         JSONObject parsed, String userText, List<String> activeFilters,
-        int minModernYear, int currentYear, JSONObject out
+        int minModernYear, int currentYear, int epoch, JSONObject out
     ) throws Exception {
         out.put("reply", parsed.optString("reply", "Updated picks for your search."));
         int minSearchYear = resolveSearchMinYear(userText, currentYear, minModernYear >= currentYear - 1 ? minModernYear : 1950);
         JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minSearchYear, currentYear);
-        out.put("results", applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters));
+        JSONArray constrained = applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters);
+        boolean enforceStrictCooldown = isFollowUpRefinement(userText) || AiRecommender.isGenericNextOrTasteQuery(userText);
+        out.put("results", enforceStrictCooldown ? ImpressionTracker.filterOutRecentImpressions(constrained, epoch, ImpressionTracker.loadActiveImpressions(db), 3) : constrained);
         JSONArray parsedFollowUps = parsed.optJSONArray("follow_ups");
-        if (parsedFollowUps != null && parsedFollowUps.length() > 0) {
-            out.put("follow_ups", parsedFollowUps);
-        }
+        if (parsedFollowUps != null && parsedFollowUps.length() > 0) out.put("follow_ups", parsedFollowUps);
     }
 
     public static int resolveSearchMinYear(String query, int currentYear, int defaultYear) {
@@ -214,13 +229,27 @@ public class VoiceConcierge {
     }
 
     private void backfillWithDeterministicSearch(
-        String profileId, String userText, String contextualQuery,
-        List<String> activeFilters, int minModernYear, JSONArray finalResults
+        String profileId, String userText, String contextualQuery, List<String> activeFilters,
+        List<String> cfPool, int minModernYear, int epoch, JSONArray finalResults
     ) {
-        JSONArray sotaFallback = buildDeterministicSotaSearch(profileId, userText, contextualQuery, minModernYear);
+        JSONArray poolCards = enrichCfPoolCandidates(cfPool);
+        JSONArray sotaFallback = poolCards.length() >= 3 ? poolCards : buildDeterministicSotaSearch(profileId, userText, contextualQuery, minModernYear);
         sotaFallback = applyConversationalConstraints(db.filterOutWatched(sotaFallback), userText, activeFilters);
+        sotaFallback = ImpressionTracker.filterOutRecentImpressions(sotaFallback, epoch, ImpressionTracker.loadActiveImpressions(db), 4);
         java.util.Set<String> seen = collectResultTitleKeys(finalResults);
         appendUniqueFallbackItems(sotaFallback, seen, finalResults, 16);
+    }
+
+    private JSONArray enrichCfPoolCandidates(List<String> cfPool) {
+        JSONArray raw = new JSONArray();
+        if (cfPool == null) return raw;
+        for (int i = 0; i < cfPool.size() && i < 16; i++) {
+            String s = cfPool.get(i);
+            int p = s != null ? s.indexOf(" (") : -1;
+            String title = p > 0 ? s.substring(0, p).trim() : "";
+            if (!title.isEmpty()) try { raw.put(new JSONObject().put("title", title)); } catch (Exception ignored) {}
+        }
+        return ai.enrichAll(raw, 1950, JustWatchGraph.getCurrentYear());
     }
 
     private java.util.Set<String> collectResultTitleKeys(JSONArray results) {
@@ -237,17 +266,32 @@ public class VoiceConcierge {
             JSONObject item = fallback.optJSONObject(i);
             if (item == null) continue;
             String key = AuraDb.normalizeTitleKey(item.optString("title", ""));
-            if (!key.isEmpty() && seen.add(key)) target.put(item);
+            if (!key.isEmpty() && seen.add(key)) {
+                trimLongFallbackReason(item);
+                target.put(item);
+            }
         }
     }
 
+    private void trimLongFallbackReason(JSONObject item) {
+        String r = item.optString("reason", "").trim();
+        if (r.length() <= 170) return;
+        int dot = r.indexOf(". ");
+        String concise = (dot > 30 && dot <= 170) ? r.substring(0, dot + 1) : (r.substring(0, 165) + "...");
+        try { item.put("reason", concise); } catch (Exception ignored) {}
+    }
+
     private JSONArray buildDeterministicSotaSearch(String profileId, String userText, String contextualQuery, int minModernYear) {
+        if (AiRecommender.isGenericNextOrTasteQuery(userText) && (contextualQuery == null || contextualQuery.isEmpty() || AiRecommender.isGenericNextOrTasteQuery(contextualQuery))) {
+            return ai.buildDeterministicRecommendations(profileId, minModernYear, JustWatchGraph.getCurrentYear());
+        }
         String seed = AiRecommender.extractSimilaritySeed(userText);
         if (!seed.isEmpty()) {
             JSONArray sim = ai.traverseSimilarToWatched(profileId, seed, null);
             if (sim != null && sim.length() > 0) return sim;
         }
-        return JustWatchGraph.fetchDeterministicSearchCandidates(userText, 1950);
+        String target = AiRecommender.isGenericNextOrTasteQuery(userText) ? contextualQuery : userText;
+        return JustWatchGraph.fetchDeterministicSearchCandidates(target, 1950);
     }
 
     public static JSONArray applyConversationalConstraints(JSONArray items, String userText, List<String> activeFilters) {
@@ -258,8 +302,19 @@ public class VoiceConcierge {
             JSONObject item = items.optJSONObject(i);
             if (item != null && matchesConversationalItem(item, combined)) filtered.put(item);
         }
-        boolean strictFormat = wantsMoviesOnly(combined) || wantsSeriesOnly(combined);
-        return (filtered.length() >= 3 || (strictFormat && filtered.length() > 0)) ? filtered : items;
+        if (filtered.length() > 0) return filtered;
+        return (wantsMoviesOnly(combined) || wantsSeriesOnly(combined)) ? filterByFormatOnly(items, combined) : items;
+    }
+
+    private static JSONArray filterByFormatOnly(JSONArray items, String combined) {
+        JSONArray out = new JSONArray();
+        boolean allowAnim = combined.contains("anime") || combined.contains("animat") || combined.contains("kids");
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item != null && matchesFormatConstraint(item.optString("type", ""), combined)
+                    && (allowAnim || !item.optString("genres", "").toLowerCase().contains("animation"))) out.put(item);
+        }
+        return out;
     }
 
     public static boolean wantsMoviesOnly(String text) {
@@ -280,12 +335,13 @@ public class VoiceConcierge {
         return true;
     }
 
-    private static boolean matchesConversationalItem(JSONObject item, String combined) {
+    public static boolean matchesConversationalItem(JSONObject item, String combined) {
         if (!matchesFormatConstraint(item.optString("type", ""), combined)) return false;
         if (!matchesPlatformConstraint(item.optString("app", "").toLowerCase(), combined)) return false;
         boolean allowAnim = combined.contains("anime") || combined.contains("animat") || combined.contains("kids");
         if (!allowAnim && item.optString("genres", "").toLowerCase().contains("animation")) return false;
-        boolean underTwoHours = combined.contains("under 2 hours") || combined.contains("shorter") || combined.contains("< 120");
+        if (combined.contains("under 90") || combined.contains("< 90")) return item.optInt("runtime_min", 100) <= 98;
+        boolean underTwoHours = combined.contains("under 2") || combined.contains("shorter") || combined.contains("< 120");
         return !underTwoHours || item.optInt("runtime_min", 100) <= 125;
     }
 
@@ -299,14 +355,16 @@ public class VoiceConcierge {
 
     private String buildContextualQuery(JSONArray turns, String currentQuery) {
         List<String> userQueries = extractUserTurnTexts(turns);
-        if (userQueries.isEmpty()) return currentQuery;
+        if (userQueries.isEmpty()) {
+            return AiRecommender.isGenericNextOrTasteQuery(currentQuery) ? "" : currentQuery;
+        }
         String firstTopic = userQueries.get(0);
+        if (AiRecommender.isGenericNextOrTasteQuery(currentQuery)) return firstTopic;
         String lastTopic = userQueries.get(userQueries.size() - 1);
         if (firstTopic.equalsIgnoreCase(currentQuery)) return currentQuery;
-        if (!firstTopic.equalsIgnoreCase(lastTopic)) {
-            return firstTopic + " -> " + lastTopic + " -> Follow-up: " + currentQuery;
-        }
-        return firstTopic + " -> Follow-up: " + currentQuery;
+        return !firstTopic.equalsIgnoreCase(lastTopic)
+            ? (firstTopic + " -> " + lastTopic + " -> Follow-up: " + currentQuery)
+            : (firstTopic + " -> Follow-up: " + currentQuery);
     }
 
     private List<String> extractUserTurnTexts(JSONArray turns) {
@@ -316,7 +374,7 @@ public class VoiceConcierge {
             JSONObject t = turns.optJSONObject(i);
             if (t != null && "user".equalsIgnoreCase(t.optString("role"))) {
                 String txt = t.optString("text", "").trim();
-                if (!txt.isEmpty()) userQueries.add(txt);
+                if (!txt.isEmpty() && !AiRecommender.isGenericNextOrTasteQuery(txt)) userQueries.add(txt);
             }
         }
         return userQueries;
@@ -324,27 +382,29 @@ public class VoiceConcierge {
 
     private String buildPrompt(
         String profileId, JSONArray turns, String userText, List<String> filters,
-        List<String> watched, List<String> cfPool, int minModernYear, int currentYear
+        List<String> watched, List<String> cfPool, int minModernYear, int currentYear, int epoch
     ) {
         String todayDate = JustWatchGraph.getCurrentDateString();
-        String header = buildPromptContextHeader(profileId, turns, userText, filters, watched, cfPool, minModernYear, currentYear, todayDate);
+        String header = buildPromptContextHeader(profileId, turns, userText, filters, watched, cfPool, minModernYear, currentYear, todayDate, epoch);
         return header + buildPromptRulesSection(minModernYear, currentYear, todayDate);
     }
 
     private String buildPromptContextHeader(
         String profileId, JSONArray turns, String userText, List<String> filters,
-        List<String> watched, List<String> cfPool, int minModernYear, int currentYear, String todayDate
+        List<String> watched, List<String> cfPool, int minModernYear, int currentYear, String todayDate, int epoch
     ) {
         String personalGuide = db.getProfileTaste(profileId);
-        return "You are Aura's Agentic Search & Recommendation Engine for profile '" + db.getProfileLabel(profileId) + "'.\n" +
+        String ratings = db.getRatingFeedbackSummary();
+        return "You are Aura's Agentic Search & Recommendation Engine for profile '" + db.getProfileLabel(profileId) + "' (Round #" + epoch + ").\n" +
             "Current TV System Date: " + todayDate + " (any title released up to " + todayDate + " in " + currentYear + " is valid; " + (currentYear + 1) + "+ are unreleased).\n" +
-            "Personal Guide AI (for this profile): " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
-            "Default Guide AI (global baseline): " + db.getDefaultTasteGuide() + "\n" +
+            "Personal Guide AI & Profile Interests: " + (personalGuide.isEmpty() ? db.getDefaultTasteGuide() : personalGuide) + "\n" +
+            "User Ratings Feedback (What User Likes & Dislikes): " + (ratings.isEmpty() ? "(None)" : ratings) + "\n" +
+            "User's Active & Rotating Taste Anchors: " + db.getRotatingTasteAnchors(profileId, epoch).toString() + "\n" +
             "STRICT EXCLUSION LIST — Already watched (NEVER recommend any of these): " + watched.toString() + "\n" +
+            "STRICT COOLDOWN LIST — Recently Suggested in Last 8 Rounds (NEVER repeat or recommend any of these): " + ImpressionTracker.getRecentCooldownKeys(db, epoch).toString() + "\n" +
             "Multi-Hop Search & Co-Watch Graph Traversal Candidates (" + minModernYear + "–" + currentYear + "): " + cfPool.toString() + "\n" +
             "Active Persistent Filters (MUST obey): " + (filters.isEmpty() ? "None" : filters.toString()) + "\n" +
-            "Session Flow so far:\n" + formatTurnsHistory(turns) +
-            "User Search / Traversal Query: \"" + userText + "\"\n\n";
+            "Session Flow so far:\n" + formatTurnsHistory(turns) + "User Search / Traversal Query: \"" + userText + "\"\n\n";
     }
 
     private String formatTurnsHistory(JSONArray turns) {
@@ -358,17 +418,20 @@ public class VoiceConcierge {
 
     private String buildPromptRulesSection(int minModernYear, int currentYear, String todayDate) {
         int recentPriorityStart = Math.max(minModernYear, currentYear - 5);
+        String region = RegionProviderRegistry.getRegionDisplayName(db);
+        String apps = RegionProviderRegistry.getProviderDisplayListForRegion(db);
         return "STRICT STAGE-3 POST-FILTER & RERANKING RULES:\n" +
-            "- SCATTER-GATHER FILTERING: Inspect the 'Multi-Hop Search & Co-Watch Graph Traversal Candidates' above (including each candidate's Type, Genres, Country, and Synopsis). Filter out and discard any candidate that is semantically irrelevant to the User Search Query.\n" +
+            "- MULTI-HOP & COUNTERFACTUAL INTENT VERIFICATION: Decompose all clauses of the User Search Query (premise/seed reference, tone/genre modifiers like 'like X but romantic comedy', cross-show actor/cast references, plot clues, runtime limits, and negative exclusions like 'no space travel'). Select and rank candidates that satisfy the intersection of all clauses first, and explain how each title satisfies those clauses in 'reason'.\n" +
+            "- PRECISION OVER PADDING: Return 3 to 8 unwatched titles that strictly satisfy the core premise, genre, and cast clauses. If only 3 or 4 candidates in the pool truly match the plot/subgenre premise, return ONLY those 3 or 4 rather than padding with an actor's unrelated movies (e.g. never include a military war drama or bar-brawler on a mind-bending time-loop query).\n" +
+            "- GLOBAL & REGIONAL DIVERSITY: Unless the User Search Query explicitly requests a specific country/language, include globally acclaimed international/Hollywood classics alongside regional titles.\n" +
+            "- PROFILE PERSONALIZATION & 8-ROUND RECYCLING: Dynamically tailor candidate selection and ranking to the user's Personal Guide AI, User Ratings Feedback, and Rotating Taste Anchors. NEVER return any title in 'Already watched'.\n" +
             "- MULTI-TURN CONVERSATION: If 'Session Flow so far' has previous user turns, treat the current query as a FOLLOW-UP REFINEMENT on that conversation.\n" +
-            "- SIMILARITY & FRANCHISE QUERIES: If the user asks for titles 'like X' or 'similar to X', EVERY SINGLE RESULT must match the subgenre, tone, scale, and storyline of X. NEVER include unrelated crime dramas or thrillers.\n" +
-            "- ACTOR / DIRECTOR QUERIES: If the user searches for a specific actor or director (even with a genre modifier like 'Jason Statham comedy movies'), ONLY select candidates whose 'Cast=' includes that exact person (rank their exact-genre films first, followed by their most lighthearted/entertaining action-comedy or heist films from the pool; NEVER include any title without that person).\n" +
             "- FORMAT CONSTRAINT: If the user asks for 'movies' or 'films', ONLY return feature films (Type='Movie', NEVER TV series). If they ask for 'shows' or 'series', ONLY return TV series.\n" +
-            "- NEW / LATEST RELEASES: If the user asks for 'new', 'latest', or 'recent' releases, ONLY select " + minModernYear + "\u2013" + currentYear + " titles, rank " + currentYear + " releases first followed by " + minModernYear + ", and include a diverse mix of genres (Sci-Fi, Thriller, Comedy, Action, Drama) rather than a single genre.\n" +
-            "- RECENCY WINDOW: Prioritize " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for franchise/similarity queries include iconic 2008\u2013" + currentYear + " peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
+            "- NEW / LATEST RELEASES: If the user asks for 'new', 'latest', or 'recent' releases, ONLY select " + minModernYear + "\u2013" + currentYear + " titles, rank " + currentYear + " releases first followed by " + minModernYear + ", and include a diverse mix of genres.\n" +
+            "- RECENCY WINDOW: Prioritize " + recentPriorityStart + "\u2013" + currentYear + " releases (up to " + todayDate + "), and for franchise/similarity/classic queries include iconic peers from the candidate pool. NEVER recommend unreleased " + (currentYear + 1) + "+ titles.\n" +
             "Return a JSON object with:\n" +
-            "1. 'reply': Short 1-sentence conversational summary explaining how you filtered and ranked the results.\n" +
-            "2. 'results': Array of 8 to 14 unwatched titles streaming in India ('Disney+ Hotstar', 'Netflix', 'Prime Video', 'Apple TV+', 'SonyLIV', or 'ZEE5') that strictly match the query's sub-genre, tone, and format (NEVER pad the list with unrelated genres), each with keys: 'title', 'app', 'genres', 'runtime_min' (integer), 'rating' (IMDb rating like '★ 8.3'), and 'reason' (18-26 words explaining why its plot & genre fit their query).\n" +
+            "1. 'reply': Short 1-sentence conversational summary explaining how you filtered and ranked the results for their profile.\n" +
+            "2. 'results': Array of 5 to 10 unwatched titles from the candidates above (streaming in " + region + " on " + apps + ") that strictly match the query's sub-genre, tone, and format (NEVER pad with unrelated genres), each with keys: 'title' (exact title) and 'reason' (16-24 words explaining how its plot, cast, and genre satisfy their query clauses and profile taste).\n" +
             "3. 'follow_ups': Array of 4 short conversational follow-up refinements (max 26 chars each, e.g. 'Only on Netflix & Prime', 'Shorter under 2 hours', 'Darker & grittier tone', 'More like <Top Result>').";
     }
 

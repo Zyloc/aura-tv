@@ -3,7 +3,9 @@ package com.aura.tvprobe;
 import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +18,7 @@ import java.util.Map;
 public final class ImpressionTracker {
 
     private static final long IMPRESSION_TTL_SEC = 72L * 3600L; // 72-hour (3-day) recycle TTL
-    private static final int COOLDOWN_EPOCHS = 3; // Must differ from last 3 batches
+    public static final int COOLDOWN_EPOCHS = 8; // Recycle every 8 rounds (5-10 round window), then delete
 
     public static final class ImpressionRecord {
         public final int lastEpoch;
@@ -42,7 +44,7 @@ public final class ImpressionTracker {
         String key = "feed_epoch_" + profileId;
         int cur = parseIntSafe(db.getSetting(key, "0")) + 1;
         db.setSetting(key, String.valueOf(cur));
-        pruneExpiredImpressions(db);
+        pruneExpiredImpressions(db, cur);
         return cur;
     }
 
@@ -58,12 +60,22 @@ public final class ImpressionTracker {
         }
     }
 
+    public static boolean shouldDeleteImpression(int lastEpoch, int currentEpoch) {
+        return (currentEpoch - lastEpoch) >= COOLDOWN_EPOCHS;
+    }
+
     public static void pruneExpiredImpressions(AuraDb auraDb) {
+        pruneExpiredImpressions(auraDb, getCurrentEpoch(auraDb, auraDb.getValidActiveProfile()));
+    }
+
+    public static void pruneExpiredImpressions(AuraDb auraDb, int currentEpoch) {
         try {
             long cutoff = (System.currentTimeMillis() / 1000L) - IMPRESSION_TTL_SEC;
+            int minEpochToKeep = currentEpoch - COOLDOWN_EPOCHS;
             SQLiteDatabase db = auraDb.getWritableDatabase();
             ensureTable(db);
-            db.delete("reco_impressions", "last_shown_at < ?", new String[]{String.valueOf(cutoff)});
+            db.delete("reco_impressions", "last_shown_at < ? OR last_epoch <= ?",
+                new String[]{String.valueOf(cutoff), String.valueOf(minEpochToKeep)});
         } catch (Exception ignored) {}
     }
 
@@ -90,7 +102,7 @@ public final class ImpressionTracker {
         if (history == null || !history.containsKey(titleKey)) return 0.0;
         ImpressionRecord rec = history.get(titleKey);
         int epochDelta = Math.max(0, currentEpoch - rec.lastEpoch);
-        if (epochDelta < COOLDOWN_EPOCHS) return -4.5 + (epochDelta * 1.1);
+        if (epochDelta < COOLDOWN_EPOCHS) return -4.5 + (epochDelta * 0.45);
         return -Math.min(2.0, rec.shownCount * 0.45);
     }
 
@@ -102,11 +114,33 @@ public final class ImpressionTracker {
 
     public static List<String> getRecentCooldownKeys(AuraDb auraDb, int currentEpoch) {
         Map<String, ImpressionRecord> active = loadActiveImpressions(auraDb);
-        List<String> keys = new java.util.ArrayList<>();
+        List<String> keys = new ArrayList<>();
         for (String k : active.keySet()) {
             if (isRecentlyShown(k, currentEpoch, active) && keys.size() < 60) keys.add(k);
         }
         return keys;
+    }
+
+    public static JSONArray filterOutRecentImpressions(
+            JSONArray items, int currentEpoch, Map<String, ImpressionRecord> history, int minKeep) {
+        if (items == null || items.length() == 0) return new JSONArray();
+        JSONArray fresh = new JSONArray();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            String key = item != null ? AuraDb.normalizeTitleKey(item.optString("title", "")) : "";
+            if (item != null && !isRecentlyShown(key, currentEpoch, history)) fresh.put(item);
+        }
+        return fresh.length() >= minKeep ? fresh : items;
+    }
+
+    public static void recordJsonArrayImpressions(AuraDb auraDb, int epoch, JSONArray arr) {
+        if (arr == null || arr.length() == 0) return;
+        List<JSONObject> list = new ArrayList<>();
+        for (int i = 0; i < arr.length() && i < 16; i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null) list.add(o);
+        }
+        recordSlateImpressions(auraDb, epoch, list);
     }
 
     public static void recordSlateImpressions(AuraDb auraDb, int epoch, List<JSONObject> slate) {

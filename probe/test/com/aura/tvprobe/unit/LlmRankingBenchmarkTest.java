@@ -42,8 +42,9 @@ public class LlmRankingBenchmarkTest {
         assertTrue("AuraActivity must define 1-hour HOURLY_REFRESH_MS = 3_600_000L", actSrc.contains("HOURLY_REFRESH_MS = 3_600_000L"));
         assertTrue("AuraActivity must schedule hourlyRecoRefreshTask", actSrc.contains("scheduleHourlyRecoRefresh()"));
         assertTrue("MediaProbeService must force refresh when 1h cache expires", svcSrc.contains("inspector.syncAndBuildState(true)"));
-        assertTrue("AiRecommender must use gemini-flash-lite-latest and gemini-flash-latest",
-            aiSrc.contains("\"gemini-flash-lite-latest\"") && aiSrc.contains("\"gemini-flash-latest\""));
+        assertTrue("AiRecommender must use ONLY gemini-flash-lite-latest and gemini-flash-latest without hardcoded versions",
+            aiSrc.contains("\"gemini-flash-lite-latest\"") && aiSrc.contains("\"gemini-flash-latest\"")
+                && !aiSrc.contains("gemini-2.") && !aiSrc.contains("gemini-3."));
     }
 
     private static UserTasteProfile buildBenchmarkProfile() {

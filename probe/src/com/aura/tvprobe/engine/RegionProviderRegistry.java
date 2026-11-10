@@ -63,7 +63,8 @@ public final class RegionProviderRegistry {
     }
 
     public static String getCountryCode(AuraDb db) {
-        String configured = db != null ? db.getSetting("region_country", "").trim().toUpperCase(Locale.US) : "";
+        AuraDb activeDb = db != null ? db : AuraDb.peekInstance();
+        String configured = activeDb != null ? activeDb.getSetting("region_country", "").trim().toUpperCase(Locale.US) : "";
         if (configured.length() == 2) return configured;
         String tzCountry = inferCountryFromTimezone(java.util.TimeZone.getDefault().getID());
         if (!tzCountry.isEmpty()) return tzCountry;
@@ -73,19 +74,61 @@ public final class RegionProviderRegistry {
 
     private static String inferCountryFromTimezone(String tzId) {
         if (tzId == null) return "";
+        String asia = inferAsiaOceaniaFromTz(tzId);
+        if (!asia.isEmpty()) return asia;
+        String euro = inferEuropeFromTz(tzId);
+        return !euro.isEmpty() ? euro : inferAmericasFromTz(tzId);
+    }
+
+    private static String inferAsiaOceaniaFromTz(String tzId) {
         if (tzId.contains("Kolkata") || tzId.contains("Calcutta")) return "IN";
         if (tzId.contains("Tokyo")) return "JP";
         if (tzId.contains("Seoul")) return "KR";
+        if (tzId.contains("Singapore")) return "SG";
+        if (tzId.contains("Dubai")) return "AE";
+        if (tzId.contains("Sydney") || tzId.contains("Melbourne")) return "AU";
+        return tzId.contains("Auckland") ? "NZ" : "";
+    }
+
+    private static String inferEuropeFromTz(String tzId) {
         if (tzId.contains("London")) return "GB";
         if (tzId.contains("Berlin")) return "DE";
         if (tzId.contains("Paris")) return "FR";
-        if (tzId.contains("Sydney") || tzId.contains("Melbourne")) return "AU";
+        if (tzId.contains("Madrid")) return "ES";
+        if (tzId.contains("Rome")) return "IT";
+        return tzId.contains("Amsterdam") ? "NL" : "";
+    }
+
+    private static String inferAmericasFromTz(String tzId) {
+        if (tzId.contains("New_York") || tzId.contains("Los_Angeles") || tzId.contains("Chicago") || tzId.contains("Denver")) return "US";
+        if (tzId.contains("Toronto") || tzId.contains("Vancouver")) return "CA";
         if (tzId.contains("Sao_Paulo")) return "BR";
-        return "";
+        return tzId.contains("Mexico_City") ? "MX" : "";
+    }
+
+    public static String getRegionDisplayName(AuraDb db) {
+        String code = getCountryCode(db);
+        String name = new Locale("", code).getDisplayCountry(Locale.ENGLISH);
+        return (name != null && !name.isEmpty()) ? name : code;
+    }
+
+    public static String getProviderCodesForRegion(AuraDb db) {
+        return new JSONArray(getProvidersForCountry(getCountryCode(db))).toString();
+    }
+
+    public static String getProviderDisplayListForRegion(AuraDb db) {
+        List<String> codes = getProvidersForCountry(getCountryCode(db));
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < codes.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(normalizeProviderName(codes.get(i), codes.get(i)));
+        }
+        return sb.toString();
     }
 
     public static String getLanguageCode(AuraDb db) {
-        String configured = db != null ? db.getSetting("region_language", "").trim().toLowerCase(Locale.US) : "";
+        AuraDb activeDb = db != null ? db : AuraDb.peekInstance();
+        String configured = activeDb != null ? activeDb.getSetting("region_language", "").trim().toLowerCase(Locale.US) : "";
         if (configured.length() >= 2) return configured.substring(0, 2);
         String sys = Locale.getDefault().getLanguage().toLowerCase(Locale.US);
         return sys.length() >= 2 ? sys.substring(0, 2) : "en";

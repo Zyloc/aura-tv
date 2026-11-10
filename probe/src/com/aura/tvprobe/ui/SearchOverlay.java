@@ -162,12 +162,24 @@ public final class SearchOverlay {
 
     public static void setLoading(FrameLayout overlay, boolean loading, String message) {
         TextView txt = findTagged(overlay, TAG_LOADING_TEXT);
-        if (txt != null && message != null && !message.isEmpty()) txt.setText(message);
+        if (txt != null && message != null && !message.isEmpty()) updateOrbStatusTextSmooth(txt, message);
         animateLoadingPanel(overlay.findViewWithTag(TAG_LOADING_PANEL), loading);
         View gridRows = overlay.findViewWithTag(TAG_RESULTS);
         if (gridRows != null) {
             gridRows.animate().alpha(loading ? 0.08f : 1f).setDuration(180).start();
         }
+    }
+
+    private static void updateOrbStatusTextSmooth(TextView txt, String message) {
+        CharSequence cur = txt.getText();
+        if (cur == null || cur.length() == 0 || cur.toString().equals(message)) {
+            txt.setText(message);
+            return;
+        }
+        txt.animate().alpha(0.2f).setDuration(130).withEndAction(() -> {
+            txt.setText(message);
+            txt.animate().alpha(1f).setDuration(170).start();
+        }).start();
     }
 
     private static void animateLoadingPanel(View panel, boolean loading) {

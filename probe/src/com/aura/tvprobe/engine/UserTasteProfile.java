@@ -27,11 +27,16 @@ public final class UserTasteProfile {
         this(
             db.getRotatingTasteAnchors(profileId, epoch),
             RegionProviderRegistry.getCountryCode(db),
-            db.getSetting("preferred_langs", "English") + " " + db.getProfileTaste(profileId)
-                + ("kids".equalsIgnoreCase(profileId) ? " kids" : ""),
+            buildProfileTasteContext(db, profileId),
             db.getSetting("ranking_mode", "prestige"),
             epoch
         );
+    }
+
+    private static String buildProfileTasteContext(AuraDb db, String profileId) {
+        return db.getSetting("preferred_langs", "English") + " " + db.getProfileTaste(profileId)
+            + " " + db.getActiveFilters(profileId).toString()
+            + ("kids".equalsIgnoreCase(profileId) ? " kids" : "");
     }
 
     public UserTasteProfile(List<String> anchors, String regionCountry,
@@ -39,11 +44,31 @@ public final class UserTasteProfile {
         this.currentEpoch = epoch;
         this.anchors = anchors != null ? new java.util.ArrayList<>(anchors) : new java.util.ArrayList<>();
         this.topAnchor = !this.anchors.isEmpty() ? this.anchors.get(0) : "";
-        this.regionCountry = regionCountry != null ? regionCountry : "IN";
+        this.regionCountry = regionCountry != null && !regionCountry.isEmpty()
+            ? regionCountry
+            : RegionProviderRegistry.getCountryCode(null);
         this.preferredLangs = preferredLangs != null ? preferredLangs.toLowerCase(Locale.US) : "english";
         this.rankMode = rankMode != null ? rankMode : "prestige";
         this.animeEnabled = this.preferredLangs.contains("anime");
         this.kidsMode = this.preferredLangs.contains("kids") || this.preferredLangs.contains("children");
+        applyExplicitInterestKeywords(this.preferredLangs);
+    }
+
+    private static final String[][] INTEREST_KEYWORD_MAP = {
+        {"sci-fi", "scf"}, {"scifi", "scf"}, {"science fiction", "scf"}, {"thriller", "trl"},
+        {"suspense", "trl"}, {"espionage", "trl"}, {"crime", "crm"}, {"mystery", "crm"},
+        {"comedy", "cmy"}, {"action", "act"}, {"drama", "drm"}, {"horror", "hrr"},
+        {"fantasy", "fnt"}, {"romance", "rma"}, {"sport", "spt"}, {"documentary", "doc"},
+        {"history", "hst"}, {"war", "war"}
+    };
+
+    private void applyExplicitInterestKeywords(String text) {
+        if (text == null || text.isEmpty()) return;
+        for (String[] pair : INTEREST_KEYWORD_MAP) {
+            if (text.contains(pair[0])) {
+                genreWeights.put(pair[1], genreWeights.getOrDefault(pair[1], 0.0) + 1.6);
+            }
+        }
     }
 
     public List<String> getAnchors() {

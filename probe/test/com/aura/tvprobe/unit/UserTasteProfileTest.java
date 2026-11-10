@@ -61,4 +61,13 @@ public class UserTasteProfileTest {
         assertTrue("GB providers must include BBC iPlayer", RegionProviderRegistry.getProvidersForCountry("GB").contains("bbc"));
         assertTrue("JP providers must include U-NEXT", RegionProviderRegistry.getProvidersForCountry("JP").contains("unx"));
     }
+
+    @Test
+    public void testProfileInterestsDynamicallyBoostMatchingGenreWeights() {
+        UserTasteProfile profile = new UserTasteProfile(
+            Arrays.asList("Severance"), "IN", "English Sci-Fi Espionage Thriller", "prestige", 1);
+        assertTrue("Profile interests in Sci-Fi & Thriller must boost scf,trl affinity",
+            profile.computeGenreAffinity("scf,trl") > 1.5);
+        assertEquals("Unmentioned genres have 0 weight initially", 0.0, profile.computeGenreAffinity("rma"), 0.001);
+    }
 }
