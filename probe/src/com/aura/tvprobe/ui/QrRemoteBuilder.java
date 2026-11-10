@@ -28,27 +28,57 @@ public final class QrRemoteBuilder {
     }
 
     public static View buildQrCard(Context ctx, String tvIpAddress, int port, String publicUrl) {
-        String domainUrl = "http://mitv.local:" + port;
-        String subText = "http://mitv:" + port + "  \u00B7  http://" + tvIpAddress + ":" + port;
-        return assembleQrCard(ctx, domainUrl, subText);
+        String qrUrl = "http://" + tvIpAddress + ":" + port;
+        String primaryLabel = "http://mitv.local:" + port + "  \u00B7  http://mitv:" + port;
+        String sslipHost = tvIpAddress.replace('.', '-') + ".sslip.io";
+        String subText = qrUrl + "  \u00B7  http://" + sslipHost + ":" + port;
+        return assembleQrCard(ctx, qrUrl, primaryLabel, subText);
     }
 
-    private static View assembleQrCard(Context ctx, String qrTarget, String subText) {
+    private static View assembleQrCard(Context ctx, String qrTarget, String label, String subText) {
         LinearLayout card = createCardContainer(ctx);
         card.addView(createTitle(ctx));
         card.addView(createQrImageView(ctx, qrTarget));
-        card.addView(createUrlLabel(ctx, qrTarget));
+        card.addView(createUrlLabel(ctx, label));
         card.addView(createSubtitleText(ctx, subText));
         card.addView(createInstructions(ctx));
         return card;
     }
 
+    private static final java.util.concurrent.atomic.AtomicBoolean sNudging =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     public static void nudgeLanArpTable(String tvIp) {
-        new Thread(() -> {
-            for (String peerIp : getLiveArpPeers()) {
-                pingSingleHostQuietly(peerIp);
-            }
-        }, "AuraArpNudge").start();
+        if (!sNudging.compareAndSet(false, true)) return;
+        new Thread(() -> runCrossBandArpNudge(tvIp), "AuraArpNudge").start();
+    }
+
+    private static void runCrossBandArpNudge(String tvIp) {
+        try {
+            for (String peerIp : buildCrossBandPeers(tvIp)) pingSingleHostQuietly(peerIp);
+        } finally {
+            sNudging.set(false);
+        }
+    }
+
+    private static java.util.Set<String> buildCrossBandPeers(String tvIp) {
+        java.util.Set<String> peers = new java.util.LinkedHashSet<>(getLiveArpPeers());
+        String prefix = extractSubnetPrefix(tvIp);
+        if (!prefix.isEmpty()) addCommonLanHosts(peers, prefix, tvIp);
+        return peers;
+    }
+
+    private static String extractSubnetPrefix(String ip) {
+        int dot = ip != null ? ip.lastIndexOf('.') : -1;
+        return dot > 0 ? ip.substring(0, dot + 1) : "";
+    }
+
+    private static void addCommonLanHosts(java.util.Set<String> peers, String prefix, String tvIp) {
+        int[] hosts = {1, 2, 3, 5, 6, 7, 8};
+        for (int h : hosts) {
+            String candidate = prefix + h;
+            if (!candidate.equals(tvIp)) peers.add(candidate);
+        }
     }
 
     public static java.util.List<String> getLiveArpPeers() {
@@ -62,7 +92,7 @@ public final class QrRemoteBuilder {
 
     private static void addLiveArpPeerFromLine(String line, java.util.List<String> peers) {
         String[] parts = line.trim().split("\\s+");
-        if (parts.length >= 4 && "0x2".equalsIgnoreCase(parts[2]) && !"00:00:00:00:00:00".equals(parts[3])) {
+        if (parts.length >= 4 && parts[0].contains(".") && !"IP".equalsIgnoreCase(parts[0])) {
             peers.add(parts[0]);
         }
     }
