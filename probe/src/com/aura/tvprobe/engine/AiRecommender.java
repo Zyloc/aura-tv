@@ -141,11 +141,11 @@ public class AiRecommender {
     private void runParallelCandidateRetrieval(
             UserTasteProfile taste, JSONObject seedPlan, int minModernYear, int currentYear,
             Set<String> seenKeys, List<JSONObject> pool) {
-        ExecutorService exec = Executors.newFixedThreadPool(6);
+        ExecutorService exec = Executors.newFixedThreadPool(10);
+        submitAppBroadcastTrendTasks(exec, taste, seenKeys, pool);
         submitDynamicSpecTasks(exec, taste, seedPlan, seenKeys, pool);
         submitCoWatchTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
         submitPlannedQueryTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
-        submitAppBroadcastTrendTasks(exec, taste, seenKeys, pool);
         submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
         exec.shutdown();
         try { exec.awaitTermination(12, TimeUnit.SECONDS); } catch (Exception ignored) {}
@@ -156,8 +156,8 @@ public class AiRecommender {
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray trends = db.getAppBroadcastTrends();
         if (trends.length() == 0) return;
-        int offset = Math.abs(taste.getCurrentEpoch() * 3) % Math.max(1, trends.length());
-        for (int i = 0; i < Math.min(8, trends.length()); i++) {
+        int offset = Math.abs(taste.getCurrentEpoch() * 4) % Math.max(1, trends.length());
+        for (int i = 0; i < Math.min(10, trends.length()); i++) {
             final int rankIdx = i;
             final JSONObject tObj = trends.optJSONObject((offset + i) % trends.length());
             if (tObj != null) exec.submit(() -> retrieveBroadcastTrendCandidate(tObj, rankIdx, taste, seenKeys, pool));
@@ -359,10 +359,11 @@ public class AiRecommender {
     }
 
     private boolean passesQualityAndAnimationGate(JSONObject o, String seedAnchor, UserTasteProfile taste) {
-        boolean hasSeed = seedAnchor != null && !seedAnchor.isEmpty();
-        int minYear = hasSeed ? Math.min(JustWatchGraph.getDefaultMinModernYear(), 2020) : JustWatchGraph.getDefaultMinModernYear();
+        boolean isTrend = "app_trending".equals(o.optString("source_channel"));
+        boolean hasSeed = isTrend || (seedAnchor != null && !seedAnchor.isEmpty());
+        int minYear = isTrend ? 2018 : (hasSeed ? Math.min(JustWatchGraph.getDefaultMinModernYear(), 2020) : JustWatchGraph.getDefaultMinModernYear());
         boolean valid = hasSeed
-            ? CandidateValidator.isValidCoWatchCandidate(o, minYear, 7.1)
+            ? CandidateValidator.isValidCoWatchCandidate(o, minYear, isTrend ? 7.0 : 7.1)
             : CandidateValidator.isValidCatalogCandidate(o, minYear, 7.1);
         return valid && !CandidateValidator.isUnwantedAnimation(o.optString("genre_codes", ""), taste.isAnimeEnabled());
     }
@@ -718,9 +719,16 @@ public class AiRecommender {
             JSONObject o = pool.get(i);
             String syn = o.optString("synopsis", "");
             if (syn.length() > 120) syn = syn.substring(0, 120) + "...";
-            list.add(o.optString("title") + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("country") + ", " + o.optString("rating") + ", " + o.optString("app") + ", Anchor=" + o.optString("seed_anchor", "discovery") + ") — " + syn);
+            String anchorTag = resolveCandidateAnchorTag(o);
+            list.add(o.optString("title") + " (" + o.optInt("year") + ", " + o.optString("type") + ", " + o.optString("genres") + ", " + o.optString("country") + ", " + o.optString("rating") + ", " + o.optString("app") + ", Anchor=" + anchorTag + ") — " + syn);
         }
         return list;
+    }
+
+    private String resolveCandidateAnchorTag(JSONObject o) {
+        String bcast = o.optString("broadcast_badge", "");
+        if (!bcast.isEmpty()) return "LIVE_TV_TRENDING(" + bcast + ")";
+        return o.optString("seed_anchor", "discovery");
     }
 
     private List<JSONObject> applyLlmFilteredSlate(List<JSONObject> pool, String rawJson) {
@@ -758,11 +766,15 @@ public class AiRecommender {
         String key = AuraDb.normalizeTitleKey(pick.optString("title", ""));
         JSONObject matched = byKey.get(key);
         if (matched == null || !added.add(key)) return;
-        String reason = pick.optString("reason", "").trim();
-        if (!reason.isEmpty()) {
-            try { matched.put("reason", reason); } catch (Exception ignored) {}
-        }
+        applyLlmPickReason(matched, pick.optString("reason", "").trim());
         out.add(matched);
+    }
+
+    private void applyLlmPickReason(JSONObject matched, String reason) {
+        if (reason.isEmpty()) return;
+        String bcast = matched.optString("broadcast_badge", "");
+        String finalReason = (!bcast.isEmpty() && !reason.startsWith(bcast)) ? (bcast + " \u00B7 " + reason) : reason;
+        try { matched.put("reason", finalReason); } catch (Exception ignored) {}
     }
 
     private void appendRemainingPoolItems(List<JSONObject> pool, Set<String> added, List<JSONObject> out, int targetCount) {
@@ -819,6 +831,7 @@ public class AiRecommender {
         return "6. SCATTER-GATHER JUSTWATCH CANDIDATE POOL: " + verifiedCandidates.toString() + "\n\n" +
             "Task:\n" +
             "- Filter out any candidates from the pool that are semantically irrelevant to the user's watched shows' storylines, genres, and Guide AI.\n" +
+            "- Include 2 to 4 high-affinity candidates tagged with Anchor=LIVE_TV_TRENDING(...) so the slate blends personal co-watch matches with shows currently trending/featured on the user's TV apps.\n" +
             "- Select & rank the top 22 candidates from the pool that genuinely match what '" + profileName + "' enjoys watching.\n" +
             "- Return ONLY a JSON object with key 'results': an array of objects, each with keys 'title' (exact title from the pool) and 'reason' (18-26 words explaining specifically how its plot/theme connects to one of their watched shows).";
     }

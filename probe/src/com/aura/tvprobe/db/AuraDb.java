@@ -523,8 +523,9 @@ public class AuraDb extends SQLiteOpenHelper {
 
     private boolean isSingleRecoStale(JSONObject o, int idx, int minModernYear, int maxYear, Set<String> watchedKeys) {
         int y = o.optInt("year", maxYear);
+        int floorYear = "app_trending".equals(o.optString("source_channel")) ? 2018 : minModernYear;
         String normKey = normalizeTitleKey(o.optString("title", ""));
-        if (y > maxYear || y < minModernYear || o.optString("app", "").contains("Store")) return true;
+        if (y > maxYear || y < floorYear || o.optString("app", "").contains("Store")) return true;
         if (o.optInt("imdb_votes", 0) < 900 || watchedKeys.contains(normKey)) return true;
         return idx < 6 && o.optString("backdrop_url", "").isEmpty();
     }

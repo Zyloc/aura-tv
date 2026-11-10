@@ -13,7 +13,8 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 public class MediaProbeService extends NotificationListenerService {
-    private ServerSocket serverSocket;
+    private static volatile ServerSocket serverSocket;
+    private static volatile ServerSocket serverSocket8080;
     private volatile boolean running = false;
     private final java.util.concurrent.ExecutorService httpPool = java.util.concurrent.Executors.newCachedThreadPool();
     private AuraDb db;
@@ -62,7 +63,8 @@ public class MediaProbeService extends NotificationListenerService {
     public void onDestroy() {
         running = false;
         if (eventWatcher != null) eventWatcher.unregisterAll();
-        try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
+        closeSocketQuietly(serverSocket);
+        closeSocketQuietly(serverSocket8080);
         super.onDestroy();
     }
 
@@ -130,11 +132,12 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private ServerSocket openBoundServerSocket(int port, boolean isPrimary) throws Exception {
-        if (isPrimary) closeSocketQuietly(serverSocket);
+        closeSocketQuietly(isPrimary ? serverSocket : serverSocket8080);
         ServerSocket ss = new ServerSocket();
         ss.setReuseAddress(true);
         ss.bind(new java.net.InetSocketAddress("0.0.0.0", port), 50);
         if (isPrimary) serverSocket = ss;
+        else serverSocket8080 = ss;
         return ss;
     }
 
