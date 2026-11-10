@@ -103,10 +103,7 @@ public class AiRecommender {
             db.saveProfileRecommendations(profileId, sotaRanked);
             return sotaRanked;
         }
-        if (cached.length() > 0) return cached;
-        JSONArray seedCatalog = getBuiltInSotaSeedCatalog(profileId);
-        db.saveProfileRecommendations(profileId, seedCatalog);
-        return seedCatalog;
+        return cached.length() > 0 ? cached : getBuiltInSotaSeedCatalog(profileId);
     }
 
     public JSONArray buildSotaRecommendations(String profileId, JSONObject seedPlan, int minModernYear, int currentYear) {
@@ -128,10 +125,8 @@ public class AiRecommender {
     }
 
     private Set<String> initSeenTitleKeys(String profileId, UserTasteProfile taste) {
-        Set<String> seenKeys = Collections.synchronizedSet(new HashSet<>());
-        seenKeys.addAll(db.getWatchedTitleKeys());
+        Set<String> seenKeys = Collections.synchronizedSet(new HashSet<>(db.getAllExcludedTitleKeys()));
         seenKeys.addAll(db.getHistoryTitleKeys(profileId));
-        seenKeys.addAll(ImpressionTracker.getRecentCooldownKeys(db, taste.getCurrentEpoch()));
         for (String a : taste.getAnchors()) {
             seenKeys.add(AuraDb.normalizeTitleKey(a));
         }
@@ -203,11 +198,21 @@ public class AiRecommender {
             JSONObject spec, double weight, UserTasteProfile taste,
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray hits = JustWatchGraph.executeDynamicQuerySpec(spec);
-        String anchor = spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim();
+        String verifiedAnchor = resolveVerifiedSpecAnchor(spec, taste);
         int added = 0;
         for (int k = 0; k < hits.length() && added < 10; k++) {
-            if (addSotaCandidate(hits.optJSONObject(k), anchor.isEmpty() ? null : anchor, weight, taste, seenKeys, pool)) added++;
+            if (addSotaCandidate(hits.optJSONObject(k), verifiedAnchor, weight, taste, seenKeys, pool)) added++;
         }
+    }
+
+    private String resolveVerifiedSpecAnchor(JSONObject spec, UserTasteProfile taste) {
+        String raw = spec.optString("seedAnchor", spec.optString("searchQuery", "")).trim();
+        if (raw.isEmpty()) return null;
+        if (db.isTitleWatched(raw) || db.getAllExcludedTitleKeys().contains(AuraDb.normalizeTitleKey(raw))) return raw;
+        for (String a : taste.getAnchors()) {
+            if (a.equalsIgnoreCase(raw)) return a;
+        }
+        return null;
     }
 
     private void submitCoWatchTasks(
@@ -254,7 +259,7 @@ public class AiRecommender {
     }
 
     private static final String[][] STRUCTURED_BUCKETS = {
-        {"scf", "trl"}, {"crm", "trl"}, {"act", "cmy"}, {"drm", "trl"}, {"scf", "drm"}, {"cmy", "rma"}
+        {"scf", "trl"}, {"crm", "trl"}, {"drm", "trl"}, {"scf", "drm"}, {"crm", "drm"}, {"act", "trl"}
     };
 
     private void submitStructuredDiscoveryTasks(
@@ -270,8 +275,8 @@ public class AiRecommender {
             String[] bucket, int startYear, int currentYear, UserTasteProfile taste,
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray hits = JustWatchGraph.fetchStructuredGenreCandidates(Arrays.asList(bucket), null, startYear, currentYear);
-        for (int k = 0; k < hits.length() && k < 14; k++) {
-            addSotaCandidate(hits.optJSONObject(k), null, 0.90, taste, seenKeys, pool);
+        for (int k = 0; k < hits.length() && k < 10; k++) {
+            addSotaCandidate(hits.optJSONObject(k), null, 0.65, taste, seenKeys, pool);
         }
     }
 
@@ -317,6 +322,7 @@ public class AiRecommender {
             double score = HybridScorer.computeHybridScore(item, taste, currentYear);
             try { item.put("sota_score", score); } catch (Exception ignored) {}
         }
+        pool.sort((a, b) -> Double.compare(b.optDouble("sota_score", 0.0), a.optDouble("sota_score", 0.0)));
     }
 
     private JSONArray packRankedItems(List<JSONObject> items) {
@@ -691,15 +697,20 @@ public class AiRecommender {
     }
 
     private List<JSONObject> filterAndRerankPoolWithLlm(String profileId, List<JSONObject> pool, int epoch) {
-        Map<String, ImpressionTracker.ImpressionRecord> impressions = ImpressionTracker.loadActiveImpressions(db);
-        List<JSONObject> baseSlate = SlateAllocator.allocateBalancedSlate(pool, epoch, impressions);
+        Map<String, ImpressionTracker.ImpressionRecord> imp = ImpressionTracker.loadActiveImpressions(db);
+        List<JSONObject> baseSlate = SlateAllocator.allocateBalancedSlate(pool, epoch, imp);
         if (getApiKey().isEmpty() || pool.size() < 6) return baseSlate;
-        AgentStatusNarrator.publishLiveStep("Curating personalized picks");
-        List<JSONObject> freshPool = selectFreshPoolForLlm(pool, epoch, impressions, 24);
-        String raw = callGeminiJson(buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(freshPool, 24), epoch));
-        AgentStatusNarrator.publishLiveStep("Publishing fresh recommendations");
-        List<JSONObject> llmFiltered = applyLlmFilteredSlate(freshPool, raw);
+        List<JSONObject> freshPool = selectFreshPoolForLlm(pool, epoch, imp, 36);
+        List<JSONObject> llmFiltered = runLlmStageThreeRerank(profileId, freshPool, baseSlate, epoch);
         return llmFiltered.size() >= 8 ? llmFiltered : baseSlate;
+    }
+
+    private List<JSONObject> runLlmStageThreeRerank(
+            String profileId, List<JSONObject> freshPool, List<JSONObject> baseSlate, int epoch) {
+        AgentStatusNarrator.publishLiveStep("Curating personalized picks");
+        String raw = callGeminiJson(buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(freshPool, 36), epoch));
+        AgentStatusNarrator.publishLiveStep("Publishing fresh recommendations");
+        return applyLlmFilteredSlate(freshPool, baseSlate, raw);
     }
 
     private List<JSONObject> selectFreshPoolForLlm(
@@ -711,7 +722,7 @@ public class AiRecommender {
             if (ImpressionTracker.isRecentlyShown(key, epoch, impressions)) recycled.add(item);
             else fresh.add(item);
         }
-        for (int i = 0; i < recycled.size() && fresh.size() < 12; i++) fresh.add(recycled.get(i));
+        for (int i = 0; i < recycled.size() && fresh.size() < 24; i++) fresh.add(recycled.get(i));
         return fresh.size() > limit ? fresh.subList(0, limit) : fresh;
     }
 
@@ -733,11 +744,12 @@ public class AiRecommender {
         return o.optString("seed_anchor", "discovery");
     }
 
-    private List<JSONObject> applyLlmFilteredSlate(List<JSONObject> pool, String rawJson) {
+    private List<JSONObject> applyLlmFilteredSlate(List<JSONObject> pool, List<JSONObject> baseSlate, String rawJson) {
         if (rawJson == null || rawJson.trim().isEmpty()) return Collections.emptyList();
         try {
-            JSONArray arr = parseLlmRankingArray(rawJson);
-            return matchLlmPicksToPool(pool, arr);
+            List<JSONObject> out = matchLlmPicksToPool(pool, parseLlmRankingArray(rawJson));
+            if (out.size() >= 8 && out.size() < 18) backfillFromBaseSlate(baseSlate, out, 18);
+            return out;
         } catch (Exception e) {
             return Collections.emptyList();
         }
@@ -759,8 +771,13 @@ public class AiRecommender {
         for (int i = 0; i < arr.length(); i++) {
             tryAddMatchedLlmPick(arr.optJSONObject(i), byKey, added, out);
         }
-        if (out.size() < 28) appendRemainingPoolItems(pool, added, out, 28);
         return out;
+    }
+
+    private void backfillFromBaseSlate(List<JSONObject> baseSlate, List<JSONObject> out, int targetCount) {
+        Set<String> added = new HashSet<>();
+        for (JSONObject o : out) added.add(AuraDb.normalizeTitleKey(o.optString("title", "")));
+        appendRemainingPoolItems(baseSlate, added, out, targetCount);
     }
 
     private void tryAddMatchedLlmPick(JSONObject pick, Map<String, JSONObject> byKey, Set<String> added, List<JSONObject> out) {
@@ -789,20 +806,23 @@ public class AiRecommender {
 
     private List<String> collectWatchedTitles(JSONArray history) {
         List<String> seen = new ArrayList<>();
-        appendWatchedTitlesFromArray(db.listManuallyWatched(), false, Integer.MAX_VALUE, seen);
-        if (history != null) {
-            appendWatchedTitlesFromArray(history, true, 45, seen);
-        }
+        if (history != null) appendWatchedTitlesFromArray(history, true, 40, seen);
+        appendWatchedTitlesFromArray(db.listManuallyWatched(), false, 80, seen);
         return seen;
     }
 
-    private void appendWatchedTitlesFromArray(JSONArray arr, boolean skipYoutube, int maxTotal, List<String> seen) {
-        for (int i = 0; i < arr.length() && seen.size() < maxTotal; i++) {
-            JSONObject item = arr.optJSONObject(i);
-            if (item == null || (skipYoutube && item.optString("app_pkg").contains("youtube"))) continue;
-            String t = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
-            if (!t.isEmpty() && !seen.contains(t)) seen.add(t);
+    private void appendWatchedTitlesFromArray(JSONArray arr, boolean skipYoutube, int maxSourceItems, List<String> seen) {
+        int added = 0;
+        for (int i = 0; i < arr.length() && added < maxSourceItems; i++) {
+            if (tryAddWatchedTitle(arr.optJSONObject(i), skipYoutube, seen)) added++;
         }
+    }
+
+    private boolean tryAddWatchedTitle(JSONObject item, boolean skipYoutube, List<String> seen) {
+        if (item == null || (skipYoutube && item.optString("app_pkg").contains("youtube"))) return false;
+        String t = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
+        if (t.isEmpty() || seen.contains(t)) return false;
+        return seen.add(t);
     }
 
     private String buildAgentRankingPrompt(String profileId, List<String> verifiedCandidates, int epoch) {
@@ -830,11 +850,11 @@ public class AiRecommender {
     }
 
     private String buildRankingPromptBody(String profileName, List<String> verifiedCandidates) {
-        return "6. SCATTER-GATHER JUSTWATCH CANDIDATE POOL: " + verifiedCandidates.toString() + "\n\n" +
+        return "7. SCATTER-GATHER JUSTWATCH CANDIDATE POOL: " + verifiedCandidates.toString() + "\n\n" +
             "Task:\n" +
-            "- Filter out any candidates from the pool that are semantically irrelevant to the user's watched shows' storylines, genres, and Guide AI.\n" +
-            "- Include 2 to 4 high-affinity candidates tagged with Anchor=LIVE_TV_TRENDING(...) so the slate blends personal co-watch matches with shows currently trending/featured on the user's TV apps.\n" +
-            "- Select & rank the top 16 candidates from the pool that genuinely match what '" + profileName + "' enjoys watching.\n" +
+            "- Strictly reject any candidate whose genre, tone, or premise does not match the user's watched & rated library and Guide AI (never include generic soaps, kids cartoons, or unrelated genres).\n" +
+            "- Only include Anchor=LIVE_TV_TRENDING(...) items if they genuinely match the user's sci-fi, mystery, thriller, or prestige drama taste.\n" +
+            "- Select & rank the top 18 candidates from the pool that '" + profileName + "' will genuinely love watching next.\n" +
             "- Return ONLY a JSON object with key 'results': an array of objects, each with keys 'title' (exact title from the pool) and 'reason' (12-18 words explaining specifically how its plot/theme connects to one of their watched shows).";
     }
 
@@ -1004,11 +1024,25 @@ public class AiRecommender {
         try {
             String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
             String resp = httpPost(url, buildGeminiRequestBody(prompt, base64Jpeg).toString());
-            JSONObject root = new JSONObject(resp);
-            return root.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
+            return stripJsonFences(extractGeminiCandidateText(resp));
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static String extractGeminiCandidateText(String resp) throws Exception {
+        JSONObject root = new JSONObject(resp);
+        return root.getJSONArray("candidates").getJSONObject(0)
+            .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
+    }
+
+    private static String stripJsonFences(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        if (t.startsWith("```")) {
+            t = t.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
+        }
+        return t.trim();
     }
 
     private JSONObject buildGeminiRequestBody(String prompt, String base64Jpeg) throws Exception {

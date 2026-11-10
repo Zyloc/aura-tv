@@ -127,8 +127,13 @@ public class VoiceConcierge {
         if (ShowCompanionAgent.isShowCompanionQuery(userText)) {
             return executeShowCompanionTurn(profileId, userText);
         }
-        int epoch = ImpressionTracker.advanceEpoch(db, profileId);
+        int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
         JSONArray turns = isFollowUpRefinement(userText) ? getOrInitTurns(profileId) : new JSONArray();
+        return runSearchAndRankTurn(profileId, turns, userText, activeFilters, epoch);
+    }
+
+    private JSONObject runSearchAndRankTurn(
+            String profileId, JSONArray turns, String userText, List<String> activeFilters, int epoch) {
         int currentYear = JustWatchGraph.getCurrentYear();
         String contextualQuery = buildContextualQuery(turns, userText);
         int minModernYear = resolveSearchMinYear(contextualQuery, currentYear, JustWatchGraph.getDefaultMinModernYear());
@@ -470,18 +475,23 @@ public class VoiceConcierge {
 
     private List<String> collectWatchedNames(String profileId) {
         List<String> list = new ArrayList<>();
-        appendTitlesFromJsonArray(db.listManuallyWatched(), 0, Integer.MAX_VALUE, list);
-        appendTitlesFromJsonArray(db.listHistory(profileId), 120, 45, list);
+        appendTitlesFromJsonArray(db.listHistory(profileId), 120, 40, list);
+        appendTitlesFromJsonArray(db.listManuallyWatched(), 0, 80, list);
         return list;
     }
 
-    private void appendTitlesFromJsonArray(JSONArray arr, int minPosSec, int maxTotal, List<String> list) {
-        for (int i = 0; i < arr.length() && list.size() < maxTotal; i++) {
-            JSONObject item = arr.optJSONObject(i);
-            if (item == null || (minPosSec > 0 && item.optInt("position_sec", 0) < minPosSec)) continue;
-            String t = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
-            if (!t.isEmpty() && !list.contains(t)) list.add(t);
+    private void appendTitlesFromJsonArray(JSONArray arr, int minPosSec, int maxSourceItems, List<String> list) {
+        int added = 0;
+        for (int i = 0; i < arr.length() && added < maxSourceItems; i++) {
+            if (tryAddWatchedName(arr.optJSONObject(i), minPosSec, list)) added++;
         }
+    }
+
+    private boolean tryAddWatchedName(JSONObject item, int minPosSec, List<String> list) {
+        if (item == null || (minPosSec > 0 && item.optInt("position_sec", 0) < minPosSec)) return false;
+        String t = item.optString("series_title").isEmpty() ? item.optString("title") : item.optString("series_title");
+        if (t.isEmpty() || list.contains(t)) return false;
+        return list.add(t);
     }
 
     private JSONArray trimTurns(JSONArray turns, int max) {

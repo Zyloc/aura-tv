@@ -86,11 +86,29 @@ public final class SearchOverlay {
         overlay.setVisibility(View.VISIBLE);
         animateIn(overlay);
         if (focusInputBar) {
-            View inputBox = overlay.findViewWithTag(TAG_INPUT_BOX);
-            if (inputBox != null) inputBox.post(inputBox::requestFocus);
+            focusAndOpenKeyboard(overlay, ctx);
         } else {
             focusFirstPoster(overlay);
         }
+    }
+
+    private static void focusAndOpenKeyboard(FrameLayout overlay, Context ctx) {
+        EditText et = findTagged(overlay, TAG_EDIT_TEXT);
+        View inputBox = overlay.findViewWithTag(TAG_INPUT_BOX);
+        if (et != null) {
+            et.post(() -> activateEditTextTyping(ctx, et));
+            et.postDelayed(() -> showKeyboard(ctx, et), 120);
+        } else if (inputBox != null) {
+            inputBox.post(inputBox::requestFocus);
+        }
+    }
+
+    public static void setQueryText(FrameLayout overlay, String query) {
+        EditText et = findTagged(overlay, TAG_EDIT_TEXT);
+        if (et == null) return;
+        deactivateEditTextTyping(overlay.getContext(), et);
+        et.setText(query != null ? query.trim() : "");
+        et.setHint(MULTILINGUAL_HINTS[0]);
     }
 
     public static void dismiss(FrameLayout overlay) {
@@ -194,7 +212,7 @@ public final class SearchOverlay {
 
     private static void updateConversationInputHint(EditText et, String latestUserQuery) {
         if (et == null || et.hasFocus()) return;
-        et.setText("");
+        et.setText(latestUserQuery != null ? latestUserQuery : "");
         et.setHint(MULTILINGUAL_HINTS[0]);
     }
 
@@ -358,9 +376,9 @@ public final class SearchOverlay {
         inputBox.setOnClickListener(v -> activateTyping.run());
         et.setOnClickListener(v -> activateTyping.run());
         et.setOnEditorActionListener((v, actionId, ev) -> handleSearchEditorAction(ctx, inputBox, et, cb));
-        et.setOnKeyListener((v, code, ev) -> handleSearchEditTextBack(ctx, inputBox, et, code, ev));
-        inputBox.setOnFocusChangeListener((v, hasFocus) ->
-            updateInputPillFocus(ctx, v, aiBadge, icon, hasFocus));
+        et.setOnKeyListener((v, code, ev) -> handleSearchEditTextKey(ctx, inputBox, et, cb, code, ev));
+        inputBox.setOnFocusChangeListener((v, f) -> updateInputPillFocus(ctx, inputBox, aiBadge, icon, f || et.hasFocus()));
+        et.setOnFocusChangeListener((v, f) -> updateInputPillFocus(ctx, inputBox, aiBadge, icon, f || inputBox.hasFocus()));
     }
 
     private static void activateEditTextTyping(Context ctx, EditText et) {
@@ -376,7 +394,7 @@ public final class SearchOverlay {
         String q = et.getText().toString().trim();
         deactivateEditTextTyping(ctx, et);
         if (!q.isEmpty() && cb != null) {
-            et.setText("");
+            et.setText(q);
             cb.onFollowUpClicked(q);
         } else {
             inputBox.requestFocus();
@@ -390,12 +408,14 @@ public final class SearchOverlay {
         et.setFocusableInTouchMode(false);
     }
 
-    private static boolean handleSearchEditTextBack(Context ctx, LinearLayout inputBox,
-                                                    EditText et, int code, KeyEvent ev) {
-        if (ev.getAction() == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_BACK) {
-            hideKeyboard(ctx, et);
-            et.setFocusable(false);
-            et.setFocusableInTouchMode(false);
+    private static boolean handleSearchEditTextKey(Context ctx, LinearLayout inputBox, EditText et,
+                                                   SearchCallback cb, int code, KeyEvent ev) {
+        if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
+        if (code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            return handleSearchEditorAction(ctx, inputBox, et, cb);
+        }
+        if (code == KeyEvent.KEYCODE_BACK) {
+            deactivateEditTextTyping(ctx, et);
             inputBox.requestFocus();
             return true;
         }
@@ -836,7 +856,7 @@ public final class SearchOverlay {
     private static void showKeyboard(Context ctx, View v) {
         try {
             InputMethodManager imm = (InputMethodManager) ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
-            if (imm != null) imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT);
+            if (imm != null && v != null) imm.showSoftInput(v, InputMethodManager.SHOW_FORCED);
         } catch (Exception ignored) {}
     }
 

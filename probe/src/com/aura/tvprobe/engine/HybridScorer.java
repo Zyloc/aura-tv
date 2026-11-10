@@ -26,7 +26,8 @@ public final class HybridScorer {
 
     private static double computeLlmPlanBoost(JSONObject item) {
         String src = item.optString("source_channel");
-        if (!"llm_planned".equals(src) && !"app_trending".equals(src)) return 0.0;
+        if ("app_trending".equals(src)) return 0.45 * item.optDouble("anchor_weight", 1.0);
+        if (!"llm_planned".equals(src)) return 0.0;
         int rank = Math.max(0, item.optInt("llm_rank", 0));
         double aw = item.optDouble("anchor_weight", 1.0);
         return Math.max(1.25, 2.05 - rank * 0.12) * aw;

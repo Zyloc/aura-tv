@@ -91,7 +91,7 @@ public class WebUiHtml {
         " const q=msg!==undefined?msg:document.getElementById('chat-in').value.trim();" +
         " if(!reset&&!q)return;" +
         " showBanner('load',reset?'Resetting conversation…':`Asking Aura AI: \"${q}\" (fetching picks & HD posters)…`);" +
-        " document.getElementById('chat-in').value='';" +
+        " document.getElementById('chat-in').value=reset?'':q;" +
         " const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q,reset:reset})});" +
         " const res=await r.json();" +
         " curTab='voice';await load(false);" +

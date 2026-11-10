@@ -207,6 +207,8 @@ public class AuraActivity extends Activity implements
     private void runHourlyRecoRefreshLoop() {
         if (!refreshInFlight && !db.isRecoCacheFresh(activeProfile)) {
             refreshAllData(true);
+        } else if (db.getRecoUpdatedAt(activeProfile) > lastRenderedRecoSec) {
+            renderHomeContent(db.getProfileRecommendations(activeProfile));
         }
         scheduleHourlyRecoRefresh();
     }
@@ -1119,6 +1121,7 @@ public class AuraActivity extends Activity implements
     }
 
     private void replaceWatchedFromReserve() {
+        db.pruneWatchedFromCachedRecos(activeProfile);
         JSONArray remaining = db.getProfileRecommendations(activeProfile);
         renderHomeContent(remaining);
         if (remaining.length() < 12) {
@@ -1128,7 +1131,7 @@ public class AuraActivity extends Activity implements
 
     @Override
     public void onSimilarClicked(JSONObject item) {
-        String seed = item.optString("title", "this title");
+        String seed = resolveCanonicalTitle(item, "this title");
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
         setBannerText("Looking for shows and movies like " + seed + "\u2026", true);
@@ -1137,7 +1140,7 @@ public class AuraActivity extends Activity implements
     }
 
     private void executeSimilarTraversal(String seed, long startMs) {
-        int epoch = ImpressionTracker.advanceEpoch(db, activeProfile);
+        int epoch = ImpressionTracker.getCurrentEpoch(db, activeProfile);
         JSONArray rawSim = ai.traverseSimilarToWatched(activeProfile, seed,
             msg -> ui.post(() -> setBannerText(msg, true)));
         JSONArray sim = ImpressionTracker.filterOutRecentImpressions(
@@ -1229,6 +1232,29 @@ public class AuraActivity extends Activity implements
 
     // ── Callbacks: SearchOverlay & DetailOverlay ─────────────────────────
 
+    public static void onRemoteChatStarted(String query, boolean reset) {
+        AuraActivity inst = sActiveInstance;
+        if (inst == null) return;
+        inst.ui.post(() -> {
+            if (reset) inst.onResetConversation();
+            else if (query != null && !query.trim().isEmpty()) inst.prepareUiForSearchQuery(query.trim());
+        });
+    }
+
+    public static void onRemoteChatProgress(String msg) {
+        AuraActivity inst = sActiveInstance;
+        if (inst != null) inst.postSearchProgress(msg);
+    }
+
+    public static void onRemoteChatCompleted(String query, boolean reset, JSONObject res) {
+        AuraActivity inst = sActiveInstance;
+        if (inst == null || reset) return;
+        inst.ui.post(() -> {
+            if (query != null && !query.trim().isEmpty()) inst.lastSearchQuery = query.trim();
+            inst.displaySearchResults(res);
+        });
+    }
+
     public void runSearchQuery(String query) {
         String q = query != null ? query.trim() : "";
         if (q.isEmpty()) return;
@@ -1245,7 +1271,7 @@ public class AuraActivity extends Activity implements
         hideKeyboard(rootLayout);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
-        ensureSearchOverlayShowingLoading();
+        ensureSearchOverlayShowingLoading(q);
     }
 
     private void resetTopBarSearchLabel() {
@@ -1255,12 +1281,12 @@ public class AuraActivity extends Activity implements
         }
     }
 
-    private void ensureSearchOverlayShowingLoading() {
+    private void ensureSearchOverlayShowingLoading(String q) {
         if (!SearchOverlay.isVisible(searchOverlay)) {
             SearchOverlay.show(searchOverlay, this, false);
         }
-        SearchOverlay.setLoading(searchOverlay, true,
-            "Understanding your search\u2026");
+        SearchOverlay.setQueryText(searchOverlay, q);
+        SearchOverlay.setLoading(searchOverlay, true, "Understanding your search\u2026");
     }
 
     private void submitSearchQueryTurn(String q, long startMs) {
@@ -1282,16 +1308,18 @@ public class AuraActivity extends Activity implements
     private void displaySearchResults(JSONObject res) {
         if (!SearchOverlay.isVisible(searchOverlay)) return;
         SearchOverlay.setLoading(searchOverlay, false, "");
-        if (res == null) return;
-        if (tryPresentPureCompanionRecap(res)) return;
+        if (res == null || tryPresentPureCompanionRecap(res)) return;
+        populateSearchOverlayResultViews(res);
+        populateTraversalChips();
+    }
+
+    private void populateSearchOverlayResultViews(JSONObject res) {
         SearchOverlay.setConversationTurns(searchOverlay, res.optJSONArray("turns"), this);
-        String reply = res.optString("reply", "");
-        if (!reply.isEmpty()) SearchOverlay.addMessage(searchOverlay, "assistant", reply, this);
+        if (!lastSearchQuery.isEmpty()) SearchOverlay.setQueryText(searchOverlay, lastSearchQuery);
         String spoken = res.optString("spoken_narration", "");
         if (!spoken.isEmpty()) AuraTtsNarrator.speak(this, spoken, null);
         SearchOverlay.setFollowUps(searchOverlay, extractFollowUpList(res.optJSONArray("follow_ups")), this, this);
         SearchOverlay.setResults(searchOverlay, res.optJSONArray("results"), this, this);
-        populateTraversalChips();
     }
 
     private boolean tryPresentPureCompanionRecap(JSONObject res) {
@@ -1388,11 +1416,19 @@ public class AuraActivity extends Activity implements
         }
     }
 
+    private String resolveCanonicalTitle(JSONObject item, String fallback) {
+        if (item == null) return fallback;
+        String series = item.optString("series_title", "").trim();
+        String title = item.optString("title", "").trim();
+        String chosen = !series.isEmpty() ? series : title;
+        return !chosen.isEmpty() ? chosen : fallback;
+    }
+
     private void openDetailDrawer(JSONObject item) {
         if (item == null) return;
         saveFocusBeforeOverlay();
         setBackgroundFocusBlocked(true);
-        String title = item.optString("title");
+        String title = resolveCanonicalTitle(item, "");
         boolean watched = db.isTitleWatched(title);
         int rating = db.getUserRatingsMap().getOrDefault(AuraDb.normalizeTitleKey(title), 0);
         DetailOverlay.showItem(detailOverlay, item, watched, rating, this, this);
@@ -1403,7 +1439,7 @@ public class AuraActivity extends Activity implements
         maybeUpgradeDetailPoster(item, title);
         JSONArray sim = db.filterOutWatched(JustWatchGraph.fetchCollaborativeSimilar(title));
         ui.post(() -> {
-            if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+            if (DetailOverlay.isShowingTitle(detailOverlay, item.optString("title"))) {
                 DetailOverlay.setSimilarItems(detailOverlay, sim, this, this);
             }
         });
@@ -1416,7 +1452,7 @@ public class AuraActivity extends Activity implements
         if (freshPoster.isEmpty()) return;
         try { item.put("poster_url", freshPoster); } catch (Exception ignored) {}
         ui.post(() -> {
-            if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+            if (DetailOverlay.isShowingTitle(detailOverlay, item.optString("title"))) {
                 DetailOverlay.updatePosterUrl(detailOverlay, freshPoster, this);
             }
         });
@@ -1424,7 +1460,7 @@ public class AuraActivity extends Activity implements
 
     @Override
     public void onWatchedToggle(JSONObject item) {
-        String title = item.optString("title");
+        String title = resolveCanonicalTitle(item, "");
         boolean nowWatched = !db.isTitleWatched(title);
         db.markTitleWatched(item, nowWatched);
         watchedChangedWhileInDetail = true;
@@ -1435,7 +1471,7 @@ public class AuraActivity extends Activity implements
 
     @Override
     public void onRated(JSONObject item, int score) {
-        String title = item.optString("title");
+        String title = resolveCanonicalTitle(item, "");
         db.rateTitle(item, score);
         watchedChangedWhileInDetail = true;
         Toast.makeText(this, "Rated " + score + "/10", Toast.LENGTH_SHORT).show();

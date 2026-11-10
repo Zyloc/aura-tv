@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class AuraDb extends SQLiteOpenHelper {
@@ -68,7 +69,25 @@ public class AuraDb extends SQLiteOpenHelper {
         db.execSQL("DELETE FROM watch_history WHERE LOWER(title) = 'netflix' OR LOWER(title) = 'prime video'");
         db.execSQL("DELETE FROM watch_history WHERE position_sec < 60");
         db.execSQL("DELETE FROM watch_history WHERE position_sec = 1350 AND duration_sec = 3000");
+        promoteCompletedHistoryToWatched(db);
         db.execSQL("DELETE FROM watch_history WHERE duration_sec > 0 AND position_sec >= (duration_sec * 95) / 100");
+    }
+
+    private void promoteCompletedHistoryToWatched(SQLiteDatabase db) {
+        String sql = "SELECT title, series_title, app_name FROM watch_history WHERE duration_sec >= 1800 AND position_sec >= (duration_sec * 95) / 100";
+        try (Cursor c = db.rawQuery(sql, null)) {
+            while (c.moveToNext()) promoteSingleCompletedRow(db, c.getString(0), c.getString(1), c.getString(2));
+        } catch (Exception ignored) {}
+    }
+
+    private void promoteSingleCompletedRow(SQLiteDatabase db, String title, String series, String app) {
+        String canonical = (series != null && !series.trim().isEmpty()) ? series.trim() : (title != null ? title.trim() : "");
+        String key = normalizeTitleKey(canonical);
+        if (key.isEmpty()) return;
+        try {
+            JSONObject item = new JSONObject().put("title", canonical).put("app", app != null ? app : "").put("watched", true);
+            insertWatchedItemRecord(db, key, item);
+        } catch (Exception ignored) {}
     }
 
     private void purgeStaleRecommendationsIfNeeded(SQLiteDatabase db) {
@@ -305,7 +324,9 @@ public class AuraDb extends SQLiteOpenHelper {
     public static String normalizeTitleKey(String title) {
         if (title == null) return "";
         String base = title.split("·")[0].split("—")[0].trim();
-        return base.toLowerCase().replaceAll("[^a-z0-9]", "");
+        base = base.replaceAll("(?i)\\s*[-–:|]\\s*(season|series|s\\d+)\\b.*$", "");
+        base = base.replaceAll("(?i)\\s*\\((hindi|tamil|telugu|malayalam|kannada|english|dubbed|subbed)\\)\\s*$", "");
+        return base.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
     }
 
     public static String resolveAppPackage(String appName) {
@@ -490,17 +511,17 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private boolean resetRecosIfEngineUpgraded(SQLiteDatabase db) {
-        if ("sota_v15".equals(getSetting("reco_engine_version", ""))) return false;
+        if ("sota_v16".equals(getSetting("reco_engine_version", ""))) return false;
         db.delete("profile_recos", null, null);
-        db.delete("gti_cache", "gti LIKE 'jw_imdb_%'", null);
         setSetting("voice_session_default", "");
-        setSetting("reco_engine_version", "sota_v15");
+        setSetting("server_mode", "tv");
+        setSetting("reco_engine_version", "sota_v16");
         return true;
     }
 
     private List<String> findProfilesWithStaleRecos(SQLiteDatabase db) throws Exception {
         List<String> toDelete = new ArrayList<>();
-        Set<String> watchedKeys = getWatchedTitleKeys();
+        Set<String> watchedKeys = getAllExcludedTitleKeys();
         try (Cursor c = db.rawQuery("SELECT profile_id, payload_json FROM profile_recos", null)) {
             while (c.moveToNext()) {
                 if (hasStaleOrWatchedReco(new JSONArray(c.getString(1)), watchedKeys)) {
@@ -514,11 +535,12 @@ public class AuraDb extends SQLiteOpenHelper {
     private boolean hasStaleOrWatchedReco(JSONArray arr, Set<String> watchedKeys) {
         int maxYear = JustWatchGraph.getCurrentYear();
         int minModernYear = JustWatchGraph.getDefaultMinModernYear();
+        int validCount = 0;
         for (int i = 0; i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
-            if (o != null && isSingleRecoStale(o, i, minModernYear, maxYear, watchedKeys)) return true;
+            if (o != null && !isSingleRecoStale(o, i, minModernYear, maxYear, watchedKeys)) validCount++;
         }
-        return false;
+        return validCount < 10;
     }
 
     private boolean isSingleRecoStale(JSONObject o, int idx, int minModernYear, int maxYear, Set<String> watchedKeys) {
@@ -547,8 +569,9 @@ public class AuraDb extends SQLiteOpenHelper {
     public List<String> getRotatingTasteAnchors(String profileId, int epoch) {
         List<JSONObject> validHistory = collectActiveHistoryAnchors(profileId);
         List<String> anchors = new ArrayList<>();
-        appendDiversifiedHistoryAnchors(validHistory, anchors, 4);
-        appendRotatingLibrarySeeds(anchors, epoch, 6);
+        appendRotatingLibrarySeeds(anchors, epoch, 4);
+        appendDiversifiedHistoryAnchors(validHistory, anchors, 6);
+        if (anchors.size() < 6) appendRotatingLibrarySeeds(anchors, epoch + 1, 6);
         return anchors;
     }
 
@@ -598,15 +621,17 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     private boolean isInvalidHistoryAnchorTitle(JSONObject h, String t, String series) {
-        if (t.isEmpty() || t.equalsIgnoreCase("Netflix") || t.equalsIgnoreCase("Prime Video")) return true;
-        if (t.contains("\u2022") || t.contains("Tour of ") || t.contains("Full House With ")) return true;
-        return series.isEmpty() && h.optString("app_pkg").contains("graymatrix") && t.split("\\s+").length >= 3;
+        String low = t.toLowerCase(Locale.US);
+        if (t.isEmpty() || low.equals("netflix") || low.equals("prime video") || t.length() <= 1) return true;
+        if (t.contains("\u2022") || low.contains("tour of ") || low.contains("full house with ")
+                || low.contains(" vs ") || low.contains("highlights") || low.contains("ipl ")) return true;
+        return h.optString("app_pkg").contains("graymatrix") && (series.isEmpty() || t.split("\\s+").length >= 3);
     }
 
     private boolean hasEligibleAnchorProgress(JSONObject h) {
         int pos = h.optInt("position_sec", 0);
         int dur = Math.max(1800, h.optInt("duration_sec", 2700));
-        return pos >= 180 && !(pos == 1350 && dur == 3000);
+        return pos >= 180 && !(pos == 1350 && dur == 3000) && !(pos == 1200 && dur == 2700);
     }
 
     private double computeHistoryHoursAgo(JSONObject h, long nowSec) {
@@ -776,13 +801,31 @@ public class AuraDb extends SQLiteOpenHelper {
         return obj;
     }
 
+    public Set<String> getAllExcludedTitleKeys() {
+        Set<String> keys = getWatchedTitleKeys();
+        String sql = "SELECT title, series_title, position_sec, duration_sec FROM watch_history WHERE position_sec >= 180";
+        try (Cursor c = getReadableDatabase().rawQuery(sql, null)) {
+            while (c.moveToNext()) addExcludedHistoryCursorRow(c, keys);
+        } catch (Exception ignored) {}
+        return keys;
+    }
+
+    private void addExcludedHistoryCursorRow(Cursor c, Set<String> keys) {
+        int pos = c.getInt(2), dur = c.getInt(3);
+        if ((pos == 1200 && dur == 2700) || (pos == 1350 && dur == 3000)) return;
+        String s = c.isNull(1) ? "" : c.getString(1).trim();
+        String t = !s.isEmpty() ? s : (c.isNull(0) ? "" : c.getString(0).trim());
+        String k = normalizeTitleKey(t);
+        if (!k.isEmpty()) addWatchedKeyWithBaseVariant(k, keys);
+    }
+
     public JSONArray filterOutWatched(JSONArray raw) {
         JSONArray filtered = new JSONArray();
         if (raw == null) return filtered;
-        Set<String> watchedKeys = getWatchedTitleKeys();
+        Set<String> excludedKeys = getAllExcludedTitleKeys();
         for (int i = 0; i < raw.length(); i++) {
             JSONObject item = raw.optJSONObject(i);
-            if (item != null && isUnwatchedItem(item, watchedKeys)) filtered.put(item);
+            if (item != null && isUnwatchedItem(item, excludedKeys)) filtered.put(item);
         }
         return filtered;
     }
@@ -979,12 +1022,20 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     public void saveProfileRecommendations(String profileId, JSONArray recos) {
-        SQLiteDatabase db = getWritableDatabase();
+        upsertProfileRecosRow(profileId, filterOutWatched(recos), System.currentTimeMillis() / 1000L);
+    }
+
+    public void pruneWatchedFromCachedRecos(String profileId) {
+        long existingTs = getRecoUpdatedAt(profileId);
+        if (existingTs > 0L) upsertProfileRecosRow(profileId, getProfileRecommendations(profileId), existingTs);
+    }
+
+    private void upsertProfileRecosRow(String profileId, JSONArray recos, long updatedAtSec) {
         ContentValues cv = new ContentValues();
         cv.put("profile_id", profileId);
-        cv.put("payload_json", filterOutWatched(recos).toString());
-        cv.put("updated_at", System.currentTimeMillis() / 1000L);
-        db.insertWithOnConflict("profile_recos", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        cv.put("payload_json", recos.toString());
+        cv.put("updated_at", updatedAtSec);
+        getWritableDatabase().insertWithOnConflict("profile_recos", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     public JSONArray getProfileRecommendations(String profileId) {

@@ -1,5 +1,8 @@
 package com.aura.tvprobe;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -31,6 +34,23 @@ public final class UserTasteProfile {
             db.getSetting("ranking_mode", "prestige"),
             epoch
         );
+        seedWeightsFromWatchedLibrary(db.listManuallyWatched());
+    }
+
+    private void seedWeightsFromWatchedLibrary(JSONArray watched) {
+        if (watched == null) return;
+        for (int i = 0; i < Math.min(80, watched.length()); i++) {
+            applyWatchedItemTaste(watched.optJSONObject(i));
+        }
+    }
+
+    private void applyWatchedItemTaste(JSONObject item) {
+        if (item == null || (item.optInt("user_rating", 0) > 0 && item.optInt("user_rating", 0) <= 5)) return;
+        int r = item.optInt("user_rating", 0);
+        double w = r >= 8 ? 0.55 : (r >= 7 ? 0.40 : 0.25);
+        String codes = item.optString("genre_codes", "");
+        recordSeedMetadata(item.optString("country", ""), codes, w);
+        if (codes.isEmpty()) addKeywordWeights(item.optString("genres", "").toLowerCase(Locale.US), w);
     }
 
     private static String buildProfileTasteContext(AuraDb db, String profileId) {
@@ -63,10 +83,14 @@ public final class UserTasteProfile {
     };
 
     private void applyExplicitInterestKeywords(String text) {
+        addKeywordWeights(text, 1.6);
+    }
+
+    private void addKeywordWeights(String text, double weight) {
         if (text == null || text.isEmpty()) return;
         for (String[] pair : INTEREST_KEYWORD_MAP) {
             if (text.contains(pair[0])) {
-                genreWeights.put(pair[1], genreWeights.getOrDefault(pair[1], 0.0) + 1.6);
+                genreWeights.put(pair[1], genreWeights.getOrDefault(pair[1], 0.0) + weight);
             }
         }
     }
@@ -123,12 +147,12 @@ public final class UserTasteProfile {
     }
 
     public synchronized void ensureDefaultGenreWeightsIfEmpty() {
-        genreWeights.put("scf", genreWeights.getOrDefault("scf", 0.0) + 1.4);
-        genreWeights.put("crm", genreWeights.getOrDefault("crm", 0.0) + 1.4);
-        genreWeights.put("trl", genreWeights.getOrDefault("trl", 0.0) + 1.3);
-        genreWeights.put("spt", genreWeights.getOrDefault("spt", 0.0) + 1.2);
-        genreWeights.put("act", genreWeights.getOrDefault("act", 0.0) + 1.1);
-        genreWeights.put("drm", genreWeights.getOrDefault("drm", 0.0) + 0.9);
+        if (!genreWeights.isEmpty()) return;
+        genreWeights.put("scf", 1.4);
+        genreWeights.put("crm", 1.4);
+        genreWeights.put("trl", 1.3);
+        genreWeights.put("drm", 1.1);
+        genreWeights.put("act", 0.9);
     }
 
     public synchronized double computeGenreAffinity(String candGenreCodes) {

@@ -348,8 +348,15 @@ public class MediaProbeService extends NotificationListenerService {
         String prof = req.optString("profile", db.getValidActiveProfile());
         String msg = req.optString("message", optParam(uri, "message", ""));
         boolean reset = req.optBoolean("reset", "1".equals(optParam(uri, "reset", "0")));
-        writeHttpResponse(out, "application/json", voice.handleTurn(prof, msg, reset).toString());
+        writeHttpResponse(out, "application/json", executeMirroredChatTurn(prof, msg, reset).toString());
         return true;
+    }
+
+    private JSONObject executeMirroredChatTurn(String prof, String msg, boolean reset) {
+        AuraActivity.onRemoteChatStarted(msg, reset);
+        JSONObject res = voice.handleTurn(prof, msg, reset, AuraActivity::onRemoteChatProgress);
+        AuraActivity.onRemoteChatCompleted(msg, reset, res);
+        return res;
     }
 
     private boolean tryRouteOverlayOrState(OutputStream out, String method,
