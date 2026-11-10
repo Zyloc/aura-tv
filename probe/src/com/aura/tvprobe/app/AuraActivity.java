@@ -271,7 +271,10 @@ public class AuraActivity extends Activity implements
 
     private void dismissDetailSearchAndNav() {
         if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
-        if (SearchOverlay.isVisible(searchOverlay)) SearchOverlay.dismiss(searchOverlay);
+        if (SearchOverlay.isVisible(searchOverlay)) {
+            SearchOverlay.dismiss(searchOverlay);
+            clearRetainedSearchState();
+        }
         if (NavPanelBuilder.isExpanded(navPanel)) NavPanelBuilder.setExpanded(navPanel, false, this);
     }
 
@@ -617,19 +620,15 @@ public class AuraActivity extends Activity implements
         hideKeyboard(rootLayout);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
-        populateSearchStudioFromSession(db.getVoiceSession(activeProfile));
+        clearRetainedSearchState();
+        populateFreshSearchStudio();
         SearchOverlay.show(searchOverlay, this, true);
     }
 
-    private void populateSearchStudioFromSession(JSONObject session) {
-        JSONArray turns = session != null ? session.optJSONArray("turns") : null;
-        JSONArray results = session != null ? session.optJSONArray("results") : null;
-        if (results == null || results.length() == 0) {
-            results = db.getProfileRecommendations(activeProfile);
-        }
-        SearchOverlay.setConversationTurns(searchOverlay, turns, this);
-        String reply = session != null ? session.optString("reply", "") : "";
-        SearchOverlay.addMessage(searchOverlay, "assistant", resolveInitialStudioReply(reply), this);
+    private void populateFreshSearchStudio() {
+        JSONArray results = db.getProfileRecommendations(activeProfile);
+        SearchOverlay.setConversationTurns(searchOverlay, new JSONArray(), this);
+        SearchOverlay.addMessage(searchOverlay, "assistant", resolveInitialStudioReply(""), this);
         SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
         SearchOverlay.setResults(searchOverlay, results, this, this);
     }
@@ -1177,7 +1176,6 @@ public class AuraActivity extends Activity implements
 
     private void presentSimilarResults(JSONArray sim) {
         setBannerText("", false);
-        if (sim != null && sim.length() > 0) renderHomeContent(sim);
         JSONObject saved = db.getVoiceSession(activeProfile);
         SearchOverlay.setConversationTurns(searchOverlay,
             saved != null ? saved.optJSONArray("turns") : new JSONArray(), this);
@@ -1241,7 +1239,6 @@ public class AuraActivity extends Activity implements
     public void runSearchQuery(String query) {
         String q = query != null ? query.trim() : "";
         if (q.isEmpty()) return;
-        if (q.equalsIgnoreCase(lastSearchQuery) && SearchOverlay.isVisible(searchOverlay)) return;
         prepareUiForSearchQuery(q);
         submitSearchQueryTurn(q, System.currentTimeMillis());
     }
@@ -1323,6 +1320,7 @@ public class AuraActivity extends Activity implements
     @Override
     public void onResultClicked(JSONObject item) {
         SearchOverlay.dismiss(searchOverlay);
+        clearRetainedSearchState();
         openDetailDrawer(item);
     }
 
@@ -1333,15 +1331,17 @@ public class AuraActivity extends Activity implements
 
     @Override
     public void onResetConversation() {
+        clearRetainedSearchState();
+        applyResetConversationUi();
+    }
+
+    private void clearRetainedSearchState() {
         lastSearchQuery = "";
         if (searchLabel != null) {
             searchLabel.setText(SearchOverlay.MULTILINGUAL_HINTS[0]);
             searchLabel.setTextColor(GlassTheme.TEXT_SECONDARY);
         }
-        bgPool.submit(() -> {
-            voice.handleTurn(activeProfile, "", true);
-            ui.post(this::applyResetConversationUi);
-        });
+        db.saveVoiceSession(activeProfile, new JSONObject());
     }
 
     private void applyResetConversationUi() {
@@ -1377,8 +1377,7 @@ public class AuraActivity extends Activity implements
     @Override
     public void onDismiss() {
         AuraTtsNarrator.stop(this);
-        if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
-        if (SearchOverlay.isVisible(searchOverlay)) SearchOverlay.dismiss(searchOverlay);
+        dismissActiveOverlays();
         setBackgroundFocusBlocked(false);
         if (watchedChangedWhileInDetail) {
             watchedChangedWhileInDetail = false;
@@ -1386,6 +1385,14 @@ public class AuraActivity extends Activity implements
             return;
         }
         restoreFocusAfterOverlay();
+    }
+
+    private void dismissActiveOverlays() {
+        if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
+        if (SearchOverlay.isVisible(searchOverlay)) {
+            SearchOverlay.dismiss(searchOverlay);
+            clearRetainedSearchState();
+        }
     }
 
     private void openDetailDrawer(JSONObject item) {

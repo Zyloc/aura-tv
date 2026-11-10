@@ -147,13 +147,19 @@ public final class SearchOverlay {
     }
 
     public static void dismiss(FrameLayout overlay) {
-        EditText et = findTagged(overlay, TAG_EDIT_TEXT);
-        if (et != null) {
-            hideKeyboard(overlay.getContext(), et);
-            et.setFocusable(false);
-            et.setFocusableInTouchMode(false);
-        }
+        resetInputOnDismiss(overlay, findTagged(overlay, TAG_EDIT_TEXT));
+        View resetBtn = overlay.findViewWithTag(TAG_RESET_BTN);
+        if (resetBtn != null) resetBtn.setVisibility(View.GONE);
         animateOut(overlay);
+    }
+
+    private static void resetInputOnDismiss(FrameLayout overlay, EditText et) {
+        if (et == null) return;
+        hideKeyboard(overlay.getContext(), et);
+        et.setText("");
+        et.setHint(MULTILINGUAL_HINTS[0]);
+        et.setFocusable(false);
+        et.setFocusableInTouchMode(false);
     }
 
     public static boolean isVisible(FrameLayout overlay) {
