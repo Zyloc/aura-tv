@@ -88,6 +88,16 @@ public class MediaProbeService extends NotificationListenerService {
         if (running && serverSocket != null && !serverSocket.isClosed() && serverSocket.isBound()) return;
         running = true;
         new Thread(this::acceptLoop, "AuraHttpProbe").start();
+        new Thread(this::runLanArpKeepAliveLoop, "AuraLanArpKeepAlive").start();
+    }
+
+    private void runLanArpKeepAliveLoop() {
+        while (running) {
+            try {
+                QrRemoteBuilder.nudgeLanArpTable(QrRemoteBuilder.getTvIpAddress(this));
+                Thread.sleep(12000L);
+            } catch (Exception ignored) {}
+        }
     }
 
     private void acceptLoop() {
@@ -125,18 +135,35 @@ public class MediaProbeService extends NotificationListenerService {
     private void handleClient(Socket client) {
         try (Socket s = client) {
             s.setSoTimeout(15000);
+            s.setTcpNoDelay(true);
             java.io.InputStream rawIn = s.getInputStream();
             String reqLine = readAsciiLine(rawIn);
-            if (reqLine == null) { abortTlsOrEmptySocket(s); return; }
-            String[] parts = reqLine.split(" ");
-            String reqBody = readHttpRequestBody(rawIn, readContentLength(rawIn));
-            routeAndWrite(s.getOutputStream(), parts.length > 0 ? parts[0] : "GET",
-                parts.length > 1 ? parts[1] : "/", reqBody);
+            if (reqLine == null) { closeNonHttpSocket(s, rawIn); return; }
+            processHttpRequest(s, rawIn, reqLine);
         } catch (Exception ignored) {}
     }
 
-    private void abortTlsOrEmptySocket(Socket s) {
-        try { s.setSoLinger(true, 0); } catch (Exception ignored) {}
+    private void closeNonHttpSocket(Socket s, java.io.InputStream rawIn) {
+        android.util.Log.i("AuraHttp", s.getRemoteSocketAddress() + " -> [TLS/Empty closed]");
+        finishSocketCleanly(s, rawIn, 60);
+    }
+
+    private void processHttpRequest(Socket s, java.io.InputStream rawIn, String reqLine) throws Exception {
+        android.util.Log.i("AuraHttp", s.getRemoteSocketAddress() + " -> " + reqLine);
+        String[] parts = reqLine.split(" ");
+        String reqBody = readHttpRequestBody(rawIn, readContentLength(rawIn));
+        routeAndWrite(s.getOutputStream(), parts.length > 0 ? parts[0] : "GET",
+            parts.length > 1 ? parts[1] : "/", reqBody);
+        finishSocketCleanly(s, rawIn, 250);
+    }
+
+    private void finishSocketCleanly(Socket s, java.io.InputStream rawIn, int drainMs) {
+        try {
+            s.shutdownOutput();
+            s.setSoTimeout(drainMs);
+            byte[] buf = new byte[512];
+            while (rawIn.read(buf) != -1) {}
+        } catch (Exception ignored) {}
     }
 
     private int readContentLength(java.io.InputStream rawIn) throws Exception {
@@ -213,14 +240,17 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private boolean handleConfigRoute(OutputStream out, Uri uri) throws Exception {
-        String apiKey = optParam(uri, "gemini_api_key", "");
-        String host = optParam(uri, "mac_host", "");
-        String phone = optParam(uri, "phone_host", "");
-        if (!apiKey.isEmpty()) db.setSetting("gemini_api_key", apiKey);
-        if (!host.isEmpty()) db.setSetting("mac_host", host);
-        if (!phone.isEmpty()) db.setSetting("phone_host", phone);
+        saveOptionalSetting(uri, "gemini_api_key");
+        saveOptionalSetting(uri, "mac_host");
+        saveOptionalSetting(uri, "phone_host");
+        saveOptionalSetting(uri, "remote_url");
         writeHttpResponse(out, "application/json", "{\"ok\":true}");
         return true;
+    }
+
+    private void saveOptionalSetting(Uri uri, String key) {
+        String val = optParam(uri, key, "");
+        if (!val.isEmpty()) db.setSetting(key, val);
     }
 
     private boolean handleSetServerRoute(OutputStream out, Uri uri) throws Exception {

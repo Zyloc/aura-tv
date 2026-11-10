@@ -24,14 +24,43 @@ public final class QrRemoteBuilder {
 
     /** Builds the complete glass card with QR code and connection info. */
     public static View buildQrCard(Context ctx, String tvIpAddress, int port) {
-        String url = "http://" + tvIpAddress + ":" + port;
+        return buildQrCard(ctx, tvIpAddress, port, "");
+    }
+
+    public static View buildQrCard(Context ctx, String tvIpAddress, int port, String publicUrl) {
+        String lanUrl = "http://" + tvIpAddress + ":" + port;
+        boolean hasPublic = publicUrl != null && publicUrl.startsWith("http") && publicUrl.length() <= 78;
+        String qrTarget = hasPublic ? publicUrl : lanUrl;
+        String subText = hasPublic ? ("LAN: " + lanUrl + "  \u00B7  Works on Wi-Fi & 5G") : "Scan or visit to control TV";
+        return assembleQrCard(ctx, qrTarget, subText);
+    }
+
+    private static View assembleQrCard(Context ctx, String qrTarget, String subText) {
         LinearLayout card = createCardContainer(ctx);
         card.addView(createTitle(ctx));
-        card.addView(createQrImageView(ctx, url));
-        card.addView(createUrlLabel(ctx, url));
-        card.addView(createSubtitle(ctx));
+        card.addView(createQrImageView(ctx, qrTarget));
+        card.addView(createUrlLabel(ctx, qrTarget));
+        card.addView(createSubtitleText(ctx, subText));
         card.addView(createInstructions(ctx));
         return card;
+    }
+
+    public static void nudgeLanArpTable(String tvIp) {
+        if (tvIp == null || !tvIp.contains(".")) return;
+        String prefix = tvIp.substring(0, tvIp.lastIndexOf('.') + 1);
+        for (int host = 1; host <= 10; host++) {
+            nudgeSingleHostAsync(prefix + host);
+        }
+    }
+
+    private static void nudgeSingleHostAsync(String ip) {
+        new Thread(() -> {
+            try { Runtime.getRuntime().exec(new String[]{"/system/bin/ping", "-c", "1", "-W", "1", ip}).waitFor(); }
+            catch (Throwable ignored) {}
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress(ip, 65432), 350);
+            } catch (Throwable ignored) {}
+        }).start();
     }
 
     /** Returns the device's WiFi or LAN IPv4 address as a dotted string. */
@@ -113,8 +142,8 @@ public final class QrRemoteBuilder {
         return t;
     }
 
-    private static TextView createSubtitle(Context ctx) {
-        TextView t = GlassTheme.makeText(ctx, "Scan or visit to control TV",
+    private static TextView createSubtitleText(Context ctx, String text) {
+        TextView t = GlassTheme.makeText(ctx, text,
                 13f, GlassTheme.TEXT_SECONDARY, GlassTheme.FONT_REGULAR, 1);
         setBottomMargin(ctx, t, 10);
         return t;

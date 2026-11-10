@@ -63,6 +63,7 @@ public class AuraActivity extends Activity implements
     private static volatile AuraActivity sActiveInstance;
     private static volatile boolean sIsInForeground = false;
     private static volatile long sLastActiveWallMs = 0L;
+    private static volatile long sLastOutboundLaunchMs = 0L;
     private static volatile String sLastGlobalVoiceQuery = "";
     private static volatile long sLastGlobalVoiceMs = 0L;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -144,12 +145,25 @@ public class AuraActivity extends Activity implements
         sIsInForeground = true;
         sLastActiveWallMs = System.currentTimeMillis();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        scheduleSilenceBackgroundMediaOnResume();
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
         startHomeSearchHintAnimation();
         scheduleHourlyRecoRefresh();
         updateNavMetadata();
         resetIdleTimer();
         maybeRefreshOnResume();
+    }
+
+    private void scheduleSilenceBackgroundMediaOnResume() {
+        bgPool.submit(() -> silenceBackgroundMediaNow(this));
+        ui.postDelayed(this::silenceIfStillInForeground, 1600L);
+        ui.postDelayed(this::silenceIfStillInForeground, 3400L);
+    }
+
+    private void silenceIfStillInForeground() {
+        if (sIsInForeground && shouldBlockBackgroundPlayback()) {
+            bgPool.submit(() -> silenceBackgroundMediaNow(this));
+        }
     }
 
     private void maybeRefreshOnResume() {
@@ -334,6 +348,63 @@ public class AuraActivity extends Activity implements
         try {
             android.app.ActivityManager am = (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
             if (am != null) am.killBackgroundProcesses("com.google.android.katniss");
+        } catch (Throwable ignored) {}
+    }
+
+    public static void markOutboundAppLaunch() {
+        sLastOutboundLaunchMs = System.currentTimeMillis();
+    }
+
+    public static boolean shouldBlockBackgroundPlayback() {
+        return sIsInForeground && (System.currentTimeMillis() - sLastOutboundLaunchMs) > 2500L;
+    }
+
+    public static void silenceBackgroundMediaNow(Context ctx) {
+        if (ctx == null || !shouldBlockBackgroundPlayback()) return;
+        pauseActiveBackgroundSessions(ctx);
+        stealAndAbandonAudioFocus(ctx);
+        killYouTubeBackgroundSafe(ctx);
+    }
+
+    private static void pauseActiveBackgroundSessions(Context ctx) {
+        try {
+            android.media.session.MediaSessionManager msm =
+                (android.media.session.MediaSessionManager) ctx.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            if (msm == null) return;
+            ComponentName comp = new ComponentName(ctx, MediaProbeService.class);
+            for (android.media.session.MediaController mc : msm.getActiveSessions(comp)) {
+                stopPlayingControllerSafe(mc);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void stopPlayingControllerSafe(android.media.session.MediaController mc) {
+        try {
+            android.media.session.PlaybackState st = mc != null ? mc.getPlaybackState() : null;
+            int s = st != null ? st.getState() : 0;
+            if (s == android.media.session.PlaybackState.STATE_PLAYING
+                    || s == android.media.session.PlaybackState.STATE_BUFFERING) {
+                mc.getTransportControls().pause();
+                mc.getTransportControls().stop();
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void stealAndAbandonAudioFocus(Context ctx) {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            android.media.AudioManager.OnAudioFocusChangeListener l = ch -> {};
+            am.requestAudioFocus(l, android.media.AudioManager.STREAM_MUSIC,
+                android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+            am.abandonAudioFocus(l);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void killYouTubeBackgroundSafe(Context ctx) {
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) am.killBackgroundProcesses("com.google.android.youtube.tv");
         } catch (Throwable ignored) {}
     }
 
@@ -897,7 +968,9 @@ public class AuraActivity extends Activity implements
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
         String ip = QrRemoteBuilder.getTvIpAddress(this);
-        ModalOverlayBuilder.showQrRemoteModal(modalContainer, this, ip, REMOTE_PORT, this);
+        String publicUrl = db != null ? db.getSetting("remote_url", "") : "";
+        bgPool.submit(() -> QrRemoteBuilder.nudgeLanArpTable(ip));
+        ModalOverlayBuilder.showQrRemoteModal(modalContainer, this, ip, REMOTE_PORT, publicUrl, this);
     }
 
     @Override

@@ -781,10 +781,16 @@ public final class ModalOverlayBuilder {
 
     public static void showQrRemoteModal(
             FrameLayout hostContainer, Context ctx, String ip, int port, ModalActions actions) {
+        showQrRemoteModal(hostContainer, ctx, ip, port, "", actions);
+    }
+
+    public static void showQrRemoteModal(
+            FrameLayout hostContainer, Context ctx, String ip, int port,
+            String publicUrl, ModalActions actions) {
         hostContainer.removeAllViews();
         hostContainer.setVisibility(View.VISIBLE);
         FrameLayout backdrop = createQrBackdrop(ctx);
-        LinearLayout wrapper = createQrModalWrapper(ctx, ip, port);
+        LinearLayout wrapper = createQrModalWrapper(ctx, ip, port, publicUrl);
         TextView closeBtn = createQrDoneButton(ctx, hostContainer, actions);
         wrapper.addView(closeBtn);
         backdrop.addView(wrapper);
@@ -792,13 +798,13 @@ public final class ModalOverlayBuilder {
         closeBtn.post(closeBtn::requestFocus);
     }
 
-    private static LinearLayout createQrModalWrapper(Context ctx, String ip, int port) {
+    private static LinearLayout createQrModalWrapper(Context ctx, String ip, int port, String publicUrl) {
         LinearLayout wrapper = new LinearLayout(ctx);
         wrapper.setOrientation(LinearLayout.VERTICAL);
         wrapper.setGravity(Gravity.CENTER_HORIZONTAL);
         wrapper.setLayoutParams(new FrameLayout.LayoutParams(
             dp(ctx, 420), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
-        View qrCard = QrRemoteBuilder.buildQrCard(ctx, ip, port);
+        View qrCard = QrRemoteBuilder.buildQrCard(ctx, ip, port, publicUrl);
         qrCard.setFocusable(false);
         wrapper.addView(qrCard, GlassTheme.matchWrapParams());
         return wrapper;

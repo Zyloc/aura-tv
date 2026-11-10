@@ -29,6 +29,7 @@ public final class MediaDeepLinkLauncher {
     public static void launchYouTubeTrailer(Context ctx, JSONObject item) {
         String query = buildTrailerSearchQuery(item);
         if (query.isEmpty() || ctx == null) return;
+        AuraActivity.markOutboundAppLaunch();
         if (tryYouTubeTrailerIntent(ctx, YOUTUBE_TV_PKG, query)) return;
         if (tryYouTubeTrailerIntent(ctx, SMARTTUBE_PKG, query)) return;
         tryYouTubeTrailerIntent(ctx, "", query);
@@ -61,6 +62,7 @@ public final class MediaDeepLinkLauncher {
 
     public static void launchMediaItem(Context ctx, AuraDb db, JSONObject item) {
         if (item == null) return;
+        AuraActivity.markOutboundAppLaunch();
         String cleanTitle = extractCleanTitle(item);
         String pkg = resolvePackage(item);
         String uri = resolveLaunchUri(db, item, cleanTitle);

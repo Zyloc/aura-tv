@@ -223,7 +223,16 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
 
         @Override
         public void onPlaybackStateChanged(PlaybackState state) {
+            if (stopIfPlayingBehindAuraHome(state)) return;
             handleStateTransition(state);
+        }
+
+        private boolean stopIfPlayingBehindAuraHome(PlaybackState state) {
+            if (state == null || state.getState() != PlaybackState.STATE_PLAYING) return false;
+            if (!AuraActivity.shouldBlockBackgroundPlayback()) return false;
+            try { mc.getTransportControls().pause(); mc.getTransportControls().stop(); } catch (Throwable ignored) {}
+            AuraActivity.silenceBackgroundMediaNow(ctx);
+            return true;
         }
 
         @Override
