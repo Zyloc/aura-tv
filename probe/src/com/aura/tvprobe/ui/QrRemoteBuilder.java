@@ -292,10 +292,11 @@ public final class QrRemoteBuilder {
         for (int i = 0; i <= 8; i++) {
             lockCell(l, 8, i, s);
             lockCell(l, i, 8, s);
+        }
+        for (int i = 0; i < 8; i++) {
             lockCell(l, 8, s - 1 - i, s);
             lockCell(l, s - 1 - i, 8, s);
         }
-        lockCell(l, s - 8, 8, s);
     }
 
     // ── Data stream building (byte mode) ─────────────────────────────────

@@ -124,15 +124,19 @@ public class MediaProbeService extends NotificationListenerService {
 
     private void handleClient(Socket client) {
         try (Socket s = client) {
-            s.setSoTimeout(40000);
+            s.setSoTimeout(15000);
             java.io.InputStream rawIn = s.getInputStream();
             String reqLine = readAsciiLine(rawIn);
-            if (reqLine == null) return;
+            if (reqLine == null) { abortTlsOrEmptySocket(s); return; }
             String[] parts = reqLine.split(" ");
             String reqBody = readHttpRequestBody(rawIn, readContentLength(rawIn));
             routeAndWrite(s.getOutputStream(), parts.length > 0 ? parts[0] : "GET",
                 parts.length > 1 ? parts[1] : "/", reqBody);
         } catch (Exception ignored) {}
+    }
+
+    private void abortTlsOrEmptySocket(Socket s) {
+        try { s.setSoLinger(true, 0); } catch (Exception ignored) {}
     }
 
     private int readContentLength(java.io.InputStream rawIn) throws Exception {
@@ -163,10 +167,11 @@ public class MediaProbeService extends NotificationListenerService {
         int b;
         while ((b = in.read()) != -1) {
             if (b == '\n') break;
+            if (bos.size() == 0 && (b == 0x16 || (b < 0x20 && b != '\r' && b != '\t'))) return null;
             if (b != '\r') bos.write(b);
+            if (bos.size() > 4096) return null;
         }
-        if (b == -1 && bos.size() == 0) return null;
-        return bos.toString("UTF-8");
+        return (b == -1 && bos.size() == 0) ? null : bos.toString("UTF-8");
     }
 
     private void routeAndWrite(OutputStream out, String method, String fullPath, String reqBody) throws Exception {
@@ -184,6 +189,7 @@ public class MediaProbeService extends NotificationListenerService {
             writeHttpResponse(out, "text/html; charset=utf-8", WebUiHtml.PAGE);
             return true;
         }
+        if ("/favicon.ico".equals(p)) { writeHttpResponse(out, "image/x-icon", ""); return true; }
         if ("/open-ui".equals(p)) return handleOpenUiRoute(out);
         if ("/api/set-profile".equals(p)) return handleSetProfileRoute(out, uri);
         if ("/api/config".equals(p)) return handleConfigRoute(out, uri);
