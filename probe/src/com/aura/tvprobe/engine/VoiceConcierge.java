@@ -133,7 +133,7 @@ public class VoiceConcierge {
         String contextualQuery = buildContextualQuery(turns, userText);
         int minModernYear = resolveSearchMinYear(contextualQuery, currentYear, JustWatchGraph.getDefaultMinModernYear());
         List<String> cfPool = runRetrievalSteps(profileId, contextualQuery, minModernYear);
-        AgentStatusNarrator.publishLiveStep("Ranking top matches for " + db.getProfileLabel(profileId));
+        AgentStatusNarrator.publishLiveStep("Curating top matches");
         String prompt = buildPrompt(profileId, turns, userText, activeFilters, collectWatchedNames(profileId), cfPool, minModernYear, currentYear, epoch);
         persistTurnResult(profileId, turns, userText, contextualQuery, activeFilters, cfPool, ai.callGeminiJson(prompt), minModernYear, currentYear, epoch);
         return db.getVoiceSession(profileId);
@@ -244,10 +244,10 @@ public class VoiceConcierge {
         JSONObject parsed, String userText, List<String> activeFilters,
         int minModernYear, int currentYear, int epoch, JSONObject out
     ) throws Exception {
+        AgentStatusNarrator.publishLiveStep("Preparing posters & links");
         out.put("reply", parsed.optString("reply", "Updated picks for your search."));
         int minSearchYear = resolveSearchMinYear(userText, currentYear, minModernYear >= currentYear - 1 ? minModernYear : 1950);
-        JSONArray enriched = ai.enrichAll(parsed.optJSONArray("results"), minSearchYear, currentYear);
-        JSONArray constrained = applyConversationalConstraints(db.filterOutWatched(enriched), userText, activeFilters);
+        JSONArray constrained = applyConversationalConstraints(db.filterOutWatched(ai.enrichAll(parsed.optJSONArray("results"), minSearchYear, currentYear)), userText, activeFilters);
         boolean enforceStrictCooldown = isFollowUpRefinement(userText) || AiRecommender.isGenericNextOrTasteQuery(userText);
         out.put("results", enforceStrictCooldown ? ImpressionTracker.filterOutRecentImpressions(constrained, epoch, ImpressionTracker.loadActiveImpressions(db), 3) : constrained);
         JSONArray parsedFollowUps = parsed.optJSONArray("follow_ups");

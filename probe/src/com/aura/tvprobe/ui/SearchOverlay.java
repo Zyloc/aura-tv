@@ -54,32 +54,13 @@ public final class SearchOverlay {
     private static final int POSTER_H = 204;
 
     public static final String[] MULTILINGUAL_HINTS = {
-        "Search movies, shows, or ask by mood\u2026",
-        "Ask AI \u00B7 'Dark sci-fi like Severance'",
-        "Ask AI \u00B7 'Gripping crime thrillers on Netflix'"
+        "Search movies and shows\u2026"
     };
 
     public static List<String> getHintsForProfile(AuraDb db, String profileId) {
         List<String> hints = new ArrayList<>();
-        for (String h : MULTILINGUAL_HINTS) hints.add(h);
-        if (db == null) return hints;
-        String langs = (db.getSetting("preferred_langs", "English") + " "
-            + db.getProfileTaste(profileId) + " "
-            + db.getActiveFilters(profileId).toString()).toLowerCase();
-        appendRegionalHints(hints, langs);
+        hints.add(MULTILINGUAL_HINTS[0]);
         return hints;
-    }
-
-    private static void appendRegionalHints(List<String> hints, String langs) {
-        if (langs.contains("hindi")) {
-            hints.add("\u0939\u093F\u0902\u0926\u0940 \u092E\u0947\u0902 \u092A\u0942\u091B\u0947\u0902 \u00B7 '\u092E\u093F\u0930\u094D\u091C\u093C\u093E\u092A\u0941\u0930 \u091C\u0948\u0938\u0940 \u0915\u094D\u0930\u093E\u0907\u092E \u0925\u094D\u0930\u093F\u0932\u0930'");
-        }
-        if (langs.contains("tamil")) {
-            hints.add("\u0BA4\u0BAE\u0BBF\u0BB4\u0BCD \u00B7 'Top rated Tamil crime thrillers'");
-        }
-        if (langs.contains("telugu")) {
-            hints.add("\u0C24\u0C46\u0C32\u0C41\u0C17\u0C41 \u00B7 'High IMDb Telugu suspense movies'");
-        }
     }
 
     public interface SearchCallback {
@@ -97,13 +78,13 @@ public final class SearchOverlay {
         root.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         root.setClickable(true);
         root.addView(buildContent(ctx, root, cb));
+        root.addView(buildLoadingBanner(ctx));
         return root;
     }
 
     public static void show(FrameLayout overlay, Context ctx, boolean focusInputBar) {
         overlay.setVisibility(View.VISIBLE);
         animateIn(overlay);
-        startMultilingualHintCycle(overlay);
         if (focusInputBar) {
             View inputBox = overlay.findViewWithTag(TAG_INPUT_BOX);
             if (inputBox != null) inputBox.post(inputBox::requestFocus);
@@ -112,45 +93,19 @@ public final class SearchOverlay {
         }
     }
 
-    private static void startMultilingualHintCycle(FrameLayout overlay) {
-        EditText et = findTagged(overlay, TAG_EDIT_TEXT);
-        if (et == null) return;
-        Runnable[] holder = new Runnable[1];
-        holder[0] = () -> tickMultilingualHint(overlay, et, holder[0]);
-        et.postDelayed(holder[0], 3600);
-    }
-
-    private static void tickMultilingualHint(FrameLayout overlay, EditText et, Runnable self) {
-        if (overlay.getVisibility() != View.VISIBLE) return;
-        View resetBtn = overlay.findViewWithTag(TAG_RESET_BTN);
-        boolean inThread = resetBtn != null && resetBtn.getVisibility() == View.VISIBLE;
-        if (!inThread && !et.hasFocus() && et.getText().length() == 0) {
-            cycleHintOnEditText(overlay, et);
-        }
-        et.postDelayed(self, 3600);
-    }
-
-    private static void cycleHintOnEditText(FrameLayout overlay, EditText et) {
-        AuraDb db = AuraDb.getInstance(overlay.getContext());
-        List<String> hints = getHintsForProfile(db, db.getSetting("active_profile", AuraDb.DEFAULT_PROFILE));
-        Object tagObj = et.getTag(TAG_HINT_IDX);
-        int idx = (tagObj instanceof Integer) ? ((Integer) tagObj + 1) % hints.size() : 0;
-        et.setTag(TAG_HINT_IDX, idx);
-        fadeToNextHint(et, hints.get(idx));
-    }
-
-    private static void fadeToNextHint(EditText et, String nextHint) {
-        et.animate().alpha(0.25f).setDuration(220).withEndAction(() -> {
-            et.setHint(nextHint);
-            et.animate().alpha(1f).setDuration(260).start();
-        }).start();
-    }
-
     public static void dismiss(FrameLayout overlay) {
         resetInputOnDismiss(overlay, findTagged(overlay, TAG_EDIT_TEXT));
+        clearResultsAndChipsOnDismiss(overlay);
+        animateOut(overlay);
+    }
+
+    private static void clearResultsAndChipsOnDismiss(FrameLayout overlay) {
         View resetBtn = overlay.findViewWithTag(TAG_RESET_BTN);
         if (resetBtn != null) resetBtn.setVisibility(View.GONE);
-        animateOut(overlay);
+        LinearLayout gridRows = findTagged(overlay, TAG_RESULTS);
+        if (gridRows != null) gridRows.removeAllViews();
+        LinearLayout chipsRow = findTagged(overlay, TAG_CHIPS);
+        if (chipsRow != null) chipsRow.removeAllViews();
     }
 
     private static void resetInputOnDismiss(FrameLayout overlay, EditText et) {
@@ -240,9 +195,7 @@ public final class SearchOverlay {
     private static void updateConversationInputHint(EditText et, String latestUserQuery) {
         if (et == null || et.hasFocus()) return;
         et.setText("");
-        et.setHint(!latestUserQuery.isEmpty()
-            ? (latestUserQuery + "  \u00B7  Ask follow-up in any language\u2026")
-            : MULTILINGUAL_HINTS[0]);
+        et.setHint(MULTILINGUAL_HINTS[0]);
     }
 
     public static void setResults(FrameLayout overlay, JSONArray results,
@@ -250,7 +203,7 @@ public final class SearchOverlay {
         LinearLayout gridRows = findTagged(overlay, TAG_RESULTS);
         if (gridRows == null) return;
         populatePosterGrid(overlay, gridRows, results, ctx, cb);
-        if (overlay.getVisibility() == View.VISIBLE) {
+        if (overlay.getVisibility() == View.VISIBLE && results != null && results.length() > 0) {
             focusFirstPoster(overlay);
         }
     }
@@ -281,7 +234,6 @@ public final class SearchOverlay {
         bodyFrame.setClipToPadding(false);
         bodyFrame.addView(buildResultsScroll(ctx), new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        bodyFrame.addView(buildLoadingBanner(ctx));
         return bodyFrame;
     }
 
@@ -573,22 +525,11 @@ public final class SearchOverlay {
 
     private static List<String> buildFollowUpChipList(List<String> aiChips) {
         List<String> list = new ArrayList<>();
-        if (aiChips != null) {
-            for (String c : aiChips) {
-                if (c != null && !c.trim().isEmpty() && list.size() < 3) list.add(c.trim());
-            }
-        }
-        for (String f : new String[]{"Only on Netflix", "Shorter under 2h", "IMDb 8.0+"}) {
-            if (list.size() < 3 && !containsIgnoreCase(list, f)) list.add(f);
+        if (aiChips == null) return list;
+        for (String c : aiChips) {
+            if (c != null && !c.trim().isEmpty() && list.size() < 3) list.add(c.trim());
         }
         return list;
-    }
-
-    private static boolean containsIgnoreCase(List<String> list, String target) {
-        for (String s : list) {
-            if (s.equalsIgnoreCase(target)) return true;
-        }
-        return false;
     }
 
     private static TextView buildFollowUpChipView(FrameLayout overlay, LinearLayout row, String text,

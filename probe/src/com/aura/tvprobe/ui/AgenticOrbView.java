@@ -50,22 +50,22 @@ public final class AgenticOrbView extends View {
 
     private void initWavePaints(float d) {
         wavePaintA.setStyle(Paint.Style.STROKE);
-        wavePaintA.setStrokeWidth(2.4f * d);
-        wavePaintA.setColor(Color.argb(215, 129, 140, 248)); // Soft Indigo
+        wavePaintA.setStrokeWidth(3.2f * d);
+        wavePaintA.setColor(Color.argb(225, 129, 140, 248)); // Soft Indigo
         wavePaintB.setStyle(Paint.Style.STROKE);
-        wavePaintB.setStrokeWidth(2.0f * d);
-        wavePaintB.setColor(Color.argb(190, 56, 189, 248));  // Soft Cyan
+        wavePaintB.setStrokeWidth(2.6f * d);
+        wavePaintB.setColor(Color.argb(200, 56, 189, 248));  // Soft Cyan
     }
 
     private void initArcAndNodePaints(float d) {
         arcPaint.setStyle(Paint.Style.STROKE);
         arcPaint.setStrokeCap(Paint.Cap.ROUND);
-        arcPaint.setStrokeWidth(2.6f * d);
-        arcPaint.setColor(Color.argb(230, 192, 132, 252));   // Soft Violet
+        arcPaint.setStrokeWidth(3.5f * d);
+        arcPaint.setColor(Color.argb(235, 192, 132, 252));   // Soft Violet
         corePaint.setStyle(Paint.Style.FILL);
         corePaint.setColor(Color.WHITE);
         nodePaint.setStyle(Paint.Style.FILL);
-        nodePaint.setColor(Color.argb(235, 226, 232, 240));
+        nodePaint.setColor(Color.argb(240, 226, 232, 240));
     }
 
     @Override
@@ -246,21 +246,28 @@ public final class AgenticOrbView extends View {
         col.setClipChildren(false);
         col.setClipToPadding(false);
         col.setLayoutParams(new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
         return col;
     }
 
     private static void addOrbChild(Context ctx, LinearLayout col) {
         AgenticOrbView orb = new AgenticOrbView(ctx);
-        int orbSize = GlassTheme.dp(ctx, 92);
+        int orbSize = computeScreenRelativeOrbSize(ctx);
         LinearLayout.LayoutParams orbLp = new LinearLayout.LayoutParams(orbSize, orbSize);
-        orbLp.bottomMargin = GlassTheme.dp(ctx, 14);
+        orbLp.bottomMargin = GlassTheme.dp(ctx, 18);
         col.addView(orb, orbLp);
+    }
+
+    public static int computeScreenRelativeOrbSize(Context ctx) {
+        android.util.DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+        int minDim = Math.min(dm.widthPixels, dm.heightPixels);
+        if (minDim <= 0) return GlassTheme.dp(ctx, 190);
+        return Math.max(GlassTheme.dp(ctx, 170), Math.round(minDim * 0.35f));
     }
 
     private static void addMainStatusChild(Context ctx, LinearLayout col, int statusTextTag) {
         TextView mainTxt = GlassTheme.makeText(ctx,
-            "Finding best matches\u2026", 14.0f,
+            "Finding best matches\u2026", 16.0f,
             Color.WHITE, GlassTheme.FONT_BOLD, 1);
         mainTxt.setGravity(Gravity.CENTER);
         if (statusTextTag != 0) mainTxt.setTag(statusTextTag);

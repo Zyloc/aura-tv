@@ -516,6 +516,7 @@ public class AuraActivity extends Activity implements
         NavPanelBuilder.bindMainContentForAnimation(navPanel, mainScroll);
         rootLayout.addView(navPanel);
         addOverlays();
+        clearRetainedSearchState();
         setContentView(rootLayout);
     }
 
@@ -626,17 +627,9 @@ public class AuraActivity extends Activity implements
     }
 
     private void populateFreshSearchStudio() {
-        JSONArray results = db.getProfileRecommendations(activeProfile);
         SearchOverlay.setConversationTurns(searchOverlay, new JSONArray(), this);
-        SearchOverlay.addMessage(searchOverlay, "assistant", resolveInitialStudioReply(""), this);
-        SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
-        SearchOverlay.setResults(searchOverlay, results, this, this);
-    }
-
-    private String resolveInitialStudioReply(String reply) {
-        return !reply.isEmpty()
-            ? reply
-            : "Ask any question or click a follow-up chip below to refine your recommendations across your streaming apps.";
+        SearchOverlay.setFollowUps(searchOverlay, new ArrayList<>(), this, this);
+        SearchOverlay.setResults(searchOverlay, new JSONArray(), this, this);
     }
 
     private void hideKeyboard(View v) {
@@ -1150,7 +1143,7 @@ public class AuraActivity extends Activity implements
         JSONArray sim = ImpressionTracker.filterOutRecentImpressions(
             rawSim, epoch, ImpressionTracker.loadActiveImpressions(db), 4);
         ImpressionTracker.recordJsonArrayImpressions(db, epoch, sim);
-        enforceMinLoadingDuration(startMs, 3200L);
+        enforceMinLoadingDuration(startMs, 600L);
         persistSimilarVoiceSession(seed, sim);
         ui.post(() -> presentSimilarResults(sim));
     }
@@ -1248,14 +1241,18 @@ public class AuraActivity extends Activity implements
         if (AmbientScreensaverOverlay.isVisible(screensaverOverlay)) {
             AmbientScreensaverOverlay.dismiss(screensaverOverlay);
         }
-        if (searchLabel != null) {
-            searchLabel.setText(q);
-            searchLabel.setTextColor(GlassTheme.TEXT_PRIMARY);
-        }
+        resetTopBarSearchLabel();
         hideKeyboard(rootLayout);
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
         ensureSearchOverlayShowingLoading();
+    }
+
+    private void resetTopBarSearchLabel() {
+        if (searchLabel != null) {
+            searchLabel.setText(SearchOverlay.MULTILINGUAL_HINTS[0]);
+            searchLabel.setTextColor(GlassTheme.TEXT_SECONDARY);
+        }
     }
 
     private void ensureSearchOverlayShowingLoading() {
@@ -1263,13 +1260,13 @@ public class AuraActivity extends Activity implements
             SearchOverlay.show(searchOverlay, this, false);
         }
         SearchOverlay.setLoading(searchOverlay, true,
-            "Understanding what you\u2019re in the mood to watch\u2026");
+            "Understanding your search\u2026");
     }
 
     private void submitSearchQueryTurn(String q, long startMs) {
         bgPool.submit(() -> {
             JSONObject res = voice.handleTurn(activeProfile, q, false, this::postSearchProgress);
-            enforceMinLoadingDuration(startMs, 1600L);
+            enforceMinLoadingDuration(startMs, 600L);
             ui.post(() -> displaySearchResults(res));
         });
     }
@@ -1337,19 +1334,15 @@ public class AuraActivity extends Activity implements
 
     private void clearRetainedSearchState() {
         lastSearchQuery = "";
-        if (searchLabel != null) {
-            searchLabel.setText(SearchOverlay.MULTILINGUAL_HINTS[0]);
-            searchLabel.setTextColor(GlassTheme.TEXT_SECONDARY);
-        }
+        resetTopBarSearchLabel();
         db.saveVoiceSession(activeProfile, new JSONObject());
+        db.setSetting("traversal_chips_" + activeProfile, "");
     }
 
     private void applyResetConversationUi() {
         SearchOverlay.setConversationTurns(searchOverlay, new JSONArray(), this);
-        SearchOverlay.addMessage(searchOverlay, "assistant",
-            "Started a fresh conversation topic. Type a query above or pick a chip below.", this);
-        SearchOverlay.setFollowUps(searchOverlay, db.getTraversalChips(activeProfile), this, this);
-        SearchOverlay.setResults(searchOverlay, db.getProfileRecommendations(activeProfile), this, this);
+        SearchOverlay.setFollowUps(searchOverlay, new ArrayList<>(), this, this);
+        SearchOverlay.setResults(searchOverlay, new JSONArray(), this, this);
     }
 
     private void saveFocusBeforeOverlay() {

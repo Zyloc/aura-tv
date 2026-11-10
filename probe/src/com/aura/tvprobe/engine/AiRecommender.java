@@ -118,9 +118,9 @@ public class AiRecommender {
             String profileId, JSONObject seedPlan, int minModernYear, int currentYear, int epoch) {
         final List<JSONObject> pool = Collections.synchronizedList(new ArrayList<>());
         final UserTasteProfile taste = new UserTasteProfile(db, profileId, epoch);
+        AgentStatusNarrator.publishLiveStep("Gathering candidates across apps");
         runParallelCandidateRetrieval(taste, seedPlan, minModernYear, currentYear, initSeenTitleKeys(profileId, taste), pool);
         List<JSONObject> deMerged = AgenticSearchOrchestrator.deMergeCandidates(db, profileId, "", db.getActiveFilters(profileId), seedPlan, minModernYear, pool, false);
-        taste.ensureDefaultGenreWeightsIfEmpty();
         scoreAndRerankPool(deMerged, taste, currentYear);
         List<JSONObject> slate = filterAndRerankPoolWithLlm(profileId, deMerged, epoch);
         ImpressionTracker.recordSlateImpressions(db, epoch, slate.subList(0, Math.min(16, slate.size())));
@@ -312,6 +312,7 @@ public class AiRecommender {
     }
 
     private void scoreAndRerankPool(List<JSONObject> pool, UserTasteProfile taste, int currentYear) {
+        taste.ensureDefaultGenreWeightsIfEmpty();
         for (JSONObject item : pool) {
             double score = HybridScorer.computeHybridScore(item, taste, currentYear);
             try { item.put("sota_score", score); } catch (Exception ignored) {}
@@ -693,9 +694,10 @@ public class AiRecommender {
         Map<String, ImpressionTracker.ImpressionRecord> impressions = ImpressionTracker.loadActiveImpressions(db);
         List<JSONObject> baseSlate = SlateAllocator.allocateBalancedSlate(pool, epoch, impressions);
         if (getApiKey().isEmpty() || pool.size() < 6) return baseSlate;
-        List<JSONObject> freshPool = selectFreshPoolForLlm(pool, epoch, impressions, 38);
-        String prompt = buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(freshPool, 38), epoch);
-        String raw = callGeminiJson(prompt);
+        AgentStatusNarrator.publishLiveStep("Curating personalized picks");
+        List<JSONObject> freshPool = selectFreshPoolForLlm(pool, epoch, impressions, 24);
+        String raw = callGeminiJson(buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(freshPool, 24), epoch));
+        AgentStatusNarrator.publishLiveStep("Publishing fresh recommendations");
         List<JSONObject> llmFiltered = applyLlmFilteredSlate(freshPool, raw);
         return llmFiltered.size() >= 8 ? llmFiltered : baseSlate;
     }
@@ -832,8 +834,8 @@ public class AiRecommender {
             "Task:\n" +
             "- Filter out any candidates from the pool that are semantically irrelevant to the user's watched shows' storylines, genres, and Guide AI.\n" +
             "- Include 2 to 4 high-affinity candidates tagged with Anchor=LIVE_TV_TRENDING(...) so the slate blends personal co-watch matches with shows currently trending/featured on the user's TV apps.\n" +
-            "- Select & rank the top 22 candidates from the pool that genuinely match what '" + profileName + "' enjoys watching.\n" +
-            "- Return ONLY a JSON object with key 'results': an array of objects, each with keys 'title' (exact title from the pool) and 'reason' (18-26 words explaining specifically how its plot/theme connects to one of their watched shows).";
+            "- Select & rank the top 16 candidates from the pool that genuinely match what '" + profileName + "' enjoys watching.\n" +
+            "- Return ONLY a JSON object with key 'results': an array of objects, each with keys 'title' (exact title from the pool) and 'reason' (12-18 words explaining specifically how its plot/theme connects to one of their watched shows).";
     }
 
     public JSONArray enrichAll(JSONArray raw) {
