@@ -36,6 +36,11 @@ public class AuraDb extends SQLiteOpenHelper {
         return sInstance;
     }
 
+    AuraDb(boolean inMemoryTest) {
+        super(null, null, null, 8);
+        this.appCtx = null;
+    }
+
     public AuraDb(Context ctx) {
         super(ctx.getApplicationContext(), "aura_tv_local.db", null, 8);
         setWriteAheadLoggingEnabled(true);

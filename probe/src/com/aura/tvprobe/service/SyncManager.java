@@ -107,13 +107,10 @@ public class SyncManager {
     private void ingestRemoteHistory(JSONArray hist, String profile) {
         if (hist == null || db.listHistory(profile).length() >= 10) return;
         android.database.sqlite.SQLiteDatabase wdb = db.getWritableDatabase();
+        if (wdb == null) { upsertEligibleHistoryItems(hist); db.enforceStorageCap(); return; }
         wdb.beginTransaction();
-        try {
-            upsertEligibleHistoryItems(hist);
-            wdb.setTransactionSuccessful();
-        } finally {
-            wdb.endTransaction();
-        }
+        try { upsertEligibleHistoryItems(hist); wdb.setTransactionSuccessful(); }
+        finally { wdb.endTransaction(); }
         db.enforceStorageCap();
     }
 

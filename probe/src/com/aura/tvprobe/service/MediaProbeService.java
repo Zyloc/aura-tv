@@ -170,12 +170,16 @@ public class MediaProbeService extends NotificationListenerService {
             if (reqLine == null) { closeNonHttpSocket(s); return; }
             processHttpRequest(s, rawIn, reqLine);
         } catch (Exception e) {
-            android.util.Log.w("AuraHttp", "Client err: " + e.getMessage());
+            logSafe("Client err: " + e.getMessage());
         }
     }
 
+    private static void logSafe(String msg) {
+        try { android.util.Log.i("AuraHttp", msg); } catch (Throwable ignored) {}
+    }
+
     private void closeNonHttpSocket(Socket s) {
-        android.util.Log.i("AuraHttp", s.getRemoteSocketAddress() + " -> [TLS/Empty rejected]");
+        logSafe(s.getRemoteSocketAddress() + " -> [TLS/Empty rejected]");
         try {
             s.getOutputStream().write(new byte[]{0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28});
             s.getOutputStream().flush();
@@ -184,7 +188,7 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private void processHttpRequest(Socket s, java.io.InputStream rawIn, String reqLine) throws Exception {
-        android.util.Log.i("AuraHttp", s.getRemoteSocketAddress() + " -> " + reqLine);
+        logSafe(s.getRemoteSocketAddress() + " -> " + reqLine);
         String[] parts = reqLine.split(" ");
         String reqBody = readHttpRequestBody(rawIn, readContentLength(rawIn));
         routeAndWrite(s.getOutputStream(), parts.length > 0 ? parts[0] : "GET",

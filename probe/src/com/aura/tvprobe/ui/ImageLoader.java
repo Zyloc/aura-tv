@@ -34,20 +34,33 @@ public class ImageLoader {
     private static final int ULTRA_HERO_H = 540;
     private static final int MAX_DISK_FILES = 180;
 
-    private static final LruCache<String, Bitmap> MEM_CACHE = new LruCache<String, Bitmap>(8192) {
-        @Override
-        protected int sizeOf(String key, Bitmap value) {
-            return Math.max(1, value.getAllocationByteCount() / 1024);
-        }
-    };
+    private static final LruCache<String, Bitmap> MEM_CACHE = createMemCacheSafe();
 
     private static final ExecutorService POOL = Executors.newFixedThreadPool(2, ImageLoader::createLoaderThread);
 
-    private static final Handler UI = new Handler(Looper.getMainLooper());
+    private static final Handler UI = createUiHandlerSafe();
+
+    private static LruCache<String, Bitmap> createMemCacheSafe() {
+        try {
+            return new LruCache<String, Bitmap>(8192) {
+                @Override
+                protected int sizeOf(String key, Bitmap value) {
+                    return Math.max(1, value.getAllocationByteCount() / 1024);
+                }
+            };
+        } catch (Throwable ignored) { return null; }
+    }
+
+    private static Handler createUiHandlerSafe() {
+        try {
+            Looper main = Looper.getMainLooper();
+            return main != null ? new Handler(main) : null;
+        } catch (Throwable ignored) { return null; }
+    }
 
     private static Thread createLoaderThread(Runnable r) {
         Thread t = new Thread(() -> {
-            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+            try { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); } catch (Throwable ignored) {}
             r.run();
         }, "AuraPosterLoader");
         t.setDaemon(true);
@@ -57,7 +70,7 @@ public class ImageLoader {
     public static void setQualityMode(String mode) {
         if (mode != null && !mode.equalsIgnoreCase(sQualityMode)) {
             sQualityMode = mode.toLowerCase();
-            MEM_CACHE.evictAll();
+            if (MEM_CACHE != null) MEM_CACHE.evictAll();
         }
     }
 
@@ -100,7 +113,7 @@ public class ImageLoader {
     }
 
     public static void trimMemory() {
-        MEM_CACHE.evictAll();
+        if (MEM_CACHE != null) MEM_CACHE.evictAll();
     }
 
     public static void clear(final ImageView iv) {
@@ -138,7 +151,7 @@ public class ImageLoader {
 
     private static boolean applyCachedHeroIfAvailable(ImageView iv, String hiResUrl) {
         String heroKey = "hero:" + sQualityMode + ":" + hiResUrl;
-        Bitmap cachedHero = MEM_CACHE.get(heroKey);
+        Bitmap cachedHero = MEM_CACHE != null ? MEM_CACHE.get(heroKey) : null;
         if (cachedHero != null && !cachedHero.isRecycled()) {
             iv.setTag(TAG_CACHE_KEY, heroKey);
             iv.setImageBitmap(cachedHero);
@@ -148,7 +161,7 @@ public class ImageLoader {
     }
 
     private static void applyCachedRailPreview(ImageView iv, String hiResUrl) {
-        Bitmap cachedRail = MEM_CACHE.get("rail:" + sQualityMode + ":" + hiResUrl);
+        Bitmap cachedRail = MEM_CACHE != null ? MEM_CACHE.get("rail:" + sQualityMode + ":" + hiResUrl) : null;
         iv.setImageBitmap((cachedRail != null && !cachedRail.isRecycled()) ? cachedRail : null);
     }
 
@@ -167,7 +180,7 @@ public class ImageLoader {
     }
 
     private static boolean applyMemCacheHit(ImageView iv, String cacheKey, String prefix) {
-        Bitmap cached = MEM_CACHE.get(cacheKey);
+        Bitmap cached = MEM_CACHE != null ? MEM_CACHE.get(cacheKey) : null;
         if (cached == null || cached.isRecycled()) return false;
         if (!prefix.startsWith("hero:")) {
             iv.animate().cancel();
@@ -183,8 +196,8 @@ public class ImageLoader {
         Bitmap bmp = loadWithFallback(ctx, primaryUrl, fallbackUrl, reqW, reqH);
         if (bmp == null) return;
         try { bmp.prepareToDraw(); } catch (Throwable ignored) {}
-        MEM_CACHE.put(cacheKey, bmp);
-        UI.post(() -> deliverLoadedBitmap(iv, cacheKey, prefix, bmp));
+        if (MEM_CACHE != null) MEM_CACHE.put(cacheKey, bmp);
+        if (UI != null) UI.post(() -> deliverLoadedBitmap(iv, cacheKey, prefix, bmp));
     }
 
     private static Bitmap loadWithFallback(Context ctx, String primaryUrl, String fallbackUrl, int reqW, int reqH) {

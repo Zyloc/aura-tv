@@ -23,6 +23,13 @@ public final class AuraTestSuiteRunner {
         LlmRankingBenchmarkTest.class,
         MultiDeviceProfileAndOrchestratorTest.class,
         SystemResourceMonitorTest.class,
+        AuraDbAndStorageUnitTest.class,
+        AiRecommenderEngineTest.class,
+        VoiceConciergeAndCompanionUnitTest.class,
+        InAppVoiceAndDeepLinkUnitTest.class,
+        ServiceHttpMdnsAndSessionUnitTest.class,
+        UiPureLogicAndGraphParserTest.class,
+        DeepPipelineAndSessionUnitTest.class,
         // Integration Tests
         RecommendationPipelineIntegrationTest.class,
         VoiceAndContinueWatchingIntegrationTest.class,
@@ -30,26 +37,38 @@ public final class AuraTestSuiteRunner {
     };
 
     public static void main(String[] args) {
+        printBanner();
+        int[] counts = runAllSuites();
+        printSummaryAndExit(counts[0], counts[1]);
+    }
+
+    private static void printBanner() {
         System.out.println("==========================================================");
         System.out.println("  AURA TV · PRODUCTION UNIT & INTEGRATION TEST SUITE");
         System.out.println("==========================================================");
-        int totalRun = 0;
-        int totalFailed = 0;
+    }
 
+    private static int[] runAllSuites() {
+        int totalRun = 0, totalFailed = 0;
         for (Class<?> testClass : TEST_CLASSES) {
             Result res = JUnitCore.runClasses(testClass);
-            int run = res.getRunCount();
-            int fail = res.getFailureCount();
-            totalRun += run;
-            totalFailed += fail;
-            String status = (fail == 0) ? "PASS" : "FAIL";
-            System.out.printf("  [%s] %-42s (%d tests, %d ms)%n",
-                status, testClass.getSimpleName(), run, res.getRunTime());
-            for (Failure f : res.getFailures()) {
-                System.out.println("         -> " + f.getTestHeader() + ": " + f.getMessage());
-            }
+            totalRun += res.getRunCount();
+            totalFailed += res.getFailureCount();
+            reportClassResult(testClass, res);
         }
+        return new int[]{totalRun, totalFailed};
+    }
 
+    private static void reportClassResult(Class<?> testClass, Result res) {
+        String status = (res.getFailureCount() == 0) ? "PASS" : "FAIL";
+        System.out.printf("  [%s] %-42s (%d tests, %d ms)%n",
+            status, testClass.getSimpleName(), res.getRunCount(), res.getRunTime());
+        for (Failure f : res.getFailures()) {
+            System.out.println("         -> " + f.getTestHeader() + ": " + f.getMessage());
+        }
+    }
+
+    private static void printSummaryAndExit(int totalRun, int totalFailed) {
         System.out.println("----------------------------------------------------------");
         System.out.printf("  TOTAL: %d tests executed, %d passed, %d failed%n",
             totalRun, totalRun - totalFailed, totalFailed);

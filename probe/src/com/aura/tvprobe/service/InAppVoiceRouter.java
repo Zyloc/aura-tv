@@ -293,9 +293,11 @@ public final class InAppVoiceRouter {
 
     public static boolean isGoHomePhrase(String low) {
         if (low == null) return false;
-        return low.equals("home") || low.equals("go home") || low.equals("go to home")
-            || low.equals("home screen") || low.equals("launcher") || low.equals("go to launcher")
-            || low.contains("open aura") || low.contains("aura launcher");
+        String c = low.replaceAll("[?.!]+$", "").trim();
+        if (c.equals("home") || c.equals("go home") || c.equals("go to home")
+                || c.equals("home screen") || c.equals("launcher") || c.equals("go to launcher")) return true;
+        return c.contains("open aura") || c.contains("aura launcher") || c.contains("aura home")
+            || c.equals("go back home") || c.equals("back to home") || c.equals("back to launcher");
     }
 
     public static boolean isControlPhrase(String low) {
@@ -329,7 +331,8 @@ public final class InAppVoiceRouter {
 
     public static String extractCleanSearchQuery(String rawSpoken, String appLabel) {
         if (rawSpoken == null) return "";
-        String s = stripLeadingConversationalFiller(rawSpoken.trim());
+        String s = rawSpoken.trim().replaceAll("[?.!]+$", "").trim();
+        s = stripLeadingConversationalFiller(s);
         s = stripLeadingSearchVerb(s);
         s = stripTrailingAppAndPoliteSuffix(s, appLabel);
         String cleaned = s.replaceAll("[?.!]+$", "").trim();
