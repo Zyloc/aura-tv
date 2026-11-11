@@ -43,6 +43,6 @@ fi
 "$ADB" -s "$TV_IP:5555" shell cmd package set-home-activity com.aura.tvprobe/.AuraActivity || true
 
 if [[ "${FORCE_LAUNCH:-0}" == "1" ]] || echo "$PRE_INSTALL_FG" | grep -q "com.aura.tvprobe" || ! echo "$PRE_INSTALL_FG" | grep -Eq "hotstar|netflix|youtube|appletv|amazonvideo|sonyliv|jiocinema"; then
-  "$ADB" -s "$TV_IP:5555" shell am start -a android.intent.action.MAIN -c android.intent.category.HOME -n com.aura.tvprobe/.AuraActivity
+  "$ADB" -s "$TV_IP:5555" shell input keyevent KEYCODE_HOME
 fi
 echo "Deployed Aura TV on $TV_IP"

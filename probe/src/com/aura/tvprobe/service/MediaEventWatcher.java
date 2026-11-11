@@ -107,7 +107,8 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     }
 
     private Process startKatnissLogcatProcess() throws Exception {
-        return new ProcessBuilder("logcat", "-T", "1", "-s",
+        String since = VoiceSearchHelper.formatLogcatStartTimestamp(System.currentTimeMillis());
+        return new ProcessBuilder("logcat", "-T", since, "-s",
             "katniss_interactor_StreamingTextView:I", "katniss_interactor_KatnissConversationStateListenerImpl:I",
             "katniss_search_KatnissIpcConnection:I", "katniss_interactor_KatnissIpcConnection:I",
             "katniss_search_PreviewTextResponseFragment:I", "katniss_interactor_AppFlowEventHandlerInteractor:I",
@@ -125,6 +126,7 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     }
 
     private void handleKatnissLogLine(String line) {
+        if (!VoiceSearchHelper.isFreshKatnissLogLine(line, System.currentTimeMillis(), 5_000L)) return;
         String spoken = VoiceSearchHelper.extractKatnissRecognizedText(line);
         if (!spoken.isEmpty()) {
             InAppVoiceRouter.onVoiceTranscriptCaptured(ctx, db, ai, inspector, overlay, spoken);
@@ -163,15 +165,16 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private void registerProviderObserversSafe() {
         if (providerObserverRegistered) return;
         try {
-            providerObserver = new ContentObserver(workerHandler) {
-                @Override
-                public void onChange(boolean selfChange, Uri uri) {
-                    scheduleDebouncedProviderSync();
-                }
-            };
+            providerObserver = createWatchNextObserver();
             ctx.getContentResolver().registerContentObserver(URI_WATCH_NEXT, true, providerObserver);
             providerObserverRegistered = true;
         } catch (Throwable ignored) {}
+    }
+
+    private ContentObserver createWatchNextObserver() {
+        return new ContentObserver(workerHandler) {
+            @Override public void onChange(boolean selfChange, Uri uri) { scheduleDebouncedProviderSync(); }
+        };
     }
 
     private void unregisterProviderObserversSafe() {
@@ -223,6 +226,7 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
         private final String key;
         private final MediaController mc;
         private JSONObject lastValidSnapshot;
+        private String lastMediaIdentity = "";
         private long playStartElapsedMs = 0L;
         private long playStartPosMs = 0L;
 
@@ -260,33 +264,40 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
         void captureAndPersistCurrentState() {
             JSONObject snap = inspector.serializeControllerSafe(mc);
             if (snap == null) return;
-            updatePlayTimerFromState(mc.getPlaybackState(), snap.optLong("position_ms", 0L));
+            boolean mediaChanged = syncMediaIdentity(snap);
+            updatePlayTimerFromState(mc.getPlaybackState(), snap.optLong("position_ms", 0L), mediaChanged);
             if (hasMeaningfulMetadata(snap)) lastValidSnapshot = snap;
             if (snap.optLong("position_ms", 0L) >= 60_000L) inspector.persistSerializedSession(snap);
         }
 
         private void handleStateTransition(PlaybackState state) {
-            long livePosMs = resolveTransitionPositionMs(state);
-            updatePlayTimerFromState(state, livePosMs);
             JSONObject snap = inspector.serializeControllerSafe(mc);
+            boolean mediaChanged = syncMediaIdentity(snap);
+            long livePosMs = resolveTransitionPositionMs(state, mediaChanged);
+            updatePlayTimerFromState(state, livePosMs, mediaChanged);
             if (snap != null && hasMeaningfulMetadata(snap)) lastValidSnapshot = snap;
             persistSnapshotAtPosition(lastValidSnapshot != null ? lastValidSnapshot : snap, livePosMs);
         }
 
-        private long resolveTransitionPositionMs(PlaybackState state) {
+        private boolean syncMediaIdentity(JSONObject snap) {
+            String id = SessionInspector.extractSnapshotIdentity(snap);
+            if (id.isEmpty()) return false;
+            boolean changed = !lastMediaIdentity.isEmpty() && !lastMediaIdentity.equals(id);
+            lastMediaIdentity = id;
+            return changed;
+        }
+
+        private long resolveTransitionPositionMs(PlaybackState state, boolean mediaChanged) {
             long reported = SessionInspector.computeLivePositionMs(state);
-            if (reported >= 60_000L) return reported;
+            if (mediaChanged || reported >= 60_000L) return reported;
             return extrapolateElapsedPositionMs();
         }
 
-        private void updatePlayTimerFromState(PlaybackState state, long currentPosMs) {
-            if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
-                playStartElapsedMs = SystemClock.elapsedRealtime();
-                playStartPosMs = Math.max(currentPosMs, playStartPosMs);
-            } else if (playStartElapsedMs > 0L) {
-                playStartPosMs = extrapolateElapsedPositionMs();
-                playStartElapsedMs = 0L;
-            }
+        private void updatePlayTimerFromState(PlaybackState state, long currentPosMs, boolean mediaChanged) {
+            long prevExtrapolated = mediaChanged ? 0L : extrapolateElapsedPositionMs();
+            playStartPosMs = SessionInspector.resolveUpdatedPlayStartPosMs(prevExtrapolated, currentPosMs, mediaChanged);
+            boolean playing = state != null && state.getState() == PlaybackState.STATE_PLAYING;
+            playStartElapsedMs = playing ? SystemClock.elapsedRealtime() : 0L;
         }
 
         private long extrapolateElapsedPositionMs() {

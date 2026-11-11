@@ -456,12 +456,12 @@ public class SessionInspector {
     private JSONObject sessionToNowPlaying(JSONObject s, String profile) {
         JSONObject out = new JSONObject();
         try {
+            JSONObject meta = s.optJSONObject("metadata") != null ? s.optJSONObject("metadata") : new JSONObject();
             String pkg = s.optString("package");
-            JSONObject meta = s.optJSONObject("metadata");
-            if (meta == null) meta = new JSONObject();
             populateBaseSessionFields(out, s, meta, pkg, profile);
             populateSessionMediaMetadata(out, meta, pkg);
-            maybePersistActiveSession(out, pkg);
+            applyNormalizedSessionTiming(out, meta);
+            maybePersistActiveSession(out, meta, pkg);
         } catch (Exception ignored) {}
         return out;
     }
@@ -477,6 +477,38 @@ public class SessionInspector {
         out.put("duration_sec", durMs > 0 ? (int) (durMs / 1000L) : 3600);
     }
 
+    private void applyNormalizedSessionTiming(JSONObject out, JSONObject meta) throws Exception {
+        long durMs = meta.optLong("android.media.metadata.DURATION", -1L);
+        int[] norm = normalizeSessionTiming(out.optInt("position_sec", 0), durMs, out.optInt("runtime_min", 60));
+        out.put("position_sec", norm[0]);
+        out.put("duration_sec", norm[1]);
+    }
+
+    public static int[] normalizeSessionTiming(int posSec, long explicitDurMs, int runtimeMin) {
+        int safeRuntime = runtimeMin > 0 ? runtimeMin : 60;
+        int durSec = explicitDurMs > 0L ? (int) (explicitDurMs / 1000L) : Math.max(1800, safeRuntime * 60);
+        int cleanPos = Math.max(0, posSec);
+        if (explicitDurMs > 0L && cleanPos > durSec) cleanPos = durSec;
+        else if (explicitDurMs <= 0L && cleanPos >= durSec) durSec = cleanPos + 900;
+        return new int[]{cleanPos, durSec};
+    }
+
+    public static String extractSnapshotIdentity(JSONObject snap) {
+        JSONObject meta = snap != null ? snap.optJSONObject("metadata") : null;
+        if (meta == null) return "";
+        String id = meta.optString("android.media.metadata.MEDIA_ID",
+            meta.optString("com.amazon.alexa.externalmediaplayer.metadata.PLAYBACK_SOURCE_ID", ""));
+        String title = meta.optString("android.media.metadata.TITLE",
+            meta.optString("android.media.metadata.DISPLAY_TITLE", ""));
+        return (id.isEmpty() && title.isEmpty()) ? "" : (snap.optString("package") + "|" + id + "|" + title);
+    }
+
+    public static long resolveUpdatedPlayStartPosMs(long extrapolatedPrevMs, long currentPosMs, boolean mediaChanged) {
+        if (mediaChanged) return Math.max(0L, currentPosMs);
+        if (currentPosMs >= 60_000L) return currentPosMs;
+        return Math.max(0L, extrapolatedPrevMs);
+    }
+
     private void populateSessionMediaMetadata(JSONObject out, JSONObject meta, String pkg) throws Exception {
         String mediaId = meta.optString("android.media.metadata.MEDIA_ID",
             meta.optString("com.amazon.alexa.externalmediaplayer.metadata.PLAYBACK_SOURCE_ID", ""));
@@ -487,18 +519,27 @@ public class SessionInspector {
         }
     }
 
-    private void maybePersistActiveSession(JSONObject out, String pkg) throws Exception {
+    private void maybePersistActiveSession(JSONObject out, JSONObject meta, String pkg) throws Exception {
         String checkTitle = out.optString("series_title").isEmpty()
             ? out.optString("title") : out.optString("series_title");
         if (isOrphanEpisodeCodeTitle(out.optString("series_title"), out.optString("title"))) return;
-        if (!checkTitle.isEmpty() && !checkTitle.equalsIgnoreCase(friendlyApp(pkg))
-                && !pkg.contains("youtube") && !pkg.contains("smarttube")) {
-            enrichFromLocalCache(out, checkTitle);
-            out.put("media_key", (pkg + ":" + out.optString("series_title") + ":" + out.optString("title")).toLowerCase());
-            db.upsertWatchItem(out);
-            SubtitleAndGuideStore.proactivelyCacheSeriesAsync(db, checkTitle, out.optInt("season", 0), out.optInt("episode", 0));
-            if ("PLAYING".equals(out.optString("state"))) SystemResourceMonitor.maybeAutoGuardOnPlayback(ctx, db, pkg);
+        if (isPersistableVideoTitle(checkTitle, pkg)) {
+            enrichAndSaveActiveSession(out, meta, checkTitle, pkg);
         }
+    }
+
+    private boolean isPersistableVideoTitle(String checkTitle, String pkg) {
+        return !checkTitle.isEmpty() && !checkTitle.equalsIgnoreCase(friendlyApp(pkg))
+            && !pkg.contains("youtube") && !pkg.contains("smarttube");
+    }
+
+    private void enrichAndSaveActiveSession(JSONObject out, JSONObject meta, String checkTitle, String pkg) throws Exception {
+        enrichFromLocalCache(out, checkTitle);
+        applyNormalizedSessionTiming(out, meta);
+        out.put("media_key", (pkg + ":" + out.optString("series_title") + ":" + out.optString("title")).toLowerCase());
+        db.upsertWatchItem(out);
+        SubtitleAndGuideStore.proactivelyCacheSeriesAsync(db, checkTitle, out.optInt("season", 0), out.optInt("episode", 0));
+        if ("PLAYING".equals(out.optString("state"))) SystemResourceMonitor.maybeAutoGuardOnPlayback(ctx, db, pkg);
     }
 
     public static boolean isOrphanEpisodeCodeTitle(String seriesTitle, String title) {
@@ -613,12 +654,16 @@ public class SessionInspector {
         try {
             String cached = db.getCachedGti("jw_imdb_v6:" + title.trim().toLowerCase());
             if (cached == null) return;
-            JSONObject c = new JSONObject(cached);
-            if (out.optString("launch_uri").isEmpty()) out.put("launch_uri", c.optString("launch_uri"));
-            if (out.optString("poster_url").isEmpty()) out.put("poster_url", c.optString("poster_url"));
-            if (out.optString("genres").isEmpty()) out.put("genres", c.optString("genres"));
-            if (out.optString("synopsis").isEmpty()) out.put("synopsis", c.optString("synopsis"));
+            applyCachedMetadataFields(out, new JSONObject(cached));
         } catch (Exception ignored) {}
+    }
+
+    private void applyCachedMetadataFields(JSONObject out, JSONObject c) throws Exception {
+        if (out.optString("launch_uri").isEmpty()) out.put("launch_uri", c.optString("launch_uri"));
+        if (out.optString("poster_url").isEmpty()) out.put("poster_url", c.optString("poster_url"));
+        if (out.optString("genres").isEmpty()) out.put("genres", c.optString("genres"));
+        if (out.optString("synopsis").isEmpty()) out.put("synopsis", c.optString("synopsis"));
+        if (out.optInt("runtime_min", 0) <= 0 && c.optInt("runtime", 0) > 0) out.put("runtime_min", c.optInt("runtime"));
     }
 
     public static String friendlyApp(String pkg) {

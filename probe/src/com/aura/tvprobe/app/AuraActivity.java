@@ -67,12 +67,16 @@ public class AuraActivity extends Activity implements
     private static volatile String sLastGlobalVoiceQuery = "";
     private static volatile long sLastGlobalVoiceMs = 0L;
     private static volatile long sLastTakeoverBurstMs = 0L;
+    private static volatile long sLastHomeKeyMs = 0L;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService bgPool = Executors.newFixedThreadPool(3);
     private final Runnable idleScreensaverTask = this::activateScreensaver;
     private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
     private final Runnable hourlyRecoRefreshTask = this::runHourlyRecoRefreshLoop;
     private volatile boolean refreshInFlight = false;
+    private volatile boolean loaderDismissedByUser = false;
+    private volatile int activeSearchTurnId = 0;
+    private long lastSilenceScheduleMs = 0L;
     private long lastRenderedRecoSec = 0L;
     private String lastRenderedHistorySignature = "";
 
@@ -119,19 +123,35 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        finishDuplicateInstanceIfPresent();
+        initActivityWindowAndState();
+        buildUiAndStartLoops();
+        refreshAllData(false);
+        if (savedInstanceState == null) handleIncomingSearchIntent(getIntent());
+    }
+
+    private void finishDuplicateInstanceIfPresent() {
+        AuraActivity prev = sActiveInstance;
+        if (prev != null && prev != this) {
+            try { prev.finish(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private void initActivityWindowAndState() {
         sActiveInstance = this;
         sLastActiveWallMs = System.currentTimeMillis();
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         initServices();
         AuraTtsNarrator.warmup(this);
+    }
+
+    private void buildUiAndStartLoops() {
         buildUi();
         setupGlobalFocusRouting();
         registerHomeKeyReceiverSafe();
         startHomeSearchHintAnimation();
         resetIdleTimer();
-        refreshAllData(false);
-        handleIncomingSearchIntent(getIntent());
     }
 
     private void registerHomeKeyReceiverSafe() {
@@ -163,6 +183,9 @@ public class AuraActivity extends Activity implements
     }
 
     private void scheduleSilenceBackgroundMediaOnResume() {
+        long now = System.currentTimeMillis();
+        if ((now - lastSilenceScheduleMs) < 1200L) return;
+        lastSilenceScheduleMs = now;
         bgPool.submit(() -> silenceBackgroundMediaNow(this));
         ui.postDelayed(this::silenceIfStillInForeground, 1600L);
         ui.postDelayed(this::silenceIfStillInForeground, 3400L);
@@ -196,11 +219,10 @@ public class AuraActivity extends Activity implements
     }
 
     private void applyResumeContinueWatchingSync(boolean topChanged, boolean sigChanged) {
-        if (topChanged) {
-            refreshAllData(true);
-        } else if (sigChanged) {
+        if (topChanged || sigChanged) {
             renderHomeContent(db.getProfileRecommendations(activeProfile));
         }
+        if (topChanged) refreshAllData(true);
     }
 
     private void scheduleHourlyRecoRefresh() {
@@ -231,6 +253,7 @@ public class AuraActivity extends Activity implements
     private boolean handleIncomingSearchIntent(Intent intent) {
         String q = VoiceSearchHelper.extractAssistantSearchQuery(intent);
         if (q.isEmpty()) return false;
+        setIntent(buildHomeLauncherIntent(this));
         ui.post(() -> runSearchQuery(q));
         return true;
     }
@@ -332,12 +355,21 @@ public class AuraActivity extends Activity implements
     }
 
     public static void onHardwareHomeKeyPressed(Context ctx) {
+        long now = System.currentTimeMillis();
+        if ((now - sLastHomeKeyMs) < 500L) return;
+        sLastHomeKeyMs = now;
         AuraActivity inst = sActiveInstance;
         if (inst != null && sIsInForeground) {
             inst.ui.post(inst::resetToHomeTop);
             return;
         }
-        launchHomeActivityNow(ctx, inst);
+        scheduleHomeRescueIfNeeded(ctx);
+    }
+
+    private static void scheduleHomeRescueIfNeeded(Context ctx) {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (!sIsInForeground) launchHomeActivityNow(ctx, sActiveInstance);
+        }, 220L);
     }
 
     private static void launchHomeActivityNow(Context ctx, AuraActivity inst) {
@@ -364,7 +396,9 @@ public class AuraActivity extends Activity implements
         try {
             Handler mainH = new Handler(Looper.getMainLooper());
             VoiceSearchHelper.silenceAssistantAudio(ctx, mainH);
-            Intent i = buildHomeLauncherIntent(ctx).putExtra("aura_voice_query", q);
+            Intent i = buildHomeLauncherIntent(ctx)
+                .putExtra("aura_voice_query", q)
+                .putExtra("aura_voice_ts", System.currentTimeMillis());
             ctx.startActivity(i);
             mainH.postDelayed(() -> scheduleBringAuraToFront(mainH, ctx), 250L);
         } catch (Throwable ignored) {}
@@ -439,33 +473,37 @@ public class AuraActivity extends Activity implements
 
     public static void silenceBackgroundMediaNow(Context ctx) {
         if (ctx == null || !shouldBlockBackgroundPlayback()) return;
-        pauseActiveBackgroundSessions(ctx);
-        stealAndAbandonAudioFocus(ctx);
+        if (pauseActiveBackgroundSessions(ctx)) {
+            stealAndAbandonAudioFocus(ctx);
+        }
         killYouTubeBackgroundSafe(ctx);
     }
 
-    private static void pauseActiveBackgroundSessions(Context ctx) {
+    private static boolean pauseActiveBackgroundSessions(Context ctx) {
         try {
             android.media.session.MediaSessionManager msm =
                 (android.media.session.MediaSessionManager) ctx.getSystemService(Context.MEDIA_SESSION_SERVICE);
-            if (msm == null) return;
-            ComponentName comp = new ComponentName(ctx, MediaProbeService.class);
-            for (android.media.session.MediaController mc : msm.getActiveSessions(comp)) {
-                stopPlayingControllerSafe(mc);
-            }
-        } catch (Throwable ignored) {}
+            if (msm == null) return false;
+            return pauseControllerList(msm.getActiveSessions(new ComponentName(ctx, MediaProbeService.class)));
+        } catch (Throwable e) { return false; }
     }
 
-    private static void stopPlayingControllerSafe(android.media.session.MediaController mc) {
+    private static boolean pauseControllerList(List<android.media.session.MediaController> list) {
+        boolean pausedAny = false;
+        if (list == null) return false;
+        for (android.media.session.MediaController mc : list) pausedAny |= stopPlayingControllerSafe(mc);
+        return pausedAny;
+    }
+
+    private static boolean stopPlayingControllerSafe(android.media.session.MediaController mc) {
         try {
             android.media.session.PlaybackState st = mc != null ? mc.getPlaybackState() : null;
             int s = st != null ? st.getState() : 0;
-            if (s == android.media.session.PlaybackState.STATE_PLAYING
-                    || s == android.media.session.PlaybackState.STATE_BUFFERING) {
-                mc.getTransportControls().pause();
-                mc.getTransportControls().stop();
-            }
-        } catch (Throwable ignored) {}
+            if (s != 3 && s != 6) return false;
+            mc.getTransportControls().pause();
+            mc.getTransportControls().stop();
+            return true;
+        } catch (Throwable e) { return false; }
     }
 
     private static void stealAndAbandonAudioFocus(Context ctx) {
@@ -500,18 +538,22 @@ public class AuraActivity extends Activity implements
         sLastActiveWallMs = System.currentTimeMillis();
         resetIdleTimer();
         if (AmbientScreensaverOverlay.isVisible(screensaverOverlay)) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                AmbientScreensaverOverlay.dismiss(screensaverOverlay);
-                HeroSliderBuilder.startAutoRotate(heroSlider, ui);
-                HeroSliderBuilder.requestInitialFocus(heroSlider);
-            }
-            return true;
+            return consumeScreensaverWakeKey(event);
         }
         if (event.getAction() == KeyEvent.ACTION_DOWN && VoiceSearchHelper.isRemoteVoiceOrSearchKey(event.getKeyCode())) {
             startVoiceSearch();
             return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    private boolean consumeScreensaverWakeKey(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            AmbientScreensaverOverlay.dismiss(screensaverOverlay);
+            HeroSliderBuilder.startAutoRotate(heroSlider, ui);
+            HeroSliderBuilder.requestInitialFocus(heroSlider);
+        }
+        return true;
     }
 
     private void resetIdleTimer() {
@@ -766,24 +808,38 @@ public class AuraActivity extends Activity implements
     // ── Data Loading & Rendering ─────────────────────────────────────────
 
     private void refreshAllData(boolean forceRefresh) {
+        refreshAllData(forceRefresh, false);
+    }
+
+    private void refreshAllData(boolean forceRefresh, boolean showBlockingLoader) {
         updateNavMetadata();
         populateTraversalChips();
-        if (forceRefresh) setBannerText("Looking at what you\u2019ve been watching lately\u2026", true);
+        if (showBlockingLoader) beginBlockingLoader("Looking at what you\u2019ve been watching lately\u2026");
         JSONArray cached = db.getProfileRecommendations(activeProfile);
         boolean hadFresh = cached.length() >= 12 && db.isRecoCacheFresh(activeProfile);
-        if (!forceRefresh || railsContainer.getChildCount() == 0) {
+        if (!showBlockingLoader || railsContainer.getChildCount() == 0) {
             renderHomeContent(cached.length() > 0 ? cached : ai.getBuiltInSotaSeedCatalog(activeProfile));
         }
-        submitBackgroundRefresh(forceRefresh, hadFresh);
+        submitBackgroundRefresh(forceRefresh, showBlockingLoader, hadFresh);
     }
 
-    private void submitBackgroundRefresh(boolean forceRefresh, boolean hadFresh) {
+    private void beginBlockingLoader(String initialMsg) {
+        loaderDismissedByUser = false;
+        setBannerText(initialMsg, true);
+    }
+
+    private void postBlockingLoaderStep(String step) {
+        if (loaderDismissedByUser) return;
+        ui.post(() -> { if (!loaderDismissedByUser) setBannerText(step, true); });
+    }
+
+    private void submitBackgroundRefresh(boolean forceRefresh, boolean showLoader, boolean hadFresh) {
         if (refreshInFlight) return;
         refreshInFlight = true;
-        bgPool.submit(() -> executeBackgroundRefreshTask(forceRefresh, hadFresh));
+        bgPool.submit(() -> executeBackgroundRefreshTask(forceRefresh, showLoader, hadFresh));
     }
 
-    private void executeBackgroundRefreshTask(boolean forceRefresh, boolean hadFresh) {
+    private void executeBackgroundRefreshTask(boolean forceRefresh, boolean showLoader, boolean hadFresh) {
         String prevTop = getTopContinueWatchingTitle();
         JSONObject np = syncNowPlayingSafe();
         boolean topChanged = !getTopContinueWatchingTitle().equals(prevTop);
@@ -791,7 +847,7 @@ public class AuraActivity extends Activity implements
             postContinueWatchingUpdateIfChanged();
             return;
         }
-        refreshRecommendationsInBackground(np, forceRefresh || topChanged, hadFresh);
+        refreshRecommendationsInBackground(np, forceRefresh || topChanged, showLoader, hadFresh);
     }
 
     private void postContinueWatchingUpdateIfChanged() {
@@ -801,25 +857,27 @@ public class AuraActivity extends Activity implements
         }
     }
 
-    private void refreshRecommendationsInBackground(JSONObject np, boolean forceRefresh, boolean hadFresh) {
+    private void refreshRecommendationsInBackground(JSONObject np, boolean forceRefresh,
+                                                    boolean showLoader, boolean hadFresh) {
         JSONArray history = db.listHistory(activeProfile);
         if (np == null && history.length() > 0) np = history.optJSONObject(0);
         JSONArray fresh = ai.getOrRefreshForProfile(activeProfile, np, history, forceRefresh,
-            step -> postRefreshBannerStep(step, forceRefresh));
-        ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, hadFresh));
+            step -> postRefreshBannerStep(step, showLoader));
+        ui.post(() -> applyBackgroundRefreshResult(fresh, forceRefresh, showLoader, hadFresh));
     }
 
-    private void postRefreshBannerStep(String step, boolean forceRefresh) {
-        if (forceRefresh) ui.post(() -> setBannerText(step, true));
+    private void postRefreshBannerStep(String step, boolean showLoader) {
+        if (showLoader) postBlockingLoaderStep(step);
     }
 
     private JSONObject syncNowPlayingSafe() {
         try { return inspector.syncProvidersAndNowPlaying(activeProfile); } catch (Exception e) { return null; }
     }
 
-    private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh, boolean hadFresh) {
+    private void applyBackgroundRefreshResult(JSONArray fresh, boolean forceRefresh,
+                                              boolean showLoader, boolean hadFresh) {
         refreshInFlight = false;
-        setBannerText("", false);
+        if (showLoader) setBannerText("", false);
         if (fresh != null && fresh.length() > 0 && (forceRefresh || !hadFresh)) {
             renderHomeContent(fresh);
         }
@@ -857,14 +915,22 @@ public class AuraActivity extends Activity implements
         lastRenderedRecoSec = Math.max(System.currentTimeMillis() / 1000L, db.getRecoUpdatedAt(activeProfile));
         final int savedScrollY = resolveSavedScrollY();
         final int[] savedRailFocus = resolveSavedRailFocus();
-        List<JSONObject> fullList = toJsonList(recos);
-        List<JSONObject> all = fullList.subList(0, Math.min(16, fullList.size()));
-        AmbientScreensaverOverlay.setItems(screensaverOverlay, all);
-        HeroSliderBuilder.setItems(heroSlider, all.subList(0, Math.min(6, all.size())), this, this);
-        HeroSliderBuilder.startAutoRotate(heroSlider, ui);
+        List<JSONObject> all = sliceTopHomeRecos(recos);
+        populateHeroAndScreensaver(all);
         rebuildHomeRails(all);
         animateHomeRailsEntrance();
         restoreOrInitFocus(savedRailFocus, savedScrollY);
+    }
+
+    private List<JSONObject> sliceTopHomeRecos(JSONArray recos) {
+        List<JSONObject> fullList = toJsonList(recos);
+        return fullList.subList(0, Math.min(16, fullList.size()));
+    }
+
+    private void populateHeroAndScreensaver(List<JSONObject> all) {
+        AmbientScreensaverOverlay.setItems(screensaverOverlay, all);
+        HeroSliderBuilder.setItems(heroSlider, all.subList(0, Math.min(6, all.size())), this, this);
+        HeroSliderBuilder.startAutoRotate(heroSlider, ui);
     }
 
     private int resolveSavedScrollY() {
@@ -1003,7 +1069,7 @@ public class AuraActivity extends Activity implements
     @Override
     public void onNavigate(String destination) {
         if ("home".equals(destination)) refreshAllData(false);
-        else if ("refresh_recos".equals(destination)) refreshAllData(true);
+        else if ("refresh_recos".equals(destination)) refreshAllData(true, true);
         else if ("ram_guardian".equals(destination)) showSystemMonitorDialog();
         else if ("guide_ai".equals(destination)) showGuideAiDialog();
         else if ("watched".equals(destination)) showWatchHistoryDialog();
@@ -1038,7 +1104,7 @@ public class AuraActivity extends Activity implements
 
     @Override
     public void onRefreshRecommendations(boolean forceRefresh) {
-        refreshAllData(forceRefresh);
+        refreshAllData(forceRefresh, forceRefresh);
     }
 
     @Override
@@ -1055,7 +1121,7 @@ public class AuraActivity extends Activity implements
     public void onProfileCreated(String newProfileId) {
         activeProfile = newProfileId;
         db.setSetting("active_profile", newProfileId);
-        refreshAllData(true);
+        refreshAllData(true, true);
     }
 
     @Override
@@ -1121,14 +1187,13 @@ public class AuraActivity extends Activity implements
 
     private void startCatchMeUpForItem(JSONObject item) {
         String title = item.optString("title", "Show");
-        setBannerText("Preparing 2-minute audio recap for " + title + "\u2026", true);
+        beginBlockingLoader("Preparing 2-minute audio recap for " + title + "\u2026");
         bgPool.submit(() -> executeCatchMeUpBackground(title, item));
     }
 
     private void executeCatchMeUpBackground(String title, JSONObject item) {
         AgentStatusNarrator narrator = AgentStatusNarrator.start(
-            ai, db, activeProfile, "Catch me up on " + title,
-            msg -> ui.post(() -> setBannerText(msg, true)));
+            ai, db, activeProfile, "Catch me up on " + title, this::postBlockingLoaderStep);
         try {
             JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, activeProfile, "Catch me up on " + title, item);
             ui.post(() -> presentCatchMeUpInDetail(title, recap));
@@ -1139,10 +1204,8 @@ public class AuraActivity extends Activity implements
 
     private void presentCatchMeUpInDetail(String title, JSONObject recap) {
         setBannerText("", false);
-        if (recap == null) return;
-        if (!DetailOverlay.isShowingTitle(detailOverlay, title) && lastFocusedView != null) {
-            DetailOverlay.showRecapInDetail(detailOverlay, recap);
-        } else if (DetailOverlay.isShowingTitle(detailOverlay, title)) {
+        if (loaderDismissedByUser || recap == null) return;
+        if (DetailOverlay.isShowingTitle(detailOverlay, title) || lastFocusedView != null) {
             DetailOverlay.showRecapInDetail(detailOverlay, recap);
         }
         String spoken = recap.optString("spoken_narration", "");
@@ -1161,7 +1224,7 @@ public class AuraActivity extends Activity implements
         JSONArray remaining = db.getProfileRecommendations(activeProfile);
         renderHomeContent(remaining);
         if (remaining.length() < 12) {
-            submitBackgroundRefresh(true, true);
+            submitBackgroundRefresh(true, false, true);
         }
     }
 
@@ -1170,15 +1233,14 @@ public class AuraActivity extends Activity implements
         String seed = resolveCanonicalTitle(item, "this title");
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         setBackgroundFocusBlocked(true);
-        setBannerText("Looking for shows and movies like " + seed + "\u2026", true);
+        beginBlockingLoader("Looking for shows and movies like " + seed + "\u2026");
         final long startMs = System.currentTimeMillis();
         bgPool.submit(() -> executeSimilarTraversal(seed, startMs));
     }
 
     private void executeSimilarTraversal(String seed, long startMs) {
         int epoch = ImpressionTracker.getCurrentEpoch(db, activeProfile);
-        JSONArray rawSim = ai.traverseSimilarToWatched(activeProfile, seed,
-            msg -> ui.post(() -> setBannerText(msg, true)));
+        JSONArray rawSim = ai.traverseSimilarToWatched(activeProfile, seed, this::postBlockingLoaderStep);
         JSONArray sim = ImpressionTracker.filterOutRecentImpressions(
             rawSim, epoch, ImpressionTracker.loadActiveImpressions(db), 4);
         ImpressionTracker.recordJsonArrayImpressions(db, epoch, sim);
@@ -1208,11 +1270,12 @@ public class AuraActivity extends Activity implements
 
     private void presentSimilarResults(JSONArray sim) {
         setBannerText("", false);
+        if (loaderDismissedByUser) return;
         JSONObject saved = db.getVoiceSession(activeProfile);
         SearchOverlay.setConversationTurns(searchOverlay,
             saved != null ? saved.optJSONArray("turns") : new JSONArray(), this);
-        List<String> chips = java.util.Arrays.asList("Only on Netflix", "Shorter under 2h", "Darker & grittier");
-        SearchOverlay.setFollowUps(searchOverlay, chips, this, this);
+        SearchOverlay.setFollowUps(searchOverlay,
+            java.util.Arrays.asList("Only on Netflix", "Shorter under 2h", "Darker & grittier"), this, this);
         SearchOverlay.setResults(searchOverlay, sim != null ? sim : new JSONArray(), this, this);
         SearchOverlay.show(searchOverlay, this, false);
     }
@@ -1294,8 +1357,9 @@ public class AuraActivity extends Activity implements
     public void runSearchQuery(String query) {
         String q = query != null ? query.trim() : "";
         if (q.isEmpty()) return;
+        int turnId = ++activeSearchTurnId;
         prepareUiForSearchQuery(q);
-        submitSearchQueryTurn(q, System.currentTimeMillis());
+        submitSearchQueryTurn(q, turnId, System.currentTimeMillis());
     }
 
     private void prepareUiForSearchQuery(String q) {
@@ -1325,12 +1389,16 @@ public class AuraActivity extends Activity implements
         SearchOverlay.setLoading(searchOverlay, true, "Understanding your search\u2026");
     }
 
-    private void submitSearchQueryTurn(String q, long startMs) {
+    private void submitSearchQueryTurn(String q, int turnId, long startMs) {
         bgPool.submit(() -> {
-            JSONObject res = voice.handleTurn(activeProfile, q, false, this::postSearchProgress);
+            JSONObject res = voice.handleTurn(activeProfile, q, false, msg -> postSearchProgressForTurn(turnId, msg));
             enforceMinLoadingDuration(startMs, 600L);
-            ui.post(() -> displaySearchResults(res));
+            ui.post(() -> { if (turnId == activeSearchTurnId) displaySearchResults(res); });
         });
+    }
+
+    private void postSearchProgressForTurn(int turnId, String msg) {
+        if (turnId == activeSearchTurnId) postSearchProgress(msg);
     }
 
     private void postSearchProgress(String msg) {
@@ -1402,6 +1470,7 @@ public class AuraActivity extends Activity implements
     }
 
     private void clearRetainedSearchState() {
+        ++activeSearchTurnId;
         lastSearchQuery = "";
         resetTopBarSearchLabel();
         db.saveVoiceSession(activeProfile, new JSONObject());
@@ -1581,15 +1650,28 @@ public class AuraActivity extends Activity implements
 
     private void handleBackKeyPress() {
         if (loadingOverlay != null && loadingOverlay.getVisibility() == View.VISIBLE) {
-            setBannerText("", false);
+            cancelBlockingLoaderByUser();
         } else if (modalContainer != null && modalContainer.getVisibility() == View.VISIBLE) {
             ModalOverlayBuilder.closeModal(modalContainer, this);
         } else if (DetailOverlay.isVisible(detailOverlay) || SearchOverlay.isVisible(searchOverlay)) {
             onDismiss();
         } else if (NavPanelBuilder.isExpanded(navPanel)) {
-            NavPanelBuilder.setExpanded(navPanel, false, this);
-            HeroSliderBuilder.requestInitialFocus(heroSlider);
+            collapseNavPanelToHero();
         }
+    }
+
+    private void cancelBlockingLoaderByUser() {
+        loaderDismissedByUser = true;
+        setBannerText("", false);
+        if (!DetailOverlay.isVisible(detailOverlay) && !SearchOverlay.isVisible(searchOverlay)) {
+            setBackgroundFocusBlocked(false);
+            restoreFocusAfterOverlay();
+        }
+    }
+
+    private void collapseNavPanelToHero() {
+        NavPanelBuilder.setExpanded(navPanel, false, this);
+        HeroSliderBuilder.requestInitialFocus(heroSlider);
     }
 
     @Override

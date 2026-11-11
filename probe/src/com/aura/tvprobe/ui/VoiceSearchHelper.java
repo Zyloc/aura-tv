@@ -16,7 +16,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Handles Option 1 (in-app Bluetooth remote microphone recognition via
@@ -85,10 +89,26 @@ public final class VoiceSearchHelper {
         return q;
     }
 
+    private static volatile long sLastConsumedVoiceTs = 0L;
+
     private static String extractDirectOrSuggestionQuery(Intent intent) {
-        String direct = intent.getStringExtra("aura_voice_query");
-        if (direct != null && !direct.trim().isEmpty()) return direct.trim();
+        String direct = extractFreshDirectVoiceQuery(intent, System.currentTimeMillis());
+        if (!direct.isEmpty()) return direct;
         return extractSuggestionViewQuery(intent);
+    }
+
+    public static String extractFreshDirectVoiceQuery(Intent intent, long nowMs) {
+        if (intent == null) return "";
+        String direct = intent.getStringExtra("aura_voice_query");
+        long ts = intent.getLongExtra("aura_voice_ts", -1L);
+        if (direct == null || direct.trim().isEmpty() || !consumeVoiceTimestamp(ts, nowMs)) return "";
+        return direct.trim();
+    }
+
+    private static boolean consumeVoiceTimestamp(long ts, long nowMs) {
+        if (ts <= 0L || ts == sLastConsumedVoiceTs || Math.abs(nowMs - ts) > 15_000L) return false;
+        sLastConsumedVoiceTs = ts;
+        return true;
     }
 
     private static String extractSuggestionViewQuery(Intent intent) {
@@ -96,7 +116,14 @@ public final class VoiceSearchHelper {
         String extraKey = intent.getStringExtra(SearchManager.EXTRA_DATA_KEY);
         if (extraKey != null && !extraKey.trim().isEmpty()) return extraKey.trim();
         Uri data = intent.getData();
-        return (data != null && data.getLastPathSegment() != null) ? data.getLastPathSegment().trim() : "";
+        if (!isTrustedSuggestionUri(data) || data.getLastPathSegment() == null) return "";
+        return data.getLastPathSegment().trim();
+    }
+
+    public static boolean isTrustedSuggestionUri(Uri data) {
+        if (data == null) return false;
+        return SEARCH_AUTHORITY.equalsIgnoreCase(data.getAuthority())
+            || "aura".equalsIgnoreCase(data.getScheme());
     }
 
     public static String resolveAssistantQuery(String action, String searchQuery,
@@ -161,8 +188,35 @@ public final class VoiceSearchHelper {
             intent.removeExtra(SearchManager.QUERY);
             intent.removeExtra(Intent.EXTRA_TEXT);
             intent.removeExtra("aura_voice_query");
+            intent.removeExtra("aura_voice_ts");
             intent.setAction(Intent.ACTION_MAIN);
         } catch (Throwable ignored) {}
+    }
+
+    public static String formatLogcatStartTimestamp(long wallMs) {
+        return new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(new Date(wallMs));
+    }
+
+    public static boolean isFreshKatnissLogLine(String logLine, long nowWallMs, long maxAgeMs) {
+        long ts = parseLogcatTimestampMs(logLine, nowWallMs);
+        if (ts <= 0L) return false;
+        long age = nowWallMs - ts;
+        return age >= -2_000L && age <= maxAgeMs;
+    }
+
+    private static long parseLogcatTimestampMs(String line, long nowWallMs) {
+        if (line == null || line.length() < 18 || line.charAt(2) != '-' || line.charAt(5) != ' ') return -1L;
+        try {
+            String full = resolveYearPrefix(nowWallMs) + "-" + line.substring(0, 18);
+            long parsed = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).parse(full).getTime();
+            return (parsed - nowWallMs > 86_400_000L) ? parsed - 31_536_000_000L : parsed;
+        } catch (Exception e) { return -1L; }
+    }
+
+    private static int resolveYearPrefix(long wallMs) {
+        Calendar cal = Calendar.getInstance();
+        cal.setTimeInMillis(wallMs);
+        return cal.get(Calendar.YEAR);
     }
 
     public static boolean isRemoteVoiceOrSearchKey(int keyCode) {

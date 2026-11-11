@@ -30,6 +30,7 @@ public final class AuraTestSuiteRunner {
         ServiceHttpMdnsAndSessionUnitTest.class,
         UiPureLogicAndGraphParserTest.class,
         DeepPipelineAndSessionUnitTest.class,
+        PhantomSearchAndSessionBugfixTest.class,
         // Integration Tests
         RecommendationPipelineIntegrationTest.class,
         VoiceAndContinueWatchingIntegrationTest.class,
