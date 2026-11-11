@@ -156,24 +156,32 @@ public final class InAppVoiceRouter {
             Context ctx, AuraDb db, TvOverlayManager overlay,
             String fgPkg, String appLabel, String cleanQuery) {
         String q = cleanQuery.isEmpty() ? sLastTranscript : cleanQuery;
+        String directUri = JustWatchGraph.lookupDirectProviderUri(fgPkg, q);
         if (overlay != null) {
             overlay.showVoiceStatusPill("\uD83D\uDD0E " + appLabel.toUpperCase(Locale.US) + " SEARCH",
-                "\u201C" + q + "\u201D", "Opening search in " + appLabel + "\u2026", 4);
+                "\u201C" + q + "\u201D", "Opening in " + appLabel + "\u2026", 4);
         }
-        postToMain(() -> MediaDeepLinkLauncher.launchInAppSearchForPackage(ctx, db, fgPkg, q), 0L);
+        postToMain(() -> MediaDeepLinkLauncher.launchInAppSearchWithResolvedUri(ctx, db, fgPkg, q, directUri), 0L);
         postToMain(() -> suppressKatnissOnceInApp(ctx, fgPkg), 360L);
-        postToMain(() -> MediaDeepLinkLauncher.launchInAppSearchForPackage(ctx, db, fgPkg, q), 520L);
     }
 
     private static void runInAppCompanionFlow(
             Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
             TvOverlayManager overlay, String fgPkg, String spoken) {
+        showCompanionLoadingPill(overlay, spoken);
         pausePackageSessionGently(ctx, fgPkg);
         if (inspector != null) inspector.recordActivePlaybackOnly();
         String profile = db != null ? db.getValidActiveProfile() : AuraDb.DEFAULT_PROFILE;
         JSONObject activeItem = findActiveItemForPackage(ctx, db, inspector, profile, fgPkg);
         JSONObject recap = runNarratedCompanionTurn(ai, db, overlay, profile, spoken, activeItem);
         if (overlay != null && recap != null) overlay.showInAppCompanionRecap(recap);
+    }
+
+    private static void showCompanionLoadingPill(TvOverlayManager overlay, String spoken) {
+        if (overlay != null) {
+            overlay.showVoiceStatusPill("\u2726 AURA SHOW COMPANION",
+                "\u201C" + spoken + "\u201D", "Stitching scene & subtitles\u2026", 25);
+        }
     }
 
     private static JSONObject runNarratedCompanionTurn(
@@ -475,12 +483,20 @@ public final class InAppVoiceRouter {
             Context ctx, AuraDb db, SessionInspector inspector, String profile, String fgPkg) {
         if (db == null) return null;
         JSONArray hist = db.listHistory(profile);
+        JSONObject substantial = findHistoryForPkg(hist, fgPkg, 30);
+        if (substantial != null) return substantial;
+        JSONObject anyPkg = findHistoryForPkg(hist, fgPkg, 0);
+        return anyPkg != null ? anyPkg : (hist.length() > 0 ? hist.optJSONObject(0) : null);
+    }
+
+    private static JSONObject findHistoryForPkg(JSONArray hist, String fgPkg, int minPosSec) {
         for (int i = 0; i < hist.length(); i++) {
             JSONObject h = hist.optJSONObject(i);
-            if (h != null && fgPkg.equals(h.optString("app_pkg", h.optString("launch_pkg", "")))) {
+            if (h != null && fgPkg.equals(h.optString("app_pkg", h.optString("launch_pkg", "")))
+                    && h.optInt("position_sec", 0) >= minPosSec) {
                 return h;
             }
         }
-        return hist.length() > 0 ? hist.optJSONObject(0) : null;
+        return null;
     }
 }

@@ -116,6 +116,28 @@ public class JustWatchGraph {
         }
     }
 
+    public static String lookupDirectProviderUri(String androidPkg, String query) {
+        JSONArray codes = resolveProviderCodesForPkg(androidPkg);
+        if (codes.length() == 0 || query == null || query.trim().isEmpty()) return "";
+        try {
+            String country = RegionProviderRegistry.getCountryCode(null);
+            String lang = RegionProviderRegistry.getLanguageCode(null);
+            JSONObject vars = new JSONObject().put("searchQuery", query.trim())
+                .put("country", country).put("language", lang).put("packages", codes);
+            JSONObject match = selectBestLookupMatch(extractEdges(postGraphQl(SEARCH_QUERY, vars)),
+                AuraDb.normalizeTitleKey(query), lang);
+            return match.optString("launch_uri", "").trim();
+        } catch (Exception e) { return ""; }
+    }
+
+    private static JSONArray resolveProviderCodesForPkg(String pkg) {
+        if ("in.startv.hotstar".equals(pkg)) return new JSONArray().put("jhs").put("dnp").put("hst");
+        if ("com.disney.disneyplus".equals(pkg)) return new JSONArray().put("dnp");
+        if ("com.apple.atve.androidtv.appletv".equals(pkg)) return new JSONArray().put("atp");
+        if ("com.graymatrix.did".equals(pkg)) return new JSONArray().put("zee");
+        return new JSONArray();
+    }
+
     private static JSONObject buildSearchVars(String query, String country, String language) throws Exception {
         return new JSONObject()
             .put("searchQuery", query)

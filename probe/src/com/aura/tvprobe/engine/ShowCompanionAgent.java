@@ -149,9 +149,10 @@ public final class ShowCompanionAgent {
     }
 
     private static boolean isGenericStopPhrase(String cand) {
-        String low = cand.toLowerCase(Locale.US);
-        return low.equals("what happened") || low.equals("so far") || low.equals("this show")
-            || low.equals("this movie") || low.equals("this scene") || low.equals("the last 5 minutes");
+        String low = cand == null ? "" : cand.toLowerCase(Locale.US).trim();
+        if (low.isEmpty() || low.contains("what happened") || low.contains("what has happened")) return true;
+        if (low.contains("so far") || low.contains("last 5") || low.contains("last five")) return true;
+        return low.startsWith("this ") || low.startsWith("the ") || low.equals("everything") || low.equals("right now");
     }
 
     private static void parseSeasonEpisodeMinutesFromQuery(String q, JSONObject base) throws Exception {

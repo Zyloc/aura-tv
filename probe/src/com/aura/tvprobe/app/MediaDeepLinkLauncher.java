@@ -162,7 +162,9 @@ public final class MediaDeepLinkLauncher {
 
     private static Intent parseOrCreateViewIntent(String uri, String pkg) throws Exception {
         if (uri.startsWith("intent:") || uri.contains("#Intent;")) {
-            return Intent.parseUri(uri, Intent.URI_INTENT_SCHEME);
+            Intent parsed = Intent.parseUri(uri, Intent.URI_INTENT_SCHEME);
+            if (pkg != null && !pkg.isEmpty() && parsed.getPackage() == null) parsed.setPackage(pkg);
+            return parsed;
         }
         Intent deepIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
         if (pkg != null && !pkg.isEmpty()) deepIntent.setPackage(pkg);
@@ -187,14 +189,21 @@ public final class MediaDeepLinkLauncher {
     }
 
     public static boolean launchInAppSearchForPackage(Context ctx, AuraDb db, String pkg, String rawQuery) {
+        return launchInAppSearchWithResolvedUri(ctx, db, pkg, rawQuery, "");
+    }
+
+    public static boolean launchInAppSearchWithResolvedUri(
+            Context ctx, AuraDb db, String pkg, String rawQuery, String resolvedDirectUri) {
         String q = rawQuery != null ? rawQuery.trim() : "";
         if (ctx == null || pkg == null || pkg.isEmpty() || q.isEmpty()) return false;
         AuraActivity.markOutboundAppLaunch();
+        if (resolvedDirectUri != null && !resolvedDirectUri.isEmpty()
+                && tryDirectDeepLink(ctx, resolvedDirectUri, pkg, new JSONObject())) return true;
         if ((pkg.contains("youtube") || pkg.contains("smarttube")) && tryYouTubeTrailerIntent(ctx, pkg, q)) return true;
         String searchUri = buildAppSearchUri(pkg, q);
         if (!searchUri.isEmpty() && tryViewSearchUriForPkg(ctx, pkg, searchUri, q)) return true;
-        if (tryActionIntent(ctx, Intent.ACTION_SEARCH, pkg, q)) return true;
-        return tryActionIntent(ctx, "android.media.action.MEDIA_PLAY_FROM_SEARCH", pkg, q);
+        return tryActionIntent(ctx, Intent.ACTION_SEARCH, pkg, q)
+            || tryActionIntent(ctx, "android.media.action.MEDIA_PLAY_FROM_SEARCH", pkg, q);
     }
 
     public static String buildAppSearchUri(String pkg, String query) {

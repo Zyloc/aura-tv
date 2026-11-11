@@ -121,6 +121,8 @@ public class MultiDeviceProfileAndOrchestratorTest {
             ShowCompanionAgent.detectLens("Catch me up on MobLand Season 1 Episode 4 at 24 minutes"));
         assertEquals("MobLand",
             ShowCompanionAgent.extractTitleFromCompanionQuery("Catch me up on MobLand Season 1 Episode 4 at 24 minutes"));
+        assertEquals("Generic 'what happened so far' must not overwrite active show title", "",
+            ShowCompanionAgent.extractTitleFromCompanionQuery("Catch me up on what happened so far"));
 
         assertTrue(ShowCompanionAgent.isShowCompanionQuery("Who is Harry Da Souza in MobLand and why did he visit Antoine?"));
         assertEquals(ShowCompanionAgent.LENS_CHARACTER_OR_PLOT,
