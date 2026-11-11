@@ -173,8 +173,8 @@ public class MultiDeviceProfileAndOrchestratorTest {
             .put(new JSONObject().put("actor", "Lara Pulver").put("character", "Bella Harrigan")));
         JSONArray activeActors = SubtitleAndGuideStore.inferActiveSceneActors(guide, cues, 1410);
         assertTrue(activeActors.length() >= 2);
-        assertEquals("Clean TTS text must strip markdown/icons",
-            "MobLand S1E4 Audio Recap", AuraTtsNarrator.cleanSpokenText("🔊 **MobLand** `S1E4` Audio Recap"));
+        assertEquals("Clean TTS text must strip markdown/icons and expand episode codes",
+            "MobLand Season 1, Episode 4 Audio Recap", AuraTtsNarrator.cleanSpokenText("🔊 **MobLand** `S1E4` Audio Recap"));
     }
 
     @Test

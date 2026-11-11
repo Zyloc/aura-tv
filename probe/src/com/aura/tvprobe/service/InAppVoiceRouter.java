@@ -52,7 +52,10 @@ public final class InAppVoiceRouter {
     private static volatile String sLastTranscript = "";
     private static volatile long sLastTranscriptMs = 0L;
     private static volatile long sLastInAppInterceptMs = 0L;
+    private static volatile long sLastTakeoverHandledMs = 0L;
     private static volatile String sLastInterceptedPkg = "";
+    private static volatile Future<?> sActiveCompanionTask;
+    private static volatile int sCompanionRunId = 0;
 
     private InAppVoiceRouter() {}
 
@@ -108,16 +111,26 @@ public final class InAppVoiceRouter {
             Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
             TvOverlayManager overlay, String fgPkg, String spoken) {
         String low = spoken.toLowerCase(Locale.US);
-        if (AuraTtsNarrator.isSpeaking() && isStopNarrationPhrase(low)) {
-            stopInAppCompanionNow(ctx, overlay, fgPkg);
+        if ((AuraTtsNarrator.isSpeaking() || isCompanionRunning()) && isStopNarrationPhrase(low)) {
+            cancelActiveCompanionTurn(ctx, overlay, fgPkg);
             return;
         }
         if (isControlPhrase(low)) return;
         beginInAppInterception(ctx, db, ai, inspector, overlay, fgPkg, spoken);
     }
 
-    private static void stopInAppCompanionNow(Context ctx, TvOverlayManager overlay, String fgPkg) {
-        suppressKatnissInAppBurst(ctx, fgPkg);
+    private static boolean isCompanionRunning() {
+        Future<?> f = sActiveCompanionTask;
+        return f != null && !f.isDone();
+    }
+
+    public static synchronized void cancelActiveCompanionTurn(Context ctx, TvOverlayManager overlay, String fgPkg) {
+        sCompanionRunId++;
+        if (sActiveCompanionTask != null) {
+            sActiveCompanionTask.cancel(true);
+            sActiveCompanionTask = null;
+        }
+        if (fgPkg != null && !fgPkg.isEmpty()) suppressKatnissOnceInApp(ctx, fgPkg);
         AuraTtsNarrator.stop(ctx);
         if (overlay != null) overlay.dismissCompanionOverlays();
     }
@@ -127,29 +140,51 @@ public final class InAppVoiceRouter {
             TvOverlayManager overlay, String fgPkg, String spoken) {
         sLastInAppInterceptMs = System.currentTimeMillis();
         sLastInterceptedPkg = fgPkg;
-        suppressKatnissInAppBurst(ctx, fgPkg);
+        startKatnissHijackGuardian(ctx, fgPkg);
         String appLabel = resolveAppLabel(ctx, fgPkg);
-        if (overlay != null) {
+        showInitialVoiceOverlay(ctx, overlay, fgPkg, appLabel, spoken);
+        final int runId = ++sCompanionRunId;
+        sActiveCompanionTask = WORKER.submit(() ->
+            executeClassifiedAction(ctx, db, ai, inspector, overlay, fgPkg, appLabel, spoken, runId));
+    }
+
+    private static void showInitialVoiceOverlay(
+            Context ctx, TvOverlayManager overlay, String fgPkg, String appLabel, String spoken) {
+        if (overlay == null) return;
+        if (ShowCompanionAgent.isShowCompanionQuery(spoken)) {
+            overlay.showCompanionLoader(spoken, "Locking " + appLabel + " & checking timestamp\u2026",
+                () -> cancelActiveCompanionTurn(ctx, overlay, fgPkg));
+        } else {
             overlay.showVoiceStatusPill("\uD83C\uDFA4 AURA VOICE \u00B7 " + appLabel.toUpperCase(Locale.US),
                 "\u201C" + spoken + "\u201D", "Checking intent in " + appLabel + "\u2026", 6);
         }
-        WORKER.submit(() -> executeClassifiedAction(ctx, db, ai, inspector, overlay, fgPkg, appLabel, spoken));
     }
 
     private static void executeClassifiedAction(
             Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
-            TvOverlayManager overlay, String fgPkg, String appLabel, String spoken) {
+            TvOverlayManager overlay, String fgPkg, String appLabel, String spoken, int runId) {
         VoiceDecision dec = classifyIntent(ai, spoken, appLabel);
+        if (runId != sCompanionRunId || Thread.currentThread().isInterrupted()) return;
+        dispatchVoiceDecision(ctx, db, ai, inspector, overlay, fgPkg, appLabel, spoken, runId, dec);
+    }
+
+    private static void dispatchVoiceDecision(
+            Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
+            TvOverlayManager overlay, String fgPkg, String appLabel, String spoken, int runId, VoiceDecision dec) {
         if (dec.action == VoiceAction.GO_HOME) {
-            if (overlay != null) overlay.dismissOverlay();
-            AuraActivity.onHardwareHomeKeyPressed(ctx);
+            handleGoHomeDecision(ctx, overlay);
         } else if (dec.action == VoiceAction.COMPANION) {
-            runInAppCompanionFlow(ctx, db, ai, inspector, overlay, fgPkg, spoken);
+            runInAppCompanionFlow(ctx, db, ai, inspector, overlay, fgPkg, spoken, runId);
         } else if (dec.action == VoiceAction.IN_APP_SEARCH) {
             executeInAppSearchRedirect(ctx, db, overlay, fgPkg, appLabel, dec.cleanQuery);
         } else if (overlay != null) {
             overlay.dismissOverlay();
         }
+    }
+
+    private static void handleGoHomeDecision(Context ctx, TvOverlayManager overlay) {
+        if (overlay != null) overlay.dismissOverlay();
+        AuraActivity.onHardwareHomeKeyPressed(ctx);
     }
 
     private static void executeInAppSearchRedirect(
@@ -167,32 +202,32 @@ public final class InAppVoiceRouter {
 
     private static void runInAppCompanionFlow(
             Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
-            TvOverlayManager overlay, String fgPkg, String spoken) {
-        showCompanionLoadingPill(overlay, spoken);
-        pausePackageSessionGently(ctx, fgPkg);
-        if (inspector != null) inspector.recordActivePlaybackOnly();
+            TvOverlayManager overlay, String fgPkg, String spoken, int runId) {
+        JSONObject activeItem = prepareCompanionSessionContext(ctx, db, inspector, overlay, fgPkg, spoken);
         String profile = db != null ? db.getValidActiveProfile() : AuraDb.DEFAULT_PROFILE;
-        JSONObject activeItem = findActiveItemForPackage(ctx, db, inspector, profile, fgPkg);
-        JSONObject recap = runNarratedCompanionTurn(ai, db, overlay, profile, spoken, activeItem);
-        if (overlay != null && recap != null) overlay.showInAppCompanionRecap(recap);
-    }
-
-    private static void showCompanionLoadingPill(TvOverlayManager overlay, String spoken) {
-        if (overlay != null) {
-            overlay.showVoiceStatusPill("\u2726 AURA SHOW COMPANION",
-                "\u201C" + spoken + "\u201D", "Stitching scene & subtitles\u2026", 25);
+        JSONObject recap = ShowCompanionAgent.executeCompanionTurn(
+            ai, db, profile, spoken, activeItem, overlay != null ? overlay::updateVoiceStatusSubtext : null);
+        if (runId != sCompanionRunId || Thread.currentThread().isInterrupted()) return;
+        if (overlay != null && recap != null) {
+            overlay.showInAppCompanionRecap(recap, () -> cancelActiveCompanionTurn(ctx, overlay, fgPkg));
         }
     }
 
-    private static JSONObject runNarratedCompanionTurn(
-            AiRecommender ai, AuraDb db, TvOverlayManager overlay,
-            String profile, String spoken, JSONObject activeItem) {
-        AgentStatusNarrator narrator = AgentStatusNarrator.start(ai, db, profile, spoken,
-            msg -> { if (overlay != null) overlay.updateVoiceStatusSubtext(msg); });
-        try {
-            return ShowCompanionAgent.executeCompanionTurn(ai, db, profile, spoken, activeItem);
-        } finally {
-            narrator.stop();
+    private static JSONObject prepareCompanionSessionContext(
+            Context ctx, AuraDb db, SessionInspector inspector,
+            TvOverlayManager overlay, String fgPkg, String spoken) {
+        ensureCompanionLoaderMounted(ctx, overlay, fgPkg, spoken);
+        pausePackageSessionGently(ctx, fgPkg);
+        if (inspector != null) inspector.recordActivePlaybackOnly();
+        String profile = db != null ? db.getValidActiveProfile() : AuraDb.DEFAULT_PROFILE;
+        return findActiveItemForPackage(ctx, db, inspector, profile, fgPkg);
+    }
+
+    private static void ensureCompanionLoaderMounted(
+            Context ctx, TvOverlayManager overlay, String fgPkg, String spoken) {
+        if (overlay != null && !ShowCompanionAgent.isShowCompanionQuery(spoken)) {
+            overlay.showCompanionLoader(spoken, "Checking active show & timestamp\u2026",
+                () -> cancelActiveCompanionTurn(ctx, overlay, fgPkg));
         }
     }
 
@@ -201,17 +236,77 @@ public final class InAppVoiceRouter {
             AuraActivity.suppressKatnissOverlayNow(ctx);
             return;
         }
-        if ((System.currentTimeMillis() - sLastInAppInterceptMs) < 14_000L) {
-            suppressKatnissInAppBurst(ctx, sLastInterceptedPkg);
+        long now = System.currentTimeMillis();
+        if ((now - sLastInAppInterceptMs) < 12_000L && (now - sLastTakeoverHandledMs) > 2_500L) {
+            sLastTakeoverHandledMs = now;
+            guardInterceptedAppOnce(ctx, sLastInterceptedPkg);
         }
     }
 
     public static void suppressKatnissInAppBurst(Context ctx, String fgPkg) {
+        startKatnissHijackGuardian(ctx, fgPkg);
+    }
+
+    private static void startKatnissHijackGuardian(Context ctx, String fgPkg) {
         VoiceSearchHelper.silenceAssistantAudio(ctx, getMainHandlerSafe());
         suppressKatnissOnceInApp(ctx, fgPkg);
-        for (int step = 1; step <= 8; step++) {
-            postToMain(() -> suppressKatnissOnceInApp(ctx, fgPkg), step * 180L);
+        for (int step = 1; step <= 32; step++) {
+            postToMain(() -> guardInterceptedAppOnce(ctx, fgPkg), step * 280L);
         }
+    }
+
+    private static void guardInterceptedAppOnce(Context ctx, String fgPkg) {
+        if (ctx == null || fgPkg == null || fgPkg.isEmpty()) return;
+        if ((System.currentTimeMillis() - sLastInAppInterceptMs) > 10_500L) return;
+        String topPkg = queryRawLatestForegroundPkg(ctx);
+        if (isHijackForegroundPkg(topPkg, fgPkg)) {
+            evictHijackAndRestoreApp(ctx, topPkg, fgPkg);
+        }
+    }
+
+    public static boolean isHijackForegroundPkg(String topPkg, String expectedFgPkg) {
+        if (topPkg == null || topPkg.isEmpty() || expectedFgPkg == null || expectedFgPkg.isEmpty()) return false;
+        if (topPkg.startsWith("com.google.android.katniss")) return true;
+        return topPkg.contains("youtube") && !expectedFgPkg.contains("youtube");
+    }
+
+    private static void evictHijackAndRestoreApp(Context ctx, String hijackPkg, String fgPkg) {
+        if (hijackPkg.contains("youtube")) pausePackageSessionGently(ctx, hijackPkg);
+        refrontInterceptedApp(ctx, fgPkg);
+        postToMain(() -> suppressKatnissOnceInApp(ctx, fgPkg), 180L);
+    }
+
+    private static void refrontInterceptedApp(Context ctx, String fgPkg) {
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            Intent intent = pm.getLeanbackLaunchIntentForPackage(fgPkg);
+            if (intent == null) intent = pm.getLaunchIntentForPackage(fgPkg);
+            if (intent == null) return;
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            ctx.startActivity(intent);
+        } catch (Throwable ignored) {}
+    }
+
+    private static String queryRawLatestForegroundPkg(Context ctx) {
+        try {
+            UsageStatsManager usm = (UsageStatsManager) ctx.getSystemService(Context.USAGE_STATS_SERVICE);
+            if (usm == null) return "";
+            long now = System.currentTimeMillis();
+            return scanRawMoveToForeground(usm.queryEvents(now - 12_000L, now));
+        } catch (Throwable ignored) { return ""; }
+    }
+
+    private static String scanRawMoveToForeground(UsageEvents events) {
+        if (events == null) return "";
+        UsageEvents.Event ev = new UsageEvents.Event();
+        String latest = "";
+        while (events.hasNextEvent()) {
+            events.getNextEvent(ev);
+            if (ev.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND && ev.getPackageName() != null) {
+                latest = ev.getPackageName();
+            }
+        }
+        return latest;
     }
 
     private static void suppressKatnissOnceInApp(Context ctx, String fgPkg) {

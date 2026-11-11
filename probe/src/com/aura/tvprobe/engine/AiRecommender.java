@@ -1008,16 +1008,25 @@ public class AiRecommender {
     public String callGeminiMultimodalJson(String prompt, String base64Jpeg) {
         String apiKey = getApiKey();
         if (apiKey.isEmpty()) return null;
-        String fast = tryCallLiteWithRetry(MODELS[0], apiKey, prompt, base64Jpeg);
-        if (fast != null) return fast;
-        return MODELS.length > 1 ? tryCallSingleGeminiModel(MODELS[1], apiKey, prompt, base64Jpeg) : null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            String out = tryAllGeminiModelsOnce(apiKey, prompt, base64Jpeg);
+            if (out != null || Thread.currentThread().isInterrupted()) return out;
+            sleepQuietly(600L);
+        }
+        return null;
     }
 
-    private String tryCallLiteWithRetry(String model, String apiKey, String prompt, String base64Jpeg) {
-        String first = tryCallSingleGeminiModel(model, apiKey, prompt, base64Jpeg);
-        if (first != null) return first;
-        try { Thread.sleep(800); } catch (Exception ignored) {}
-        return tryCallSingleGeminiModel(model, apiKey, prompt, base64Jpeg);
+    private String tryAllGeminiModelsOnce(String apiKey, String prompt, String base64Jpeg) {
+        for (String model : MODELS) {
+            if (Thread.currentThread().isInterrupted()) return null;
+            String out = tryCallSingleGeminiModel(model, apiKey, prompt, base64Jpeg);
+            if (out != null && !out.isEmpty()) return out;
+        }
+        return null;
+    }
+
+    private static void sleepQuietly(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
 
     private String tryCallSingleGeminiModel(String model, String apiKey, String prompt, String base64Jpeg) {
@@ -1078,17 +1087,18 @@ public class AiRecommender {
     private String httpPost(final String urlStr, final String jsonBody) throws Exception {
         java.util.concurrent.Future<String> fut = HTTP_EXEC.submit(() -> executeHttpPost(urlStr, jsonBody));
         try {
-            return fut.get(20000, TimeUnit.MILLISECONDS);
+            return fut.get();
         } catch (Exception e) {
             fut.cancel(true);
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             throw e;
         }
     }
 
     private String executeHttpPost(String urlStr, String jsonBody) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-        conn.setConnectTimeout(4500);
-        conn.setReadTimeout(18000);
+        conn.setConnectTimeout(6000);
+        conn.setReadTimeout(35000);
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");

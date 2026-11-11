@@ -7,13 +7,17 @@ import android.os.Handler;
 import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.speech.tts.Voice;
+import android.util.Log;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
- * Native Android TV Neural Voice Narrator bound to Google Speech Services (com.google.android.tts).
- * Streams sentence-by-sentence spoken summaries with synchronized word-by-word live subtitle callbacks.
+ * Native Android TV Voice Narrator bound to Google Speech Services (com.google.android.tts).
+ * Synchronizes subtitles word-by-word using hardware PCM frame offsets + AudioManager output latency.
  */
 public final class AuraTtsNarrator {
 
@@ -23,21 +27,28 @@ public final class AuraTtsNarrator {
         void onNarrationStop();
     }
 
+    private static final String TAG = "AuraTTS";
     private static final String GOOGLE_TTS_PKG = "com.google.android.tts";
+    private static final long ACOUSTIC_SPEAKER_MARGIN_MS = 140L;
     private static volatile Handler sUiHandler;
     private static volatile TextToSpeech sTts;
     private static volatile boolean sReady = false;
+    private static volatile String sSelectedVoiceName = "";
     private static volatile String sPendingSpeech = "";
     private static volatile String sLastSpokenScript = "";
     private static volatile Runnable sOnCompleteCallback;
     private static volatile SubtitleListener sSubtitleListener;
-    private static List<String> sSentences = new ArrayList<>();
-    private static int sActiveIdx = -1;
-    private static long sSentenceStartMs = 0L;
-    private static boolean sNativeRangeActive = false;
     private static volatile int sSpeechEpoch = 0;
+    private static volatile long sOutputLatencyMs = 320L;
 
-    private static final Runnable WORD_TICKER = AuraTtsNarrator::tickWordHighlight;
+    private static List<String> sSentences = new ArrayList<>();
+    private static List<List<SubtitleWordTracker.WordToken>> sSentenceTokens = new ArrayList<>();
+    private static int[] sSampleRates = new int[0];
+    private static long[] sPcmBytes = new long[0];
+    private static long[] sUtteranceStartMs = new long[0];
+    private static boolean[] sRangeSeen = new boolean[0];
+    private static int sDisplayedSentenceIdx = -1;
+    private static int sDisplayedWordIdx = -1;
 
     private AuraTtsNarrator() {}
 
@@ -47,24 +58,28 @@ public final class AuraTtsNarrator {
         return sUiHandler;
     }
 
-    private static void postToMain(Runnable r) {
-        Handler h = getMainHandlerSafe();
-        if (h != null) h.post(r);
-        else r.run();
-    }
-
     private static void postDelayedToMain(Runnable r, long delayMs) {
         Handler h = getMainHandlerSafe();
-        if (h != null) h.postDelayed(r, delayMs);
+        if (h == null) { if (delayMs <= 0L) r.run(); return; }
+        if (delayMs <= 0L) h.post(r);
+        else h.postDelayed(r, delayMs);
     }
 
-    private static void removeMainCallbacks(Runnable r) {
+    private static void clearScheduledUiEvents() {
         Handler h = getMainHandlerSafe();
-        if (h != null) h.removeCallbacks(r);
+        if (h != null) h.removeCallbacksAndMessages(null);
     }
 
     public static void setSubtitleListener(SubtitleListener listener) {
         sSubtitleListener = listener;
+    }
+
+    public static String getSelectedVoiceName() {
+        return sSelectedVoiceName;
+    }
+
+    public static int getActiveWordIndex() {
+        return sDisplayedWordIdx;
     }
 
     public static synchronized void warmup(Context ctx) {
@@ -101,42 +116,178 @@ public final class AuraTtsNarrator {
     private static void configureTtsVoice() {
         try {
             sTts.setLanguage(Locale.US);
-            sTts.setSpeechRate(0.98f);
+            selectBestSystemVoice();
+            sTts.setSpeechRate(0.97f);
             sTts.setPitch(1.0f);
             attachProgressListener();
         } catch (Throwable ignored) {}
     }
 
+    private static void selectBestSystemVoice() {
+        try {
+            Voice best = pickHighestScoringEnglishVoice(sTts.getVoices());
+            if (best != null) {
+                sTts.setVoice(best);
+                sSelectedVoiceName = best.getName();
+                logSafe("Selected system voice=" + best.getName() + " net=" + best.isNetworkConnectionRequired());
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static Voice pickHighestScoringEnglishVoice(Set<Voice> voices) {
+        if (voices == null || voices.isEmpty()) return null;
+        Voice best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (Voice v : voices) {
+            int score = scoreEnglishVoice(v);
+            if (score > bestScore) { bestScore = score; best = v; }
+        }
+        return bestScore > 0 ? best : null;
+    }
+
+    public static int scoreEnglishVoice(Voice v) {
+        if (v == null || v.getLocale() == null) return -1;
+        return scoreVoiceAttributes(
+            v.getLocale().getLanguage(), v.getLocale().getCountry(),
+            v.getName(), v.getQuality(), v.isNetworkConnectionRequired());
+    }
+
+    public static int scoreVoiceAttributes(
+            String language, String country, String rawName, int quality, boolean networkRequired) {
+        if (language == null || !"en".equalsIgnoreCase(language)) return -1;
+        String name = rawName != null ? rawName.toLowerCase(Locale.US) : "";
+        int score = quality + (networkRequired ? 600 : 0);
+        if (name.contains("lstm-embedded")) score -= 350;
+        if (name.contains("wavenet") || name.contains("neural") || name.contains("iog") || name.contains("tpf") || name.contains("iom")) score += 120;
+        return score + scoreEnglishCountry(country);
+    }
+
+    private static int scoreEnglishCountry(String country) {
+        if ("US".equalsIgnoreCase(country)) return 90;
+        if ("GB".equalsIgnoreCase(country)) return 75;
+        if ("IN".equalsIgnoreCase(country)) return 65;
+        return 30;
+    }
+
     private static void attachProgressListener() {
         sTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+            @Override public void onBeginSynthesis(String id, int sr, int fmt, int ch) { recordSynthFormat(id, sr); }
+            @Override public void onAudioAvailable(String id, byte[] audio) { recordSynthBytes(id, audio); }
             @Override public void onStart(String id) { handleUtteranceStart(id); }
+            @Override public void onRangeStart(String id, int start, int end, int frame) { handleUtteranceRange(id, start, end, frame); }
             @Override public void onDone(String id) { handleUtteranceDone(id); }
             @Override public void onError(String id) { handleUtteranceDone(id); }
-            @Override public void onRangeStart(String id, int start, int end, int frame) {
-                handleUtteranceRange(id, start, end);
-            }
         });
+    }
+
+    private static void recordSynthFormat(String id, int sampleRateHz) {
+        int idx = parseUtteranceIndex(id);
+        if (idx >= 0 && idx < sSampleRates.length && sampleRateHz > 0) {
+            sSampleRates[idx] = sampleRateHz;
+        }
+    }
+
+    private static void recordSynthBytes(String id, byte[] audio) {
+        int idx = parseUtteranceIndex(id);
+        if (idx >= 0 && idx < sPcmBytes.length && audio != null) {
+            sPcmBytes[idx] += audio.length;
+        }
     }
 
     private static void handleUtteranceStart(String id) {
         int idx = parseUtteranceIndex(id);
-        if (idx >= 0) {
-            postToMain(() -> activateSentenceSubtitle(idx));
+        if (idx < 0 || idx >= sUtteranceStartMs.length) return;
+        final int epoch = sSpeechEpoch;
+        sUtteranceStartMs[idx] = System.currentTimeMillis();
+        postDelayedToMain(() -> startFallbackCounterIfNoRanges(epoch, idx), 650L);
+    }
+
+    private static void handleUtteranceRange(String id, int start, int end, int frame) {
+        int idx = parseUtteranceIndex(id);
+        if (idx < 0 || idx >= sSentenceTokens.size()) return;
+        sRangeSeen[idx] = true;
+        List<SubtitleWordTracker.WordToken> tokens = sSentenceTokens.get(idx);
+        int wordIdx = SubtitleWordTracker.resolveWordIndex(tokens, start, end);
+        long delayMs = computeAcousticDelayMs(idx, frame);
+        final int epoch = sSpeechEpoch;
+        postDelayedToMain(() -> renderSyncedWord(epoch, idx, wordIdx, frame), delayMs);
+    }
+
+    public static long computeFrameSyncDelayMs(
+            long utteranceStartMs, long nowMs, int frame, int sampleRateHz, long outputLatencyMs) {
+        int rangeRateHz = resolveRangeFrameRateHz(sampleRateHz);
+        long waveformMs = (Math.max(0L, frame) * 1000L) / rangeRateHz;
+        long baseStart = utteranceStartMs > 0L ? utteranceStartMs : nowMs;
+        long playAtMs = baseStart + waveformMs + Math.max(0L, outputLatencyMs);
+        return Math.max(0L, playAtMs - nowMs);
+    }
+
+    public static int resolveRangeFrameRateHz(int reportedSampleRateHz) {
+        if (reportedSampleRateHz >= 44100) return 22050;
+        return reportedSampleRateHz > 0 ? reportedSampleRateHz : 22050;
+    }
+
+    private static long computeAcousticDelayMs(int idx, int frame) {
+        int sr = idx < sSampleRates.length ? sSampleRates[idx] : 48000;
+        long startMs = idx < sUtteranceStartMs.length ? sUtteranceStartMs[idx] : 0L;
+        return computeFrameSyncDelayMs(startMs, System.currentTimeMillis(), frame, sr, sOutputLatencyMs);
+    }
+
+    private static void renderSyncedWord(int epoch, int sentenceIdx, int wordIdx, int frame) {
+        if (epoch != sSpeechEpoch || sentenceIdx >= sSentences.size() || wordIdx < 0) return;
+        List<SubtitleWordTracker.WordToken> tokens = sSentenceTokens.get(sentenceIdx);
+        if (wordIdx >= tokens.size()) return;
+        notifySentenceTransitionIfNeeded(sentenceIdx);
+        if (sentenceIdx == sDisplayedSentenceIdx && wordIdx < sDisplayedWordIdx) return;
+        sDisplayedWordIdx = wordIdx;
+        SubtitleWordTracker.WordToken tok = tokens.get(wordIdx);
+        logSafe("SYNC sent=" + sentenceIdx + " word=" + (wordIdx + 1) + "/" + tokens.size() + " '" + tok.text + "' frame=" + frame);
+        dispatchWordHighlight(sSentences.get(sentenceIdx), tok.charStart, tok.charEnd);
+    }
+
+    private static void notifySentenceTransitionIfNeeded(int sentenceIdx) {
+        if (sentenceIdx == sDisplayedSentenceIdx) return;
+        sDisplayedSentenceIdx = sentenceIdx;
+        sDisplayedWordIdx = -1;
+        if (sSubtitleListener != null) {
+            sSubtitleListener.onSentenceStart(sSentences.get(sentenceIdx));
         }
     }
 
-    private static void handleUtteranceRange(String id, int start, int end) {
-        int idx = parseUtteranceIndex(id);
-        if (idx < 0 || idx >= sSentences.size()) return;
-        sNativeRangeActive = true;
-        String sentence = sSentences.get(idx);
-        postToMain(() -> dispatchWordHighlight(sentence, start, end));
+    private static void startFallbackCounterIfNoRanges(int epoch, int idx) {
+        if (epoch != sSpeechEpoch || idx >= sRangeSeen.length || sRangeSeen[idx]) return;
+        List<SubtitleWordTracker.WordToken> tokens = sSentenceTokens.get(idx);
+        if (tokens.isEmpty()) return;
+        long totalMs = estimateFallbackDurationMs(idx, tokens.size());
+        long stepMs = Math.max(220L, totalMs / tokens.size());
+        for (int w = 0; w < tokens.size(); w++) {
+            final int wordIdx = w;
+            postDelayedToMain(() -> renderFallbackWordIfStillNoRanges(epoch, idx, wordIdx), w * stepMs);
+        }
+    }
+
+    private static void renderFallbackWordIfStillNoRanges(int epoch, int idx, int wordIdx) {
+        if (epoch != sSpeechEpoch || idx >= sRangeSeen.length || sRangeSeen[idx]) return;
+        renderSyncedWord(epoch, idx, wordIdx, -1);
+    }
+
+    private static long estimateFallbackDurationMs(int idx, int wordCount) {
+        int sr = idx < sSampleRates.length && sSampleRates[idx] > 0 ? sSampleRates[idx] : 24000;
+        long bytes = idx < sPcmBytes.length ? sPcmBytes[idx] : 0L;
+        if (bytes > 0L) return (bytes * 1000L) / (sr * 2L);
+        return wordCount * 410L;
     }
 
     private static void handleUtteranceDone(String id) {
         if (id != null && id.equals("utt_" + sSpeechEpoch + "_final")) {
-            postToMain(AuraTtsNarrator::finishNarrationUi);
+            final int epoch = sSpeechEpoch;
+            postDelayedToMain(() -> finishNarrationIfEpochMatches(epoch), sOutputLatencyMs + 180L);
         }
+    }
+
+    private static void finishNarrationIfEpochMatches(int epoch) {
+        if (epoch != sSpeechEpoch) return;
+        finishNarrationUi();
     }
 
     private static int parseUtteranceIndex(String id) {
@@ -150,11 +301,41 @@ public final class AuraTtsNarrator {
     public static synchronized void speak(Context ctx, String script, Runnable onComplete) {
         if (script == null || script.trim().isEmpty()) return;
         sSpeechEpoch++;
+        clearScheduledUiEvents();
+        sOutputLatencyMs = queryAudioOutputLatencyMs(ctx);
         sLastSpokenScript = cleanSpokenText(script);
         sOnCompleteCallback = onComplete;
-        sSentences = splitIntoSentences(sLastSpokenScript);
+        prepareSentenceTrackingState(sLastSpokenScript);
         VoiceSearchHelper.unmuteStreamMusicNow(ctx);
-        postToMain(() -> activateSentenceSubtitle(0));
+        enqueueOrPendSpeech(ctx);
+    }
+
+    private static void prepareSentenceTrackingState(String cleanScript) {
+        sSentences = splitIntoSentences(cleanScript);
+        sSentenceTokens = new ArrayList<>(sSentences.size());
+        for (String s : sSentences) sSentenceTokens.add(SubtitleWordTracker.tokenize(s));
+        int n = sSentences.size();
+        sSampleRates = new int[n];
+        sPcmBytes = new long[n];
+        sUtteranceStartMs = new long[n];
+        sRangeSeen = new boolean[n];
+        sDisplayedSentenceIdx = -1;
+        sDisplayedWordIdx = -1;
+    }
+
+    private static long queryAudioOutputLatencyMs(Context ctx) {
+        if (ctx == null) return 320L;
+        try {
+            AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            Method m = AudioManager.class.getMethod("getOutputLatency", int.class);
+            int halMs = (Integer) m.invoke(am, AudioManager.STREAM_MUSIC);
+            return Math.max(260L, Math.min(580L, halMs + ACOUSTIC_SPEAKER_MARGIN_MS));
+        } catch (Throwable ignored) {
+            return 320L;
+        }
+    }
+
+    private static void enqueueOrPendSpeech(Context ctx) {
         warmup(ctx);
         if (!sReady || sTts == null) {
             sPendingSpeech = sLastSpokenScript;
@@ -177,8 +358,7 @@ public final class AuraTtsNarrator {
     private static void enqueueSentences() {
         try {
             int ep = sSpeechEpoch;
-            Bundle params = new Bundle();
-            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f);
+            Bundle params = buildSynthesisParams();
             for (int i = 0; i < sSentences.size(); i++) {
                 String id = "utt_" + ep + "_" + ((i == sSentences.size() - 1) ? "final" : i);
                 int mode = (i == 0) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
@@ -187,36 +367,12 @@ public final class AuraTtsNarrator {
         } catch (Throwable ignored) {}
     }
 
-    private static void activateSentenceSubtitle(int idx) {
-        if (idx < 0 || idx >= sSentences.size()) return;
-        if (sActiveIdx == idx && (System.currentTimeMillis() - sSentenceStartMs) < 400L) return;
-        sActiveIdx = idx;
-        sSentenceStartMs = System.currentTimeMillis();
-        sNativeRangeActive = false;
-        String sentence = sSentences.get(idx);
-        if (sSubtitleListener != null) sSubtitleListener.onSentenceStart(sentence);
-        removeMainCallbacks(WORD_TICKER);
-        postDelayedToMain(WORD_TICKER, 65L);
-    }
-
-    private static void tickWordHighlight() {
-        if (sActiveIdx < 0 || sActiveIdx >= sSentences.size()) return;
-        String sentence = sSentences.get(sActiveIdx);
-        long elapsed = System.currentTimeMillis() - sSentenceStartMs;
-        long estDuration = Math.max(1400L, sentence.length() * 62L);
-        if (!sNativeRangeActive) updateEstimatedWordSpan(sentence, elapsed, estDuration);
-        if ((!sReady || sTts == null) && elapsed >= estDuration + 350L) {
-            advanceFallbackSentenceIfNeeded();
-        } else if (elapsed < estDuration + 4000L) {
-            postDelayedToMain(WORD_TICKER, 65L);
-        }
-    }
-
-    private static void updateEstimatedWordSpan(String sentence, long elapsed, long estDuration) {
-        int len = sentence.length();
-        int targetChar = (int) Math.min(len - 1, (elapsed * len) / Math.max(1L, estDuration));
-        int[] bounds = findWordBoundsAt(sentence, targetChar);
-        dispatchWordHighlight(sentence, bounds[0], bounds[1]);
+    private static Bundle buildSynthesisParams() {
+        Bundle params = new Bundle();
+        params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f);
+        params.putString(TextToSpeech.Engine.KEY_FEATURE_NETWORK_SYNTHESIS, "true");
+        params.putInt(TextToSpeech.Engine.KEY_FEATURE_NETWORK_TIMEOUT_MS, 5500);
+        return params;
     }
 
     public static int[] findWordBoundsAt(String s, int pos) {
@@ -230,14 +386,6 @@ public final class AuraTtsNarrator {
         return new int[]{start, end};
     }
 
-    private static void advanceFallbackSentenceIfNeeded() {
-        if (sActiveIdx + 1 < sSentences.size()) {
-            activateSentenceSubtitle(sActiveIdx + 1);
-        } else if (!isSpeaking()) {
-            finishNarrationUi();
-        }
-    }
-
     private static void dispatchWordHighlight(String sentence, int start, int end) {
         if (sSubtitleListener != null) {
             sSubtitleListener.onWordHighlight(sentence, start, end);
@@ -245,14 +393,15 @@ public final class AuraTtsNarrator {
     }
 
     private static void finishNarrationUi() {
-        removeMainCallbacks(WORD_TICKER);
-        sActiveIdx = -1;
+        clearScheduledUiEvents();
+        sDisplayedSentenceIdx = -1;
+        sDisplayedWordIdx = -1;
         if (sSubtitleListener != null) sSubtitleListener.onNarrationStop();
         if (sOnCompleteCallback != null) sOnCompleteCallback.run();
     }
 
     public static synchronized boolean toggleSpeakOrStop(Context ctx, Runnable onComplete) {
-        if (isSpeaking() || sActiveIdx >= 0) {
+        if (isSpeaking() || sDisplayedSentenceIdx >= 0) {
             stop(ctx);
             return false;
         }
@@ -272,10 +421,12 @@ public final class AuraTtsNarrator {
     }
 
     public static synchronized void stop(Context ctx) {
+        sSpeechEpoch++;
         sPendingSpeech = "";
-        sActiveIdx = -1;
-        removeMainCallbacks(WORD_TICKER);
-        postToMain(() -> { if (sSubtitleListener != null) sSubtitleListener.onNarrationStop(); });
+        sDisplayedSentenceIdx = -1;
+        sDisplayedWordIdx = -1;
+        clearScheduledUiEvents();
+        postDelayedToMain(() -> { if (sSubtitleListener != null) sSubtitleListener.onNarrationStop(); }, 0L);
         try {
             if (sTts != null) sTts.stop();
         } catch (Throwable ignored) {}
@@ -302,6 +453,14 @@ public final class AuraTtsNarrator {
 
     public static String cleanSpokenText(String raw) {
         if (raw == null) return "";
-        return raw.replaceAll("[*#_`\u2726\uD83D\uDD0A\u25B6]", " ").replaceAll("\\s+", " ").trim();
+        String s = raw.replaceAll("\\[[^\\]]*\\]", " ")
+            .replaceAll("(?i)\\bS(\\d{1,2})\\s*E(\\d{1,2})\\b", "Season $1, Episode $2")
+            .replaceAll("(?i)\\bPremise:\\s*", "")
+            .replace('\u00B7', ',');
+        return s.replaceAll("[*#_`\u2726\uD83D\uDD0A\u25B6]", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    private static void logSafe(String msg) {
+        try { Log.i(TAG, msg); } catch (Throwable ignored) {}
     }
 }

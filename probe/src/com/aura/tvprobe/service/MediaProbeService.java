@@ -37,6 +37,7 @@ public class MediaProbeService extends NotificationListenerService {
     public void onCreate() {
         super.onCreate();
         initCoreDependencies();
+        AuraTtsNarrator.warmup(this);
         registerServiceHomeKeyReceiver();
         startHttpServer();
         eventWatcher.registerAll();
@@ -312,11 +313,21 @@ public class MediaProbeService extends NotificationListenerService {
         JSONObject item = !reqBody.isEmpty() ? new JSONObject(reqBody) : new JSONObject();
         String prof = optParam(uri, "profile", item.optString("profile", db.getValidActiveProfile()));
         String q = optParam(uri, "q", item.optString("query", ""));
+        boolean shouldSpeak = !"0".equals(optParam(uri, "speak", "1"));
         populateCatchupItemFromUri(uri, item);
-        JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, prof, q, item);
-        if (!"0".equals(optParam(uri, "speak", "1"))) presentInAppCatchupAudio(recap);
-        writeHttpResponse(out, "application/json", recap.toString());
+        JSONObject recap = executeRouteCompanionTurn(prof, q, item, shouldSpeak);
+        if (shouldSpeak && recap != null) presentInAppCatchupAudio(recap);
+        writeHttpResponse(out, "application/json", recap != null ? recap.toString() : "{}");
         return true;
+    }
+
+    private JSONObject executeRouteCompanionTurn(String prof, String q, JSONObject item, boolean shouldSpeak) {
+        final Thread caller = Thread.currentThread();
+        if (shouldSpeak && !AuraActivity.isInForeground()) {
+            overlay.showCompanionLoader(q, "Preparing Catch Me Up\u2026", caller::interrupt);
+        }
+        return ShowCompanionAgent.executeCompanionTurn(
+            ai, db, prof, q, item, shouldSpeak ? overlay::updateVoiceStatusSubtext : null);
     }
 
     private void presentInAppCatchupAudio(JSONObject recap) {

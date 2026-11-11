@@ -15,9 +15,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Pure Agentic Show Companion & "Catch Me Up" Audio Narrator Engine.
- * Routes across 4 lenses (Full Recap, Character/Plot Grep, Immediate 5-Min Scene,
- * and On-Screen Actor X-Ray + Movie Search Handoff) with minimal LLM token usage.
+ * Agentic Show Companion & "Catch Me Up" Summarizer.
+ * Fetches episode guide + SRT subtitles up to the viewer's timestamp, emits live
+ * agentic function steps to the loader, and passes the compressed subtitle + prior
+ * episode text directly into a clean conversational summarize call.
  */
 public final class ShowCompanionAgent {
 
@@ -69,6 +70,12 @@ public final class ShowCompanionAgent {
 
     public static JSONObject executeCompanionTurn(
             AiRecommender ai, AuraDb db, String profileId, String userQuery, JSONObject explicitItem) {
+        return executeCompanionTurn(ai, db, profileId, userQuery, explicitItem, null);
+    }
+
+    public static JSONObject executeCompanionTurn(
+            AiRecommender ai, AuraDb db, String profileId, String userQuery,
+            JSONObject explicitItem, AiRecommender.AgentProgressListener stepListener) {
         String lens = detectLens(userQuery);
         JSONObject ctx = resolveTargetContext(db, profileId, userQuery, explicitItem);
         String cacheKey = buildRecapCacheKey(ctx, lens, userQuery);
@@ -76,11 +83,16 @@ public final class ShowCompanionAgent {
             JSONObject cached = tryReadCachedRecap(db, cacheKey);
             if (cached != null) return cached;
         }
-        JSONObject result = runAgenticLensSynthesis(ai, db, profileId, userQuery, lens, ctx);
-        if (LENS_FULL_RECAP.equals(lens) && !result.optString("spoken_narration").isEmpty()) {
+        JSONObject result = runAgenticLensSynthesis(ai, db, profileId, userQuery, lens, ctx, stepListener);
+        cacheRecapIfFromLlm(db, cacheKey, lens, result);
+        return result;
+    }
+
+    private static void cacheRecapIfFromLlm(AuraDb db, String cacheKey, String lens, JSONObject result) {
+        if (db == null || result == null || !LENS_FULL_RECAP.equals(lens)) return;
+        if (!result.optBoolean("is_fallback", false) && !result.optString("spoken_narration").isEmpty()) {
             db.saveCachedGti(cacheKey, result.toString());
         }
-        return result;
     }
 
     private static JSONObject tryReadCachedRecap(AuraDb db, String cacheKey) {
@@ -95,7 +107,7 @@ public final class ShowCompanionAgent {
         int e = ctx.optInt("episode", 1);
         int bucket5m = ctx.optInt("position_sec", 1200) / 300;
         String qHash = Integer.toHexString((query == null ? "" : query.toLowerCase(Locale.US)).hashCode());
-        return "recap_v2:" + norm + ":s" + s + "e" + e + ":b" + bucket5m + ":" + lens + ":" + qHash;
+        return "recap_v3:" + norm + ":s" + s + "e" + e + ":b" + bucket5m + ":" + lens + ":" + qHash;
     }
 
     public static JSONObject resolveTargetContext(
@@ -175,26 +187,46 @@ public final class ShowCompanionAgent {
             base.put("has_explicit_ep", hasExplicitEp);
             boolean isSeries = !"Movie".equalsIgnoreCase(base.optString("type", "Series")) || hasExplicitEp;
             base.put("is_series", isSeries);
-            if (isSeries && base.optInt("season", 0) <= 0) base.put("season", 1);
-            if (isSeries && base.optInt("episode", 0) <= 0) base.put("episode", 1);
-            if (base.optInt("position_sec", 0) <= 0) base.put("position_sec", 1450);
-            if (base.optInt("duration_sec", 0) <= 0) base.put("duration_sec", 3000);
+            ensureDefaultPlaybackNumbers(base, isSeries);
         } catch (Exception ignored) {}
     }
 
+    private static void ensureDefaultPlaybackNumbers(JSONObject base, boolean isSeries) throws Exception {
+        if (isSeries && base.optInt("season", 0) <= 0) base.put("season", 1);
+        if (isSeries && base.optInt("episode", 0) <= 0) base.put("episode", 1);
+        if (base.optInt("position_sec", 0) <= 0) base.put("position_sec", 1450);
+        if (base.optInt("duration_sec", 0) <= 0) base.put("duration_sec", 3000);
+    }
+
+    private static void emitStep(AiRecommender.AgentProgressListener listener, String msg) {
+        AgentStatusNarrator.publishLiveStep(msg);
+        if (listener != null) listener.onStep(msg);
+    }
+
     private static JSONObject runAgenticLensSynthesis(
-            AiRecommender ai, AuraDb db, String profileId, String userQuery, String lens, JSONObject ctx) {
+            AiRecommender ai, AuraDb db, String profileId, String userQuery,
+            String lens, JSONObject ctx, AiRecommender.AgentProgressListener stepListener) {
         String title = ctx.optString("title", "MobLand");
         boolean isSeries = ctx.optBoolean("is_series", true);
-        int posSec = ctx.optInt("position_sec", 1450);
+        emitStep(stepListener, "Fetching episode guide for " + title + "\u2026");
         JSONObject guide = SubtitleAndGuideStore.getOrFetchShowGuide(db, title, isSeries);
         resolveEpisodeFromGuideIfNeeded(ctx, guide);
+        JSONArray cues = fetchEpisodeSubtitlesStep(db, ctx, guide, title, isSeries, stepListener);
+        if (Thread.currentThread().isInterrupted()) return new JSONObject();
+        return synthesizeWithSubtitles(ai, db, profileId, userQuery, lens, ctx, guide, cues, stepListener);
+    }
+
+    private static JSONArray fetchEpisodeSubtitlesStep(
+            AuraDb db, JSONObject ctx, JSONObject guide, String title,
+            boolean isSeries, AiRecommender.AgentProgressListener stepListener) {
         int s = ctx.optInt("season", 1);
         int e = ctx.optInt("episode", 1);
-        AgentStatusNarrator.publishLiveStep("Stitching " + title + (isSeries ? " S" + s + "E" + e : "") + " transcript up to " + SubtitleAndGuideStore.formatMmSs(posSec));
+        int posSec = ctx.optInt("position_sec", 1450);
+        String epLabel = isSeries ? (" Season " + s + ", Episode " + e) : "";
+        emitStep(stepListener, "Loading" + epLabel + " subtitles up to " + SubtitleAndGuideStore.formatMmSs(posSec) + "\u2026");
         JSONArray cues = SubtitleAndGuideStore.getOrFetchEpisodeSrtCues(db, title, guide, s, e, isSeries);
         SubtitleAndGuideStore.proactivelyCacheSeriesAsync(db, title, s, e);
-        return synthesizeWithTools(ai, db, profileId, userQuery, lens, ctx, guide, cues);
+        return cues;
     }
 
     private static void resolveEpisodeFromGuideIfNeeded(JSONObject ctx, JSONObject guide) {
@@ -202,8 +234,7 @@ public final class ShowCompanionAgent {
         String syn = ctx.optString("synopsis", "").replaceFirst("(?i)^continue watching\\s+", "").trim();
         if (syn.length() < 3) return;
         JSONArray eps = guide.optJSONArray("episodes");
-        if (eps == null) return;
-        matchEpisodeByTitle(ctx, eps, syn.toLowerCase(Locale.US));
+        if (eps != null) matchEpisodeByTitle(ctx, eps, syn.toLowerCase(Locale.US));
     }
 
     private static void matchEpisodeByTitle(JSONObject ctx, JSONArray eps, String epHintLow) {
@@ -217,74 +248,67 @@ public final class ShowCompanionAgent {
         }
     }
 
-    private static JSONObject synthesizeWithTools(
+    private static JSONObject synthesizeWithSubtitles(
             AiRecommender ai, AuraDb db, String profileId, String userQuery,
-            String lens, JSONObject ctx, JSONObject guide, JSONArray cues) {
+            String lens, JSONObject ctx, JSONObject guide, JSONArray cues,
+            AiRecommender.AgentProgressListener stepListener) {
         int posSec = ctx.optInt("position_sec", 1450);
+        emitStep(stepListener, "Compressing subtitle dialogue up to " + SubtitleAndGuideStore.formatMmSs(posSec) + "\u2026");
         JSONArray sceneActors = SubtitleAndGuideStore.inferActiveSceneActors(guide, cues, posSec);
         String screenFrameB64 = LENS_ACTOR_XRAY.equals(lens) ? captureScreenVisionFrameBase64() : null;
-        String prompt = buildCompanionPrompt(userQuery, lens, ctx, guide, cues, sceneActors, screenFrameB64 != null);
-        AgentStatusNarrator.publishLiveStep("Preparing 2-minute spoken narration");
+        String prompt = buildSimpleSummarizePrompt(userQuery, lens, ctx, guide, cues, sceneActors);
+        emitStep(stepListener, "Summarizing story & dialogue so far\u2026");
         String rawLlm = ai.callGeminiMultimodalJson(prompt, screenFrameB64);
         JSONObject out = parseOrBuildFallbackRecap(rawLlm, lens, ctx, guide, cues, sceneActors);
-        maybeChainActorMovieSearch(ai, db, profileId, userQuery, lens, out, sceneActors);
+        maybeChainActorMovieSearch(ai, db, profileId, userQuery, out, sceneActors, stepListener);
         return out;
     }
 
-    private static String buildCompanionPrompt(
+    public static String buildSimpleSummarizePrompt(
             String userQuery, String lens, JSONObject ctx, JSONObject guide,
-            JSONArray cues, JSONArray sceneActors, boolean hasScreenFrame) {
+            JSONArray cues, JSONArray sceneActors) {
         String title = ctx.optString("title", "MobLand");
         int s = ctx.optInt("season", 1);
         int e = ctx.optInt("episode", 1);
         int posSec = ctx.optInt("position_sec", 1450);
-        String toolPacket = buildToolContextPacket(userQuery, lens, guide, cues, sceneActors, s, e, posSec);
-        return "You are Aura's Agentic Show Companion & Audio Narrator on Android TV.\n" +
-            "Active Show/Movie: \"" + title + "\" | " + (ctx.optBoolean("is_series", true) ? ("Season " + s + ", Episode " + e) : "Movie") +
-            " | Current Timestamp: " + SubtitleAndGuideStore.formatMmSs(posSec) + " (" + (posSec / 60) + " mins in).\n" +
-            "Detected Intent Lens: " + lens + " | User Query: \"" + (userQuery == null || userQuery.isEmpty() ? "Catch me up on what has happened so far" : userQuery) + "\"\n" +
-            (hasScreenFrame ? "A live TV screen frame is attached—inspect it if visible, otherwise rely on the X-Ray Cast & Subtitle tools below.\n" : "") +
-            toolPacket + "\n" +
-            "Task:\n" +
-            "1. Directly fulfill the user's lens using the stitched episode guide, time-sliced subtitle dialogue up to " + SubtitleAndGuideStore.formatMmSs(posSec) + ", and Cast/Character X-Ray.\n" +
-            "2. Write 'spoken_narration' (160–240 words, natural conversational storytelling meant to be read aloud by Google Assistant TTS—no markdown symbols or bullet characters in spoken_narration).\n" +
-            "3. Return ONLY a JSON object with keys:\n" +
-            "   - 'headline': short title (e.g. '" + title + " · S" + s + "E" + e + " (Up to " + SubtitleAndGuideStore.formatMmSs(posSec) + ")')\n" +
-            "   - 'spoken_narration': the 160-240 word spoken audio script\n" +
-            "   - 'story_so_far': 2-3 sentence summary of prior episodes/setup\n" +
-            "   - 'current_episode_beats': 2-3 sentences of what happened up to " + SubtitleAndGuideStore.formatMmSs(posSec) + " in this episode\n" +
-            "   - 'cast_xray': string listing the key actors & characters in this scene\n" +
-            "   - 'actor_to_search': exact real Actor Name ONLY if the user asked to find/search movies or shows with an actor, else \"\"";
+        String priorStory = humanizeEpisodeStitch(SubtitleAndGuideStore.buildHierarchicalEpisodeStitch(guide, s, e));
+        String dialogue = sliceDialogueForLens(userQuery, lens, cues, posSec);
+        String castInfo = LENS_ACTOR_XRAY.equals(lens) ? ("\nCast in Scene: " + formatSceneActorsReadable(sceneActors)) : "";
+        return formatSummarizePromptText(title, s, e, posSec, userQuery, priorStory, dialogue, castInfo);
     }
 
-    private static String buildToolContextPacket(
-            String userQuery, String lens, JSONObject guide, JSONArray cues,
-            JSONArray sceneActors, int s, int e, int posSec) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("TOOL 1 [EPISODE GUIDE UP TO S").append(s).append("E").append(e).append("]:\n")
-          .append(SubtitleAndGuideStore.buildHierarchicalEpisodeStitch(guide, s, e)).append("\n");
-        sb.append("TOOL 2 [ACTIVE SCENE CAST X-RAY (Actor <-> Character)]:\n")
-          .append(sceneActors.toString()).append("\n");
-        appendLensSpecificSrtTool(userQuery, lens, cues, posSec, sb);
-        return sb.toString();
+    private static String formatSummarizePromptText(
+            String title, int s, int e, int posSec, String userQuery,
+            String priorStory, String dialogue, String castInfo) {
+        String mmSs = SubtitleAndGuideStore.formatMmSs(posSec);
+        String q = (userQuery == null || userQuery.isEmpty()) ? "Catch me up on what has happened so far" : userQuery;
+        return "Summarize what has happened so far in \"" + title + "\" (Season " + s + ", Episode " + e + ", paused at " + mmSs + ") for the viewer asking: \"" + q + "\".\n\n" +
+            "Previous Episode Context:\n" + priorStory + "\n\n" +
+            "Compressed Subtitle Dialogue (00:00 to " + mmSs + "):\n" + (dialogue.isEmpty() ? "(No subtitle file found; use episode context above)" : dialogue) + castInfo + "\n\n" +
+            "Write a warm, friendly, natural spoken summary (130 to 200 words) like a friend catching you up on the couch. " +
+            "Use character names and actual events from the subtitles up to " + mmSs + " (strictly no spoilers past " + mmSs + "). " +
+            "Never use codes like S1E1, brackets, markdown, or bullet symbols. " +
+            "Return ONLY JSON: {\"headline\":\"" + title + " \u00B7 Season " + s + ", Episode " + e + "\",\"spoken_narration\":\"...\",\"actor_to_search\":\"\"}";
     }
 
-    private static void appendLensSpecificSrtTool(
-            String userQuery, String lens, JSONArray cues, int posSec, StringBuilder sb) {
+    private static String sliceDialogueForLens(String userQuery, String lens, JSONArray cues, int posSec) {
         if (LENS_RECENT_SCENE.equals(lens) || LENS_ACTOR_XRAY.equals(lens)) {
-            sb.append("TOOL 3 [VERBATIM SUBTITLE DIALOGUE IN CURRENT SCENE (Last 4 Mins up to ")
-              .append(SubtitleAndGuideStore.formatMmSs(posSec)).append(")]:\n")
-              .append(SubtitleAndGuideStore.sliceRawWindow(cues, posSec - 240, posSec)).append("\n");
-        } else if (LENS_CHARACTER_OR_PLOT.equals(lens)) {
-            List<String> terms = extractQuerySearchTerms(userQuery);
-            sb.append("TOOL 3 [GREPPED SUBTITLE DIALOGUE MENTIONS FOR ").append(terms).append(" UP TO ")
-              .append(SubtitleAndGuideStore.formatMmSs(posSec)).append("]:\n")
-              .append(SubtitleAndGuideStore.grepCharacterOrTopic(cues, posSec, terms)).append("\n");
-        } else {
-            sb.append("TOOL 3 [5-MIN SCENE-BEAT COMPRESSED SUBTITLES (00:00 -> ")
-              .append(SubtitleAndGuideStore.formatMmSs(posSec)).append(")]:\n")
-              .append(SubtitleAndGuideStore.sliceCompressedSceneBeats(cues, posSec)).append("\n");
+            return SubtitleAndGuideStore.sliceRawWindow(cues, posSec - 240, posSec);
         }
+        if (LENS_CHARACTER_OR_PLOT.equals(lens)) {
+            String grepped = SubtitleAndGuideStore.grepCharacterOrTopic(cues, posSec, extractQuerySearchTerms(userQuery));
+            if (!grepped.isEmpty()) return grepped;
+        }
+        return SubtitleAndGuideStore.sliceCompressedSceneBeats(cues, posSec);
+    }
+
+    public static String humanizeEpisodeStitch(String rawStitch) {
+        if (rawStitch == null || rawStitch.isEmpty()) return "";
+        return rawStitch.replaceAll("\\[[^\\]]*\\]", "")
+            .replaceAll("(?i)\\bS(\\d{1,2})\\s*E(\\d{1,2})\\b", "Season $1, Episode $2")
+            .replaceAll("(?i)\\bPremise:\\s*", "")
+            .replaceAll("\\s+", " ")
+            .trim();
     }
 
     private static List<String> extractQuerySearchTerms(String userQuery) {
@@ -299,31 +323,51 @@ public final class ShowCompanionAgent {
 
     private static JSONObject parseOrBuildFallbackRecap(
             String rawLlm, String lens, JSONObject ctx, JSONObject guide, JSONArray cues, JSONArray sceneActors) {
-        try {
-            if (rawLlm != null && !rawLlm.trim().isEmpty()) {
-                JSONObject parsed = new JSONObject(rawLlm.trim());
-                if (!parsed.optString("spoken_narration").isEmpty()) return attachContextMeta(parsed, lens, ctx, sceneActors);
-            }
-        } catch (Exception ignored) {}
+        JSONObject parsed = tryParseValidLlmRecap(rawLlm);
+        if (parsed != null) {
+            return attachContextMeta(parsed, lens, ctx, sceneActors);
+        }
         return buildDeterministicFallbackRecap(lens, ctx, guide, cues, sceneActors);
+    }
+
+    private static JSONObject tryParseValidLlmRecap(String rawLlm) {
+        if (rawLlm == null || rawLlm.trim().isEmpty()) return null;
+        try {
+            JSONObject parsed = new JSONObject(rawLlm.trim());
+            String spoken = AuraTtsNarrator.cleanSpokenText(parsed.optString("spoken_narration"));
+            if (spoken.isEmpty()) return null;
+            return parsed.put("spoken_narration", spoken);
+        } catch (Exception ignored) { return null; }
     }
 
     private static JSONObject buildDeterministicFallbackRecap(
             String lens, JSONObject ctx, JSONObject guide, JSONArray cues, JSONArray sceneActors) {
         JSONObject o = new JSONObject();
         try {
-            String title = ctx.optString("title", "MobLand");
-            int s = ctx.optInt("season", 1);
-            int e = ctx.optInt("episode", 1);
-            int posSec = ctx.optInt("position_sec", 1450);
-            String stitch = SubtitleAndGuideStore.buildHierarchicalEpisodeStitch(guide, s, e);
-            String castStr = formatSceneActorsReadable(sceneActors);
-            String spoken = "Here is your catch up for " + title + ", Season " + s + ", Episode " + e + " up to minute " + (posSec / 60) + ". " +
-                stitch.replace("\n", " ") + (castStr.isEmpty() ? "" : " Key cast in this episode includes " + castStr + ".");
-            o.put("headline", title + " · S" + s + "E" + e + " (Up to " + SubtitleAndGuideStore.formatMmSs(posSec) + ")");
-            o.put("spoken_narration", spoken).put("story_so_far", stitch).put("cast_xray", castStr);
+            populateFallbackRecapFields(o, ctx, guide, cues);
         } catch (Exception ignored) {}
         return attachContextMeta(o, lens, ctx, sceneActors);
+    }
+
+    private static void populateFallbackRecapFields(
+            JSONObject o, JSONObject ctx, JSONObject guide, JSONArray cues) throws Exception {
+        String title = ctx.optString("title", "MobLand");
+        int s = ctx.optInt("season", 1);
+        int e = ctx.optInt("episode", 1);
+        int posSec = ctx.optInt("position_sec", 1450);
+        String cleanStitch = humanizeEpisodeStitch(SubtitleAndGuideStore.buildHierarchicalEpisodeStitch(guide, s, e));
+        String recentLines = SubtitleAndGuideStore.sliceRawWindow(cues, Math.max(0, posSec - 180), posSec);
+        String spoken = composeFriendlyFallbackSpeech(title, s, e, posSec, cleanStitch, recentLines);
+        o.put("headline", title + " \u00B7 Season " + s + ", Episode " + e);
+        o.put("spoken_narration", spoken).put("story_so_far", cleanStitch).put("is_fallback", true);
+    }
+
+    private static String composeFriendlyFallbackSpeech(
+            String title, int s, int e, int posSec, String cleanStitch, String recentLines) {
+        String intro = "Here is what has happened so far in " + title + ", Season " + s + ", Episode " + e + ", up to minute " + Math.max(1, posSec / 60) + ". ";
+        String body = !cleanStitch.isEmpty() ? (cleanStitch + " ") : "";
+        String subTail = !recentLines.isEmpty() ? ("In the latest scene just before you paused: " + recentLines) : "";
+        return AuraTtsNarrator.cleanSpokenText(intro + body + subTail);
     }
 
     private static JSONObject attachContextMeta(JSONObject o, String lens, JSONObject ctx, JSONArray sceneActors) {
@@ -342,29 +386,28 @@ public final class ShowCompanionAgent {
         for (int i = 0; i < sceneActors.length() && i < 5; i++) {
             JSONObject c = sceneActors.optJSONObject(i);
             if (c == null) continue;
-            if (sb.length() > 0) sb.append(" · ");
-            sb.append(c.optString("actor")).append(" (").append(c.optString("character")).append(")");
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(c.optString("actor")).append(" as ").append(c.optString("character"));
         }
         return sb.toString();
     }
 
     private static void maybeChainActorMovieSearch(
             AiRecommender ai, AuraDb db, String profileId, String userQuery,
-            String lens, JSONObject out, JSONArray sceneActors) {
+            JSONObject out, JSONArray sceneActors, AiRecommender.AgentProgressListener stepListener) {
         String low = userQuery != null ? userQuery.toLowerCase(Locale.US) : "";
         boolean wantsMovies = low.contains("movie") || low.contains("show") || low.contains("search") || low.contains("find") || low.contains("other");
         String actor = out.optString("actor_to_search", "").trim();
         if (actor.isEmpty() && wantsMovies && sceneActors != null && sceneActors.length() > 0) {
             actor = sceneActors.optJSONObject(0).optString("actor", "");
         }
-        if (actor.isEmpty() || !wantsMovies) return;
-        appendActorSearchResults(ai, db, profileId, actor, out);
+        if (!actor.isEmpty() && wantsMovies) appendActorSearchResults(ai, actor, out, stepListener);
     }
 
     private static void appendActorSearchResults(
-            AiRecommender ai, AuraDb db, String profileId, String actor, JSONObject out) {
+            AiRecommender ai, String actor, JSONObject out, AiRecommender.AgentProgressListener stepListener) {
         try {
-            AgentStatusNarrator.publishLiveStep("Searching movies & shows starring " + actor);
+            emitStep(stepListener, "Searching movies & shows starring " + actor + "\u2026");
             JSONArray specs = new JSONArray().put(new JSONObject().put("searchQuery", actor).put("includeSimilar", false).put("minYear", 1995));
             JSONArray castHits = JustWatchGraph.executeScatterGatherSpecs(specs);
             JSONArray enriched = ai.enrichAll(castHits, 1995, JustWatchGraph.getCurrentYear());
@@ -372,22 +415,22 @@ public final class ShowCompanionAgent {
         } catch (Exception ignored) {}
     }
 
-    /**
-     * Captures a live TV frame via screencap and returns Base64 JPEG ONLY if the frame
-     * contains non-black visual pixels (e.g. YouTube/SmartTube/Plex or unencrypted pause UI).
-     */
     public static String captureScreenVisionFrameBase64() {
         try {
             Process proc = Runtime.getRuntime().exec(new String[]{"sh", "-c", "screencap -p"});
             Bitmap bmp = decodeProcessBitmap(proc.getInputStream());
             if (bmp == null || isMostlyBlackDrmFrame(bmp)) return null;
-            Bitmap scaled = Bitmap.createScaledBitmap(bmp, 640, 360, true);
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            scaled.compress(Bitmap.CompressFormat.JPEG, 72, bos);
-            return Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP);
+            return encodeScaledJpegBase64(bmp);
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    private static String encodeScaledJpegBase64(Bitmap bmp) {
+        Bitmap scaled = Bitmap.createScaledBitmap(bmp, 640, 360, true);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        scaled.compress(Bitmap.CompressFormat.JPEG, 72, bos);
+        return Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP);
     }
 
     private static Bitmap decodeProcessBitmap(InputStream is) {

@@ -133,4 +133,48 @@ public class VoiceConciergeAndCompanionUnitTest {
         m.setAccessible(true);
         assertEquals("https://s/1.srt", m.invoke(null, "{\"subtitles\":[{\"lang\":\"eng\",\"url\":\"https://s/1.srt\"}]}"));
     }
+
+    @Test
+    public void testProgressiveSubtitlesFriendlyTtsVoiceScoringAndHijackGuard() throws Exception {
+        verifyProgressiveSubtitleAndTtsHelpers();
+        verifyWordToWordCounterAndFrameSync();
+        verifySimpleSummarizeStepsAndNonCachedFallback();
+    }
+
+    private void verifyWordToWordCounterAndFrameSync() {
+        java.util.List<SubtitleWordTracker.WordToken> toks = SubtitleWordTracker.tokenize(
+            "One two three four five six seven eight nine ten eleven twelve");
+        assertEquals(2, SubtitleWordTracker.resolveWordIndex(toks, 8, 13));
+        SubtitleWordTracker.PageSlice p0 = SubtitleWordTracker.buildPageAtWord(toks, 2);
+        assertEquals("three", p0.text.substring(p0.activeStart, p0.activeEnd));
+        assertEquals("eleven", SubtitleWordTracker.buildPageAtWord(toks, 10).text);
+        assertEquals(22050, AuraTtsNarrator.resolveRangeFrameRateHz(48000));
+        assertEquals(1320L, AuraTtsNarrator.computeFrameSyncDelayMs(1000L, 1000L, 22050, 48000, 320L));
+    }
+
+    private void verifyProgressiveSubtitleAndTtsHelpers() {
+        String s = "Flynne enters the headset in Clanton.";
+        assertEquals("Flynne", LiveSubtitleBar.buildProgressiveText(s, 0));
+        assertEquals("Flynne enters the", LiveSubtitleBar.buildProgressiveText(s, 17));
+        assertEquals(s, LiveSubtitleBar.buildProgressiveText(s, 999));
+        assertEquals("Season 1, Episode 2 recap.", AuraTtsNarrator.cleanSpokenText("[CURRENT EPISODE] Premise: S1E2 recap."));
+        int netScore = AuraTtsNarrator.scoreVoiceAttributes("en", "US", "en-us-x-iog-server", 400, true);
+        int embScore = AuraTtsNarrator.scoreVoiceAttributes("en", "US", "en-us-x-iog-lstm-embedded", 400, false);
+        assertTrue(netScore > embScore);
+        assertTrue(InAppVoiceRouter.isHijackForegroundPkg("com.google.android.youtube.tv", "com.amazon.amazonvideo.livingroom"));
+        assertFalse(InAppVoiceRouter.isHijackForegroundPkg("com.google.android.youtube.tv", "com.google.android.youtube.tv"));
+    }
+
+    private void verifySimpleSummarizeStepsAndNonCachedFallback() throws Exception {
+        InMemoryAuraDb db = new InMemoryAuraDb();
+        seedCachedGuideAndSubtitles(db);
+        TestableAiRecommender ai = new TestableAiRecommender(db);
+        ai.enqueueLlmResponse("");
+        java.util.List<String> steps = new java.util.ArrayList<>();
+        JSONObject item = new JSONObject().put("series_title", "Severance").put("season", 1).put("episode", 2).put("position_sec", 600);
+        JSONObject fb = ShowCompanionAgent.executeCompanionTurn(ai, db, "m1", "catch me up", item, steps::add);
+        assertTrue(fb.optBoolean("is_fallback"));
+        assertFalse(fb.optString("spoken_narration").contains("S1E1"));
+        assertTrue(steps.size() >= 3);
+    }
 }
