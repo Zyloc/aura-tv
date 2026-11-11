@@ -33,7 +33,9 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private final Context ctx;
     private final ComponentName component;
     private final AuraDb db;
+    private final AiRecommender ai;
     private final SessionInspector inspector;
+    private final TvOverlayManager overlay;
     private final HandlerThread workerThread;
     private final Handler workerHandler;
     private final Map<String, TrackedController> controllers = new HashMap<>();
@@ -45,10 +47,17 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private Process katnissLogProcess;
 
     public MediaEventWatcher(Context ctx, ComponentName component, AuraDb db, SessionInspector inspector) {
+        this(ctx, component, db, new AiRecommender(db), inspector, TvOverlayManager.peekInstance());
+    }
+
+    public MediaEventWatcher(Context ctx, ComponentName component, AuraDb db,
+                             AiRecommender ai, SessionInspector inspector, TvOverlayManager overlay) {
         this.ctx = ctx.getApplicationContext();
         this.component = component;
         this.db = db;
+        this.ai = ai;
         this.inspector = inspector;
+        this.overlay = overlay;
         this.workerThread = new HandlerThread("AuraMediaEvents");
         this.workerThread.start();
         this.workerHandler = new Handler(this.workerThread.getLooper());
@@ -118,10 +127,9 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
     private void handleKatnissLogLine(String line) {
         String spoken = VoiceSearchHelper.extractKatnissRecognizedText(line);
         if (!spoken.isEmpty()) {
-            if (ShowCompanionAgent.isShowCompanionQuery(spoken)) inspector.recordActivePlaybackOnly();
-            AuraActivity.onGlobalVoiceSearchQuery(ctx, spoken);
+            InAppVoiceRouter.onVoiceTranscriptCaptured(ctx, db, ai, inspector, overlay, spoken);
         } else if (VoiceSearchHelper.isKatnissResponseTakeoverLog(line)) {
-            AuraActivity.suppressKatnissOverlayNow(ctx);
+            InAppVoiceRouter.onKatnissTakeoverDetected(ctx);
         }
     }
 

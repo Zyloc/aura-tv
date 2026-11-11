@@ -58,11 +58,25 @@ public class AndroidManifestContractTest {
         File actFile = resolveFile(
             "probe/src/com/aura/tvprobe/app/AuraActivity.java",
             "src/com/aura/tvprobe/app/AuraActivity.java");
+        File svcFile = resolveFile(
+            "probe/src/com/aura/tvprobe/service/MediaProbeService.java",
+            "src/com/aura/tvprobe/service/MediaProbeService.java");
+        File detailFile = resolveFile(
+            "probe/src/com/aura/tvprobe/ui/DetailOverlay.java",
+            "src/com/aura/tvprobe/ui/DetailOverlay.java");
         String src = new String(Files.readAllBytes(actFile.toPath()), StandardCharsets.UTF_8);
+        String svcSrc = new String(Files.readAllBytes(svcFile.toPath()), StandardCharsets.UTF_8);
+        String detailSrc = new String(Files.readAllBytes(detailFile.toPath()), StandardCharsets.UTF_8);
         assertTrue("AuraActivity must listen for ACTION_CLOSE_SYSTEM_DIALOGS homekey",
             src.contains("ACTION_CLOSE_SYSTEM_DIALOGS") && src.contains("\"homekey\""));
+        assertTrue("AuraActivity must build CATEGORY_HOME launcher intent for hardware home presses",
+            src.contains("Intent.CATEGORY_HOME") && src.contains("onHardwareHomeKeyPressed"));
+        assertTrue("MediaProbeService must also listen for hardware homekey when launcher is backgrounded",
+            svcSrc.contains("ACTION_CLOSE_SYSTEM_DIALOGS") && svcSrc.contains("onHardwareHomeKeyPressed"));
         assertTrue("AuraActivity must override onNewIntent and call resetToHomeTop()",
             src.contains("protected void onNewIntent(Intent intent)") && src.contains("resetToHomeTop()"));
+        assertFalse("Launcher DetailOverlay must not render Catch Me Up button (in-app only)",
+            detailSrc.contains("\\uD83D\\uDD0A  Catch Me Up"));
     }
 
     @Test

@@ -493,9 +493,6 @@ public final class DetailOverlay {
         TextView watchBtn = buildActionButton(ctx, "\u25B6  Watch", true);
         watchBtn.setOnClickListener(v -> cb.onWatchClicked(item));
         row.addView(watchBtn);
-        TextView catchUpBtn = buildActionButton(ctx, "\uD83D\uDD0A  Catch Me Up", false);
-        catchUpBtn.setOnClickListener(v -> cb.onCatchMeUpClicked(item));
-        row.addView(catchUpBtn);
         TextView trailerBtn = buildActionButton(ctx, "\u25B6  Trailer", false);
         trailerBtn.setOnClickListener(v -> cb.onTrailerClicked(item));
         row.addView(trailerBtn);

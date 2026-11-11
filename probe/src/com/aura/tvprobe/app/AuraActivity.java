@@ -111,7 +111,7 @@ public class AuraActivity extends Activity implements
         @Override
         public void onReceive(Context context, Intent intent) {
             if ("homekey".equals(intent.getStringExtra("reason"))) {
-                ui.post(() -> resetToHomeTop());
+                onHardwareHomeKeyPressed(context);
             }
         }
     };
@@ -143,10 +143,7 @@ public class AuraActivity extends Activity implements
     @Override
     protected void onResume() {
         super.onResume();
-        sActiveInstance = this;
-        sIsInForeground = true;
-        sLastActiveWallMs = System.currentTimeMillis();
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        markLauncherResumed();
         scheduleSilenceBackgroundMediaOnResume();
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
         startHomeSearchHintAnimation();
@@ -154,6 +151,15 @@ public class AuraActivity extends Activity implements
         updateNavMetadata();
         resetIdleTimer();
         maybeRefreshOnResume();
+    }
+
+    private void markLauncherResumed() {
+        sActiveInstance = this;
+        sIsInForeground = true;
+        sLastActiveWallMs = System.currentTimeMillis();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        TvOverlayManager.dismissActiveInstanceOverlays();
+        bindLiveSubtitleListener();
     }
 
     private void scheduleSilenceBackgroundMediaOnResume() {
@@ -308,6 +314,39 @@ public class AuraActivity extends Activity implements
         super.onDestroy();
     }
 
+    public static boolean isInForeground() {
+        return sIsInForeground;
+    }
+
+    public static void rebindLauncherSubtitleIfActive() {
+        AuraActivity inst = sActiveInstance;
+        if (inst != null) inst.ui.post(inst::bindLiveSubtitleListener);
+    }
+
+    public static Intent buildHomeLauncherIntent(Context ctx) {
+        Intent i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+        i.setClassName(ctx, AuraActivity.class.getName());
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
+            | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        return i;
+    }
+
+    public static void onHardwareHomeKeyPressed(Context ctx) {
+        AuraActivity inst = sActiveInstance;
+        if (inst != null && sIsInForeground) {
+            inst.ui.post(inst::resetToHomeTop);
+            return;
+        }
+        launchHomeActivityNow(ctx, inst);
+    }
+
+    private static void launchHomeActivityNow(Context ctx, AuraActivity inst) {
+        if (ctx != null) {
+            try { ctx.startActivity(buildHomeLauncherIntent(ctx)); } catch (Throwable ignored) {}
+        }
+        if (inst != null) inst.ui.post(inst::resetToHomeTop);
+    }
+
     public static void onGlobalVoiceSearchQuery(Context ctx, String rawQuery) {
         String q = rawQuery != null ? rawQuery.trim() : "";
         if (!shouldHandleGlobalVoiceQuery(q)) return;
@@ -325,9 +364,7 @@ public class AuraActivity extends Activity implements
         try {
             Handler mainH = new Handler(Looper.getMainLooper());
             VoiceSearchHelper.silenceAssistantAudio(ctx, mainH);
-            Intent i = new Intent(ctx, AuraActivity.class).setAction(Intent.ACTION_SEARCH);
-            i.putExtra(android.app.SearchManager.QUERY, q);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            Intent i = buildHomeLauncherIntent(ctx).putExtra("aura_voice_query", q);
             ctx.startActivity(i);
             mainH.postDelayed(() -> scheduleBringAuraToFront(mainH, ctx), 250L);
         } catch (Throwable ignored) {}
@@ -375,9 +412,8 @@ public class AuraActivity extends Activity implements
             ctx.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
             AuraActivity inst = sActiveInstance;
             if (inst != null && sIsInForeground && inst.hasWindowFocus()) return;
-            Intent i = new Intent(ctx, AuraActivity.class).putExtra("aura_bring_to_front", true);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
-                | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            Intent i = buildHomeLauncherIntent(ctx).putExtra("aura_bring_to_front", true);
+            i.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
             ctx.startActivity(i);
         } catch (Throwable ignored) {}
     }
@@ -1325,14 +1361,19 @@ public class AuraActivity extends Activity implements
     private boolean tryPresentPureCompanionRecap(JSONObject res) {
         JSONObject recap = res.optJSONObject("companion_recap");
         if (recap == null || !recap.optString("actor_to_search", "").isEmpty()) return false;
-        JSONObject targetItem = res.optJSONObject("target_item");
-        if (targetItem == null || targetItem.optString("title").isEmpty()) return false;
-        SearchOverlay.dismiss(searchOverlay);
-        openDetailDrawer(targetItem);
-        DetailOverlay.showRecapInDetail(detailOverlay, recap);
-        String spoken = res.optString("spoken_narration", "");
-        if (!spoken.isEmpty()) AuraTtsNarrator.speak(this, spoken, null);
+        showInAppOnlyCompanionHint();
         return true;
+    }
+
+    private void showInAppOnlyCompanionHint() {
+        JSONArray hintTurns = new JSONArray().put(new JSONObject());
+        try {
+            hintTurns = new JSONArray()
+                .put(new JSONObject().put("role", "user").put("text", lastSearchQuery))
+                .put(new JSONObject().put("role", "assistant").put("text",
+                    "Catch Me Up works directly inside your streaming app. Open your show in Hotstar, Netflix, Prime Video, or YouTube and say \u201CCatch me up\u201D."));
+        } catch (Exception ignored) {}
+        SearchOverlay.setConversationTurns(searchOverlay, hintTurns, this);
     }
 
     private List<String> extractFollowUpList(JSONArray arr) {

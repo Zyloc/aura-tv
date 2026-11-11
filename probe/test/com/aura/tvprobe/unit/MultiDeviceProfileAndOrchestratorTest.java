@@ -196,4 +196,45 @@ public class MultiDeviceProfileAndOrchestratorTest {
         int[] bounds = AuraTtsNarrator.findWordBoundsAt("Harry Da Souza met Conrad", 10);
         assertEquals("Souza", "Harry Da Souza met Conrad".substring(bounds[0], bounds[1]));
     }
+
+    @Test
+    public void testInAppVoiceRouterIntentClassificationAndSameAppSearchUris() {
+        InAppVoiceRouter.VoiceDecision c1 = InAppVoiceRouter.classifyIntent(
+            null, "Can you catch me up on what happened so far", "Disney+ Hotstar");
+        assertEquals(InAppVoiceRouter.VoiceAction.COMPANION, c1.action);
+
+        InAppVoiceRouter.VoiceDecision c2 = InAppVoiceRouter.classifyIntent(
+            null, "Search for Interstellar on Hotstar please", "Disney+ Hotstar");
+        assertEquals(InAppVoiceRouter.VoiceAction.IN_APP_SEARCH, c2.action);
+        assertEquals("Interstellar", c2.cleanQuery);
+
+        InAppVoiceRouter.VoiceDecision c3 = InAppVoiceRouter.classifyIntent(
+            null, "Christopher Nolan sci-fi movies", "Netflix");
+        assertEquals(InAppVoiceRouter.VoiceAction.IN_APP_SEARCH, c3.action);
+        assertEquals("Christopher Nolan sci-fi movies", c3.cleanQuery);
+
+        InAppVoiceRouter.VoiceDecision ctrl = InAppVoiceRouter.classifyIntent(null, "volume up", "YouTube");
+        assertEquals(InAppVoiceRouter.VoiceAction.CONTROL, ctrl.action);
+
+        InAppVoiceRouter.VoiceDecision home = InAppVoiceRouter.classifyIntent(null, "go home", "Prime Video");
+        assertEquals(InAppVoiceRouter.VoiceAction.GO_HOME, home.action);
+
+        assertTrue(InAppVoiceRouter.isIgnoredForegroundPackage("com.google.android.katniss"));
+        assertTrue(InAppVoiceRouter.isIgnoredForegroundPackage("com.aura.tvprobe"));
+        assertFalse(InAppVoiceRouter.isIgnoredForegroundPackage("in.startv.hotstar"));
+        assertFalse(InAppVoiceRouter.isIgnoredForegroundPackage("com.netflix.ninja"));
+
+        assertEquals("https://www.hotstar.com/in/explore?search_query=Prison%20Break",
+            MediaDeepLinkLauncher.buildAppSearchUri("in.startv.hotstar", "Prison Break"));
+        assertEquals("nflx://www.netflix.com/search?q=Dark%20Matter",
+            MediaDeepLinkLauncher.buildAppSearchUri("com.netflix.ninja", "Dark Matter"));
+        assertEquals("https://app.primevideo.com/search?phrase=Fallout",
+            MediaDeepLinkLauncher.buildAppSearchUri("com.amazon.amazonvideo.livingroom", "Fallout"));
+        assertEquals("https://www.youtube.com/results?search_query=Interstellar%204K",
+            MediaDeepLinkLauncher.buildAppSearchUri("com.google.android.youtube.tv", "Interstellar 4K"));
+        assertEquals("sony://search?query=Scam%201992&q=Scam%201992",
+            MediaDeepLinkLauncher.buildAppSearchUri("com.sonyliv", "Scam 1992"));
+        assertEquals("https://tv.apple.com/search?term=Severance",
+            MediaDeepLinkLauncher.buildAppSearchUri("com.apple.atve.androidtv.appletv", "Severance"));
+    }
 }

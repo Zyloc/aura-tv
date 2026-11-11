@@ -80,9 +80,15 @@ public final class VoiceSearchHelper {
             intent.getStringExtra(SearchManager.QUERY),
             intent.getStringExtra(Intent.EXTRA_TEXT),
             intent.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS));
-        if (q.isEmpty()) q = extractSuggestionViewQuery(intent);
+        if (q.isEmpty()) q = extractDirectOrSuggestionQuery(intent);
         if (!q.isEmpty()) clearConsumedQueryExtras(intent);
         return q;
+    }
+
+    private static String extractDirectOrSuggestionQuery(Intent intent) {
+        String direct = intent.getStringExtra("aura_voice_query");
+        if (direct != null && !direct.trim().isEmpty()) return direct.trim();
+        return extractSuggestionViewQuery(intent);
     }
 
     private static String extractSuggestionViewQuery(Intent intent) {
@@ -154,6 +160,7 @@ public final class VoiceSearchHelper {
         try {
             intent.removeExtra(SearchManager.QUERY);
             intent.removeExtra(Intent.EXTRA_TEXT);
+            intent.removeExtra("aura_voice_query");
             intent.setAction(Intent.ACTION_MAIN);
         } catch (Throwable ignored) {}
     }

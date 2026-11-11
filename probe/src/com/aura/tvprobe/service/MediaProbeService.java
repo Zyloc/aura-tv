@@ -24,14 +24,29 @@ public class MediaProbeService extends NotificationListenerService {
     private TvOverlayManager overlay;
     private SyncManager sync;
     private VoiceConcierge voice;
+    private final android.content.BroadcastReceiver homeKeyReceiver = new android.content.BroadcastReceiver() {
+        @Override
+        public void onReceive(android.content.Context context, Intent intent) {
+            if ("homekey".equals(intent.getStringExtra("reason"))) {
+                AuraActivity.onHardwareHomeKeyPressed(MediaProbeService.this);
+            }
+        }
+    };
 
     @Override
     public void onCreate() {
         super.onCreate();
         initCoreDependencies();
+        registerServiceHomeKeyReceiver();
         startHttpServer();
         eventWatcher.registerAll();
         startHourlyRecoMonitor();
+    }
+
+    private void registerServiceHomeKeyReceiver() {
+        try {
+            registerReceiver(homeKeyReceiver, new android.content.IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+        } catch (Exception ignored) {}
     }
 
     private void initCoreDependencies() {
@@ -39,8 +54,8 @@ public class MediaProbeService extends NotificationListenerService {
         ai = new AiRecommender(db);
         ComponentName comp = new ComponentName(this, MediaProbeService.class);
         inspector = new SessionInspector(this, comp, db, ai);
-        eventWatcher = new MediaEventWatcher(this, comp, db, inspector);
         overlay = new TvOverlayManager(this);
+        eventWatcher = new MediaEventWatcher(this, comp, db, ai, inspector, overlay);
         sync = new SyncManager(db);
         voice = new VoiceConcierge(db, ai, sync);
     }
@@ -62,6 +77,7 @@ public class MediaProbeService extends NotificationListenerService {
     @Override
     public void onDestroy() {
         running = false;
+        try { unregisterReceiver(homeKeyReceiver); } catch (Exception ignored) {}
         if (eventWatcher != null) eventWatcher.unregisterAll();
         closeSocketQuietly(serverSocket);
         closeSocketQuietly(serverSocket8080);
@@ -244,9 +260,7 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private boolean handleOpenUiRoute(OutputStream out) throws Exception {
-        Intent i = new Intent(this, AuraActivity.class);
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(i);
+        startActivity(AuraActivity.buildHomeLauncherIntent(this));
         writeHttpResponse(out, "application/json", "{\"ok\":true}");
         return true;
     }
@@ -296,11 +310,19 @@ public class MediaProbeService extends NotificationListenerService {
         String q = optParam(uri, "q", item.optString("query", ""));
         populateCatchupItemFromUri(uri, item);
         JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, prof, q, item);
-        if (!"0".equals(optParam(uri, "speak", "1"))) {
-            AuraTtsNarrator.speak(this, recap.optString("spoken_narration", ""), null);
-        }
+        if (!"0".equals(optParam(uri, "speak", "1"))) presentInAppCatchupAudio(recap);
         writeHttpResponse(out, "application/json", recap.toString());
         return true;
+    }
+
+    private void presentInAppCatchupAudio(JSONObject recap) {
+        if (!AuraActivity.isInForeground()) {
+            overlay.showInAppCompanionRecap(recap);
+        } else {
+            overlay.showVoiceStatusPill("\u2726 AURA SHOW COMPANION",
+                "Catch Me Up works inside your app",
+                "Open your show in Netflix, Hotstar, Prime, or YouTube to play audio recap.", 6);
+        }
     }
 
     private void populateCatchupItemFromUri(Uri uri, JSONObject item) throws Exception {
@@ -353,9 +375,19 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private JSONObject executeMirroredChatTurn(String prof, String msg, boolean reset) {
+        if (!AuraActivity.isInForeground() && !reset && ShowCompanionAgent.isShowCompanionQuery(msg)) {
+            return executeInAppRemoteCompanionTurn(prof, msg);
+        }
         AuraActivity.onRemoteChatStarted(msg, reset);
         JSONObject res = voice.handleTurn(prof, msg, reset, AuraActivity::onRemoteChatProgress);
         AuraActivity.onRemoteChatCompleted(msg, reset, res);
+        return res;
+    }
+
+    private JSONObject executeInAppRemoteCompanionTurn(String prof, String msg) {
+        JSONObject res = voice.handleTurn(prof, msg, false, overlay::updateVoiceStatusSubtext);
+        JSONObject recap = res != null ? res.optJSONObject("companion_recap") : null;
+        if (recap != null) overlay.showInAppCompanionRecap(recap);
         return res;
     }
 

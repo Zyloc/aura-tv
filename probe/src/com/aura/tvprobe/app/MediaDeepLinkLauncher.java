@@ -183,19 +183,66 @@ public final class MediaDeepLinkLauncher {
 
     private static boolean tryInAppSearch(Context ctx, String cleanTitle, String pkg) {
         if (cleanTitle.isEmpty() || pkg.isEmpty()) return false;
-        if (NETFLIX_PKG.equals(pkg) && tryNetflixSearch(ctx, cleanTitle)) return true;
-        if (tryActionIntent(ctx, Intent.ACTION_SEARCH, pkg, cleanTitle)) return true;
-        return tryActionIntent(ctx, "android.media.action.MEDIA_PLAY_FROM_SEARCH", pkg, cleanTitle);
+        return launchInAppSearchForPackage(ctx, null, pkg, cleanTitle);
     }
 
-    private static boolean tryNetflixSearch(Context ctx, String cleanTitle) {
-        if (tryActionIntent(ctx, Intent.ACTION_SEARCH, NETFLIX_PKG, cleanTitle)) return true;
+    public static boolean launchInAppSearchForPackage(Context ctx, AuraDb db, String pkg, String rawQuery) {
+        String q = rawQuery != null ? rawQuery.trim() : "";
+        if (ctx == null || pkg == null || pkg.isEmpty() || q.isEmpty()) return false;
+        AuraActivity.markOutboundAppLaunch();
+        if ((pkg.contains("youtube") || pkg.contains("smarttube")) && tryYouTubeTrailerIntent(ctx, pkg, q)) return true;
+        String searchUri = buildAppSearchUri(pkg, q);
+        if (!searchUri.isEmpty() && tryViewSearchUriForPkg(ctx, pkg, searchUri, q)) return true;
+        if (tryActionIntent(ctx, Intent.ACTION_SEARCH, pkg, q)) return true;
+        return tryActionIntent(ctx, "android.media.action.MEDIA_PLAY_FROM_SEARCH", pkg, q);
+    }
+
+    public static String buildAppSearchUri(String pkg, String query) {
+        String q = query != null ? query.trim() : "";
+        if (pkg == null || pkg.isEmpty() || q.isEmpty()) return "";
+        String enc = encodeQuerySafe(q);
+        String primary = matchPrimaryStreamingSearchUri(pkg, enc);
+        return !primary.isEmpty() ? primary : matchSecondaryStreamingSearchUri(pkg, enc);
+    }
+
+    private static String encodeQuerySafe(String q) {
         try {
-            Uri uri = Uri.parse("http://www.netflix.com/search/" + Uri.encode(cleanTitle));
-            Intent nfView = new Intent(Intent.ACTION_VIEW, uri).setPackage(NETFLIX_PKG);
-            nfView.putExtra("source", "30");
-            nfView.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(nfView);
+            return java.net.URLEncoder.encode(q, "UTF-8").replace("+", "%20");
+        } catch (Throwable t) {
+            return q.replace(" ", "%20");
+        }
+    }
+
+    private static String matchPrimaryStreamingSearchUri(String pkg, String enc) {
+        if (pkg.contains("youtube") || pkg.contains("smarttube")) return "https://www.youtube.com/results?search_query=" + enc;
+        if ("in.startv.hotstar".equals(pkg)) return "https://www.hotstar.com/in/explore?search_query=" + enc;
+        if ("com.disney.disneyplus".equals(pkg)) return "https://www.disneyplus.com/search?q=" + enc;
+        if (pkg.startsWith("com.amazon.amazonvideo") || pkg.startsWith("com.amazon.avod")) return "https://app.primevideo.com/search?phrase=" + enc;
+        if (NETFLIX_PKG.equals(pkg)) return "nflx://www.netflix.com/search?q=" + enc;
+        if ("com.sonyliv".equals(pkg)) return "sony://search?query=" + enc + "&q=" + enc;
+        return "";
+    }
+
+    private static String matchSecondaryStreamingSearchUri(String pkg, String enc) {
+        if ("com.apple.atve.androidtv.appletv".equals(pkg)) return "https://tv.apple.com/search?term=" + enc;
+        if ("com.graymatrix.did".equals(pkg)) return "https://www.zee5.com/search?q=" + enc;
+        if ("com.jiocinema.tv".equals(pkg)) return "https://www.jiocinema.com/search?q=" + enc;
+        if ("com.crunchyroll.crunchyroid".equals(pkg)) return "crunchyroll://search?q=" + enc;
+        if ("com.wbd.stream".equals(pkg)) return "https://play.max.com/search?q=" + enc;
+        if ("com.hulu.livingroomplus".equals(pkg)) return "https://www.hulu.com/search?q=" + enc;
+        if (pkg.startsWith("com.spotify.")) return "spotify:search:" + enc;
+        if (pkg.startsWith("tv.twitch.")) return "twitch://search?term=" + enc;
+        return "";
+    }
+
+    private static boolean tryViewSearchUriForPkg(Context ctx, String pkg, String uriStr, String q) {
+        try {
+            Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(uriStr)).setPackage(pkg);
+            view.putExtra(SearchManager.QUERY, q);
+            view.putExtra("query", q);
+            if (NETFLIX_PKG.equals(pkg)) view.putExtra("source", "30");
+            view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            ctx.startActivity(view);
             return true;
         } catch (Exception ignored) { return false; }
     }
