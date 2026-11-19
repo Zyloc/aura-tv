@@ -162,8 +162,7 @@ public final class HeroSliderBuilder {
         border.setFocusable(false);
         border.setClickable(false);
         float radius = dp(ctx, 18);
-        border.setBackground(GlassTheme.focusRounded(
-            Color.TRANSPARENT, GlassTheme.BORDER_STRONG, dp(ctx, 1), radius));
+        border.setBackground(GlassTheme.focusRounded(Color.TRANSPARENT, Color.TRANSPARENT, 0, radius));
         st.focusBorderOverlay = border;
         hero.addView(border, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -181,8 +180,8 @@ public final class HeroSliderBuilder {
     private static void updateHeroFocusState(FrameLayout hero, HeroState st, Context ctx,
                                              boolean focused, float radius) {
         if (st.focusBorderOverlay != null) {
-            int stroke = focused ? Color.WHITE : GlassTheme.BORDER_STRONG;
-            int sw = focused ? GlassTheme.dp(ctx, 2.5f) : dp(ctx, 1);
+            int stroke = focused ? Color.argb(190, 255, 255, 255) : Color.TRANSPARENT;
+            int sw = focused ? GlassTheme.dp(ctx, 1.5f) : 0;
             st.focusBorderOverlay.setBackground(GlassTheme.focusRounded(Color.TRANSPARENT, stroke, sw, radius));
         }
         hero.setElevation(focused ? dp(ctx, 16) : dp(ctx, 8));

@@ -42,6 +42,7 @@ public final class ModalOverlayBuilder {
     public interface ModalActions {
         void onRefreshRecommendations(boolean forceRebuild);
         void onLaunchMedia(JSONObject item);
+        default void onHistoryItemSelected(JSONObject item) { onLaunchMedia(item); }
         void onOpenSystemTvSettings();
         void onProfileCreated(String newProfileId);
         void onModalClosed();
@@ -438,7 +439,7 @@ public final class ModalOverlayBuilder {
                                               Context ctx, FrameLayout hostContainer, ModalActions actions) {
         card.setOnClickListener(v -> {
             closeModal(hostContainer, actions);
-            if (actions != null) actions.onLaunchMedia(item);
+            if (actions != null) actions.onHistoryItemSelected(item);
         });
         card.setOnFocusChangeListener((v, focused) -> v.setBackground(GlassTheme.focusRounded(
             focused ? GlassTheme.SURFACE_ELEV : GlassTheme.GLASS_CARD,
@@ -478,8 +479,32 @@ public final class ModalOverlayBuilder {
                                              int remotePort, FrameLayout hostContainer, ModalActions actions) {
         View firstQualityBtn = addQualityAndRankingSections(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
         addPreferredLanguagesSection(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
+        addCompanionVoiceAndSpeedSection(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
         addAiEngineAndActionsSection(body, ctx, db, remotePort, hostContainer, actions);
         return firstQualityBtn;
+    }
+
+    private static void addCompanionVoiceAndSpeedSection(
+            LinearLayout body, Context ctx, AuraDb db, String activeProfile,
+            int remotePort, FrameLayout hostContainer, ModalActions actions) {
+        addSettingSectionHeader(body, ctx, "4. COMPANION VOICE & SPEED (FREE GOOGLE SPEECH)",
+            "Choose Catch Me Up narration accent and speaking speed.");
+        String[][] accents = {{"US", "US English"}, {"IN", "Indian English"}, {"GB", "UK English"}, {"HI", "Hindi"}};
+        String[][] speeds = {{"0.90", "0.9x Calm"}, {"0.97", "1.0x Natural"}, {"1.15", "1.15x Brisk"}};
+        addOptionSelectorRow(body, ctx, accents, db.getSetting("tts_accent", "US"),
+            k -> applyVoicePrefAndReopen(hostContainer, ctx, db, activeProfile, remotePort, actions, k, null), hostContainer, actions);
+        addOptionSelectorRow(body, ctx, speeds, db.getSetting("tts_speed", "0.97"),
+            k -> applyVoicePrefAndReopen(hostContainer, ctx, db, activeProfile, remotePort, actions, null, k), hostContainer, actions);
+    }
+
+    private static void applyVoicePrefAndReopen(
+            FrameLayout hostContainer, Context ctx, AuraDb db, String activeProfile,
+            int remotePort, ModalActions actions, String newAccent, String newSpeed) {
+        if (newAccent != null) db.setSetting("tts_accent", newAccent);
+        if (newSpeed != null) db.setSetting("tts_speed", newSpeed);
+        float rate = Float.parseFloat(db.getSetting("tts_speed", "0.97"));
+        AuraTtsNarrator.applyVoicePreferences(ctx, db.getSetting("tts_accent", "US"), rate);
+        showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
     }
 
     private static LinearLayout buildSettingsHeader(Context ctx, FrameLayout hostContainer, ModalActions actions) {
@@ -714,10 +739,30 @@ public final class ModalOverlayBuilder {
 
     private static LinearLayout buildGuideAiBottomRow(Context ctx, AuraDb db, String activeProfile,
                                                       FrameLayout hostContainer, ModalActions actions) {
-        LinearLayout bottomRow = createPaddedHorizontalRow(ctx, 16, 0);
+        LinearLayout col = new LinearLayout(ctx);
+        col.setOrientation(LinearLayout.VERTICAL);
+        String dna = TasteIntelligenceEngine.getTasteDnaPromptSummary(db, activeProfile);
+        col.addView(GlassTheme.makeText(ctx, "Learned Taste DNA: " + dna, 10f,
+            GlassTheme.TEXT_MUTED, GlassTheme.FONT_REGULAR, 2), createTopMarginParams(ctx, 10));
+        LinearLayout bottomRow = createPaddedHorizontalRow(ctx, 10, 0);
         bottomRow.addView(createApplyTasteBtn(ctx, hostContainer, actions), createRightMarginParams(ctx, 10));
+        bottomRow.addView(createClearDislikesBtn(ctx, db, activeProfile, hostContainer, actions), createRightMarginParams(ctx, 10));
         bottomRow.addView(createResetTasteBtn(ctx, db, activeProfile, hostContainer, actions), GlassTheme.wrapParams());
-        return bottomRow;
+        col.addView(bottomRow);
+        return col;
+    }
+
+    private static TextView createClearDislikesBtn(Context ctx, AuraDb db, String activeProfile,
+                                                   FrameLayout hostContainer, ModalActions actions) {
+        TextView btn = GlassTheme.makeGlassButton(ctx, "Clear Hidden & Dislikes");
+        btn.setTextSize(10.5f);
+        btn.setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8));
+        btn.setOnClickListener(v -> {
+            TasteIntelligenceEngine.clearDismissedItems(db, activeProfile);
+            showGuideAiModal(hostContainer, ctx, db, activeProfile, actions);
+        });
+        bindBackKey(btn, hostContainer, actions);
+        return btn;
     }
 
     private static TextView createApplyTasteBtn(Context ctx, FrameLayout hostContainer, ModalActions actions) {
@@ -908,6 +953,12 @@ public final class ModalOverlayBuilder {
     private static LinearLayout.LayoutParams createRightMarginParams(Context ctx, int rightDp) {
         LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
         lp.rightMargin = dp(ctx, rightDp);
+        return lp;
+    }
+
+    private static LinearLayout.LayoutParams createTopMarginParams(Context ctx, int topDp) {
+        LinearLayout.LayoutParams lp = GlassTheme.matchWrapParams();
+        lp.topMargin = dp(ctx, topDp);
         return lp;
     }
 

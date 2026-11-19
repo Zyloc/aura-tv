@@ -44,13 +44,31 @@ public class TasteIntelligenceIntegrationTest {
         JSONObject dismissed = new JSONObject().put("title", "Cheesy Romcom").put("genre_codes", "rma,cmy").put("seed_anchor", "SoapSeed");
         TasteIntelligenceEngine.recordNotInterested(db, "member1", dismissed);
         assertTrue(TasteIntelligenceEngine.getDismissedTitleKeys(db, "member1").contains("cheesyromcom"));
+        assertTrue("Dismissed seed/genre + 5x skips must produce strong negative penalty", computePeerSkipPenalty(db) <= -3.5);
+        TasteIntelligenceEngine.clearDismissedItems(db, "member1");
+        assertTrue("clearDismissedItems must wipe hidden titles", TasteIntelligenceEngine.getDismissedTitleKeys(db, "member1").isEmpty());
+        verifyCompanionVoiceAccentAndSpeedPreferences();
+    }
+
+    private double computePeerSkipPenalty(InMemoryAuraDb db) throws Exception {
         Map<String, ImpressionTracker.ImpressionRecord> imp = new HashMap<>();
         imp.put("similarromcom", new ImpressionTracker.ImpressionRecord(1, 5, System.currentTimeMillis() / 1000L));
         JSONObject peer = new JSONObject().put("title", "Similar Romcom").put("genre_codes", "rma").put("seed_anchor", "SoapSeed");
-        double pen = TasteIntelligenceEngine.computeNegativeAndSkipPenalty(peer,
+        return TasteIntelligenceEngine.computeNegativeAndSkipPenalty(peer,
             TasteIntelligenceEngine.buildNegativeGenrePenalties(db, "member1"),
             TasteIntelligenceEngine.buildNegativeSeedSet(db, "member1"), imp);
-        assertTrue("Dismissed seed/genre + 5x skips must produce strong negative penalty", pen <= -3.5);
+    }
+
+    private void verifyCompanionVoiceAccentAndSpeedPreferences() {
+        AuraTtsNarrator.applyVoicePreferences(null, "IN", 1.15f);
+        assertEquals("IN", AuraTtsNarrator.getPreferredAccent());
+        assertEquals(1.15f, AuraTtsNarrator.getSpeechRate(), 0.001f);
+        assertTrue(AuraTtsNarrator.scoreVoiceAttributes("en", "IN", "en-in-x-enc-network", 400, true)
+            > AuraTtsNarrator.scoreVoiceAttributes("en", "US", "en-us-x-iog-network", 400, true));
+        AuraTtsNarrator.applyVoicePreferences(null, "HI", 0.90f);
+        assertTrue(AuraTtsNarrator.scoreVoiceAttributes("hi", "IN", "hi-in-x-hia-network", 400, true) > 0);
+        assertEquals(-1, AuraTtsNarrator.scoreVoiceAttributes("en", "US", "en-us-x-iog-network", 400, true));
+        AuraTtsNarrator.applyVoicePreferences(null, "US", 0.97f);
     }
 
     @Test
@@ -81,6 +99,16 @@ public class TasteIntelligenceIntegrationTest {
         assertEquals("Dark Matter", mind.get(0).optString("title"));
         List<JSONObject> light = TasteIntelligenceEngine.rerankForMoodAndContext(mixed, TasteIntelligenceEngine.MOOD_LIGHT_SMART, 15, Calendar.TUESDAY);
         assertEquals("Panchayat", light.get(0).optString("title"));
+        verifyRedesignedDetailUnifiedMeta();
+    }
+
+    private void verifyRedesignedDetailUnifiedMeta() {
+        try {
+            JSONObject item = new JSONObject().put("app", "Prime Video").put("imdb_raw", 8.1)
+                .put("year", 2026).put("runtime_min", 62).put("genres", "Action, Comedy, Crime");
+            String meta = DetailOverlay.buildUnifiedCinemaMeta(item);
+            assertEquals("PRIME VIDEO  \u00B7  \u2605 8.1  \u00B7  2026  \u00B7  62m  \u00B7  Action, Comedy", meta);
+        } catch (Exception e) { fail(e.getMessage()); }
     }
 
     @Test

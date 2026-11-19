@@ -40,6 +40,8 @@ public final class AuraTtsNarrator {
     private static volatile SubtitleListener sSubtitleListener;
     private static volatile int sSpeechEpoch = 0;
     private static volatile long sOutputLatencyMs = 320L;
+    private static volatile String sPreferredAccent = "US";
+    private static volatile float sSpeechRate = 0.97f;
 
     private static List<String> sSentences = new ArrayList<>();
     private static List<List<SubtitleWordTracker.WordToken>> sSentenceTokens = new ArrayList<>();
@@ -105,11 +107,26 @@ public final class AuraTtsNarrator {
         }
     }
 
+    public static synchronized void applyVoicePreferences(Context ctx, String accent, float speed) {
+        sPreferredAccent = (accent != null && !accent.trim().isEmpty()) ? accent.trim().toUpperCase(Locale.US) : "US";
+        sSpeechRate = Math.max(0.75f, Math.min(1.35f, speed));
+        if (sReady && sTts != null) configureTtsVoice();
+    }
+
+    public static String getPreferredAccent() {
+        return sPreferredAccent;
+    }
+
+    public static float getSpeechRate() {
+        return sSpeechRate;
+    }
+
     private static void configureTtsVoice() {
         try {
-            sTts.setLanguage(Locale.US);
+            Locale target = "HI".equals(sPreferredAccent) ? new Locale("hi", "IN") : new Locale("en", sPreferredAccent);
+            sTts.setLanguage(target);
             selectBestSystemVoice();
-            sTts.setSpeechRate(0.97f);
+            sTts.setSpeechRate(sSpeechRate);
             sTts.setPitch(1.0f);
             attachProgressListener();
         } catch (Throwable ignored) {}
@@ -146,15 +163,17 @@ public final class AuraTtsNarrator {
 
     public static int scoreVoiceAttributes(
             String language, String country, String rawName, int quality, boolean networkRequired) {
-        if (language == null || !"en".equalsIgnoreCase(language)) return -1;
+        String wantLang = "HI".equals(sPreferredAccent) ? "hi" : "en";
+        if (language == null || !wantLang.equalsIgnoreCase(language)) return -1;
         String name = rawName != null ? rawName.toLowerCase(Locale.US) : "";
         int score = quality + (networkRequired ? 600 : 0);
         if (name.contains("lstm-embedded")) score -= 350;
         if (name.contains("wavenet") || name.contains("neural") || name.contains("iog") || name.contains("tpf") || name.contains("iom")) score += 120;
-        return score + scoreEnglishCountry(country);
+        return score + scorePreferredCountry(country);
     }
 
-    private static int scoreEnglishCountry(String country) {
+    private static int scorePreferredCountry(String country) {
+        if (sPreferredAccent.equalsIgnoreCase(country)) return 250;
         if ("US".equalsIgnoreCase(country)) return 90;
         if ("GB".equalsIgnoreCase(country)) return 75;
         if ("IN".equalsIgnoreCase(country)) return 65;

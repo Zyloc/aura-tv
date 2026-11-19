@@ -72,6 +72,12 @@ public final class TasteIntelligenceEngine {
         buildAndPersistTasteDna(db, profileId);
     }
 
+    public static void clearDismissedItems(AuraDb db, String profileId) {
+        if (db == null) return;
+        db.setSetting("dismissed_items_" + profileId, "[]");
+        buildAndPersistTasteDna(db, profileId);
+    }
+
     private static void appendOrReplaceDismissed(JSONArray list, String key, JSONObject item) {
         for (int i = 0; i < list.length(); i++) {
             JSONObject cur = list.optJSONObject(i);

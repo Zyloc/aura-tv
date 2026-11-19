@@ -145,7 +145,14 @@ public class AuraActivity extends Activity implements
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         initServices();
+        applySavedTtsPreferences();
         AuraTtsNarrator.warmup(this);
+    }
+
+    private void applySavedTtsPreferences() {
+        float rate = 0.97f;
+        try { rate = Float.parseFloat(db.getSetting("tts_speed", "0.97")); } catch (Exception ignored) {}
+        AuraTtsNarrator.applyVoicePreferences(this, db.getSetting("tts_accent", "US"), rate);
     }
 
     private void buildUiAndStartLoops() {
@@ -912,7 +919,7 @@ public class AuraActivity extends Activity implements
 
     private void populateTraversalChips() {
         chipsRow.removeAllViews();
-        addMoodPillButton("For You", TasteIntelligenceEngine.MOOD_ALL);
+        addMoodPillButton(resolveContextualForYouLabel(), TasteIntelligenceEngine.MOOD_ALL);
         addMoodPillButton("Mind-Bending", TasteIntelligenceEngine.MOOD_MIND_BENDING);
         addMoodPillButton("Light & Smart", TasteIntelligenceEngine.MOOD_LIGHT_SMART);
         addMoodPillButton("Edge-of-Seat", TasteIntelligenceEngine.MOOD_EDGE_OF_SEAT);
@@ -920,6 +927,13 @@ public class AuraActivity extends Activity implements
         for (String chip : db.getTraversalChips(activeProfile)) {
             chipsRow.addView(buildTraversalChipButton(chip));
         }
+    }
+
+    private String resolveContextualForYouLabel() {
+        String ctx = TasteIntelligenceEngine.detectCurrentTimeContext();
+        if (TasteIntelligenceEngine.CTX_LATE_NIGHT.equals(ctx)) return "\u2726 Late-Night Quick Picks";
+        if (TasteIntelligenceEngine.CTX_WEEKEND_BINGE.equals(ctx)) return "\u2726 Weekend Binge";
+        return "\u2726 For You";
     }
 
     private void addMoodPillButton(String label, String moodKey) {
@@ -1154,6 +1168,11 @@ public class AuraActivity extends Activity implements
     @Override
     public void onLaunchMedia(JSONObject item) {
         launchMediaItem(item);
+    }
+
+    @Override
+    public void onHistoryItemSelected(JSONObject item) {
+        openDetailDrawer(item);
     }
 
     @Override

@@ -19,11 +19,16 @@ public final class CompanionAudioFocusController {
     private static final AudioManager.OnAudioFocusChangeListener FOCUS_LISTENER = change -> {};
     private static volatile boolean sSilenceActive = false;
     private static volatile AudioFocusRequest sActiveFocusRequest;
+    private static volatile String sPausedExternalPkg = "";
 
     private CompanionAudioFocusController() {}
 
     public static boolean isCompanionSilenceActive() {
         return sSilenceActive;
+    }
+
+    public static String getLastPausedExternalPkg() {
+        return sPausedExternalPkg;
     }
 
     public static synchronized void engageCompanionSilence(Context ctx) {
@@ -36,9 +41,30 @@ public final class CompanionAudioFocusController {
 
     public static synchronized void releaseCompanionSilence(Context ctx) {
         sSilenceActive = false;
+        String resumePkg = sPausedExternalPkg;
+        sPausedExternalPkg = "";
         if (ctx == null) return;
         AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
         if (am != null) abandonExclusiveAudioFocus(am);
+        if (!resumePkg.isEmpty()) resumePausedExternalSession(ctx, resumePkg);
+    }
+
+    private static void resumePausedExternalSession(Context ctx, String targetPkg) {
+        try {
+            MediaSessionManager msm = (MediaSessionManager) ctx.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            if (msm == null) return;
+            for (MediaController mc : msm.getActiveSessions(new ComponentName(ctx, MediaProbeService.class))) {
+                resumeControllerIfPaused(mc, targetPkg);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void resumeControllerIfPaused(MediaController mc, String targetPkg) {
+        if (mc == null || !targetPkg.equals(mc.getPackageName())) return;
+        PlaybackState st = mc.getPlaybackState();
+        if (st != null && st.getState() == PlaybackState.STATE_PAUSED) {
+            try { mc.getTransportControls().play(); } catch (Throwable ignored) {}
+        }
     }
 
     public static void pauseAllExternalMediaSessions(Context ctx) {
@@ -57,6 +83,7 @@ public final class CompanionAudioFocusController {
         if (mc == null || isInternalOrTtsPackage(mc.getPackageName())) return;
         PlaybackState st = mc.getPlaybackState();
         if (st != null && isActivePlaybackState(st.getState())) {
+            sPausedExternalPkg = mc.getPackageName();
             try { mc.getTransportControls().pause(); } catch (Throwable ignored) {}
         }
     }
