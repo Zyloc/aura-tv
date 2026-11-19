@@ -31,12 +31,14 @@ public final class AuraTestSuiteRunner {
         UiPureLogicAndGraphParserTest.class,
         DeepPipelineAndSessionUnitTest.class,
         PhantomSearchAndSessionBugfixTest.class,
+        CoreEngineAndServiceCoverageTest.class,
         // Integration Tests
         RecommendationPipelineIntegrationTest.class,
         VoiceAndContinueWatchingIntegrationTest.class,
         LiveJustWatchGraphIntegrationTest.class,
         CatchMeUpCompanionIntegrationTest.class,
-        TasteIntelligenceIntegrationTest.class
+        TasteIntelligenceIntegrationTest.class,
+        ReserveSyncAndTasteLifecycleIntegrationTest.class
     };
 
     public static void main(String[] args) {

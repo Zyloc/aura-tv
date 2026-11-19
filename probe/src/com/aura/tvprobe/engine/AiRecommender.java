@@ -75,7 +75,7 @@ public class AiRecommender {
             JSONArray swapped = trySwapReserveAndWarmNext(profileId, history);
             if (swapped != null) return swapped;
         }
-        if (cached.length() >= 12 && (lastRefreshEndMs > entryMs || (!forceManual && db.isRecoCacheFresh(profileId)))) {
+        if (cached.length() >= 6 && (lastRefreshEndMs > entryMs || (!forceManual && db.isRecoCacheFresh(profileId)))) {
             ReserveSlateManager.warmNextReserveAsync(db, this, profileId, history);
             return cached;
         }
