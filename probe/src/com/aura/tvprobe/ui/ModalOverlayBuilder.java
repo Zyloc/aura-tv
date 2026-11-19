@@ -131,9 +131,11 @@ public final class ModalOverlayBuilder {
     private static List<String> resolveDynamicHistoryFilterPills(AuraDb db, List<JSONObject> allHistory) {
         List<String> pills = new ArrayList<>();
         pills.add("All Platforms");
+        pills.add("Watched \u2713");
+        pills.add("Continue Watching");
         for (JSONObject item : allHistory) {
             String p = ContinueWatchingSelector.cleanPlatformName(item.optString("app", item.optString("app_name", "")));
-            if (!p.isEmpty() && !"Streaming".equals(p) && !"TV".equals(p) && !pills.contains(p) && pills.size() < 6) {
+            if (!p.isEmpty() && !"Streaming".equals(p) && !"TV".equals(p) && !pills.contains(p) && pills.size() < 7) {
                 pills.add(p);
             }
         }
@@ -172,7 +174,7 @@ public final class ModalOverlayBuilder {
         return sv;
     }
 
-    private static List<JSONObject> collectUnifiedDateSortedHistory(AuraDb db, String profileId) {
+    static List<JSONObject> collectUnifiedDateSortedHistory(AuraDb db, String profileId) {
         List<JSONObject> combined = new ArrayList<>();
         Set<String> seenKeys = new HashSet<>();
         appendOttHistoryItems(db, profileId, combined, seenKeys);
@@ -182,9 +184,6 @@ public final class ModalOverlayBuilder {
     }
 
     private static int compareHistoryEntries(JSONObject a, JSONObject b) {
-        boolean aCont = "continue".equals(a.optString("history_kind"));
-        boolean bCont = "continue".equals(b.optString("history_kind"));
-        if (aCont != bCont) return aCont ? -1 : 1;
         return Long.compare(b.optLong("updated_at", 0L), a.optLong("updated_at", 0L));
     }
 
@@ -202,11 +201,12 @@ public final class ModalOverlayBuilder {
         String series = o.optString("series_title", "");
         String rawTitle = o.optString("title", "");
         String mainTitle = !series.isEmpty() ? series : rawTitle;
-        String app = HeroSliderBuilder.cleanPlatformName(o.optString("app_name", o.optString("app", "Streaming")));
+        String app = ContinueWatchingSelector.cleanPlatformName(o.optString("app_name", o.optString("app", "Streaming")));
         if (isExcludedHistoryRow(mainTitle, app, o.optString("app_pkg", "").toLowerCase(), seenKeys)) return null;
         String disp = (!series.isEmpty() && !series.equalsIgnoreCase(rawTitle) && !rawTitle.isEmpty())
             ? (series + " \u00B7 " + rawTitle) : mainTitle;
-        return enrichHistoryJson(db, o, disp, mainTitle, app, "continue", -1L);
+        boolean watched = o.optBoolean("watched", false) || !ContinueWatchingSelector.isUnfinishedProgress(o);
+        return enrichHistoryJson(db, o, disp, mainTitle, app, watched ? "watched" : "continue", -1L);
     }
 
     private static boolean isExcludedHistoryRow(String mainTitle, String app, String pkg, Set<String> seenKeys) {
@@ -231,7 +231,7 @@ public final class ModalOverlayBuilder {
         if (o == null) return null;
         String series = o.optString("series_title", "");
         String mainTitle = !series.isEmpty() ? series : o.optString("title", "");
-        String app = HeroSliderBuilder.cleanPlatformName(o.optString("app", o.optString("app_name", "Netflix")));
+        String app = ContinueWatchingSelector.cleanPlatformName(o.optString("app", o.optString("app_name", "Netflix")));
         if ("TV".equalsIgnoreCase(app) || "Streaming".equalsIgnoreCase(app)) app = "Netflix";
         String norm = AuraDb.normalizeTitleKey(mainTitle);
         if (norm.isEmpty() || !seenKeys.add(norm)) return null;
@@ -255,7 +255,7 @@ public final class ModalOverlayBuilder {
         copy.put("display_title", dispTitle);
         copy.put("clean_app", app);
         copy.put("history_kind", kind);
-        if (overrideTs > 0) copy.put("updated_at", overrideTs);
+        if (overrideTs > 0 && copy.optLong("updated_at", 0L) <= 0L) copy.put("updated_at", overrideTs);
     }
 
     private static void backfillCachedPosterUrl(AuraDb db, JSONObject copy, String mainTitle) throws Exception {
@@ -278,15 +278,19 @@ public final class ModalOverlayBuilder {
         }
     }
 
-    private static List<JSONObject> filterHistoryByPlatform(List<JSONObject> all, String platformFilter) {
+    static List<JSONObject> filterHistoryByPlatform(List<JSONObject> all, String platformFilter) {
         List<JSONObject> filtered = new ArrayList<>();
         for (JSONObject item : all) {
-            String app = item.optString("clean_app", "");
-            if ("ALL".equalsIgnoreCase(platformFilter) || app.equalsIgnoreCase(platformFilter)) {
-                filtered.add(item);
-            }
+            if (matchesHistoryFilter(item, platformFilter)) filtered.add(item);
         }
         return filtered;
+    }
+
+    private static boolean matchesHistoryFilter(JSONObject item, String filter) {
+        if ("ALL".equalsIgnoreCase(filter)) return true;
+        if ("Watched \u2713".equals(filter)) return "watched".equals(item.optString("history_kind"));
+        if ("Continue Watching".equals(filter)) return "continue".equals(item.optString("history_kind"));
+        return item.optString("clean_app", "").equalsIgnoreCase(filter);
     }
 
     private static LinearLayout buildHistoryPairRow(List<JSONObject> filtered, int r, Context ctx,
@@ -395,19 +399,18 @@ public final class ModalOverlayBuilder {
 
     // Status / Progress bar
     private static void addHistoryProgressSection(Context ctx, LinearLayout info, JSONObject item) {
+        boolean isWatched = "watched".equals(item.optString("history_kind")) || item.optBoolean("watched", false);
         int pos = item.optInt("position_sec", 0);
         int dur = item.optInt("duration_sec", 0);
         int pct = (pos > 0 && dur > 0) ? Math.min(95, Math.max(10, (pos * 100) / dur)) : 100;
-        String statusText = resolveHistoryStatusText(pos, dur, pct, item.optInt("user_rating", 0));
+        String statusText = resolveHistoryStatusText(isWatched, pos, dur, pct, item.optInt("user_rating", 0));
         info.addView(GlassTheme.makeText(ctx, statusText, 10f, GlassTheme.GOLD_ACCENT, GlassTheme.FONT_MEDIUM, 1));
-        if (pos > 0 && dur > 0) {
-            info.addView(buildHistoryProgressTrack(ctx, pct));
-        }
+        if (!isWatched && pos > 0 && dur > 0) info.addView(buildHistoryProgressTrack(ctx, pct));
     }
 
-    private static String resolveHistoryStatusText(int pos, int dur, int pct, int rating) {
+    private static String resolveHistoryStatusText(boolean isWatched, int pos, int dur, int pct, int rating) {
+        if (isWatched) return rating > 0 ? ("Watched \u2713  \u00B7  Rated \u2605 " + rating + "/10") : "Watched \u2713  \u00B7  Used by AI Taste Graph";
         if (pos > 0 && dur > 0) return "\u25B6 Resume \u00B7 " + pct + "% watched";
-        if (rating > 0) return "Watched \u2713  \u00B7  Rated \u2605 " + rating + "/10";
         return "Watched \u2713  \u00B7  Used by AI Taste Graph";
     }
 

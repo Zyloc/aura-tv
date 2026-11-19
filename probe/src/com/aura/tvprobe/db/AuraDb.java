@@ -817,7 +817,7 @@ public class AuraDb extends SQLiteOpenHelper {
 
     private void addExcludedHistoryCursorRow(Cursor c, Set<String> keys) {
         int pos = c.getInt(2), dur = c.getInt(3);
-        if ((pos == 1200 && dur == 2700) || (pos == 1350 && dur == 3000)) return;
+        if (pos == 1350 && dur == 3000) return;
         String s = c.isNull(1) ? "" : c.getString(1).trim();
         String t = !s.isEmpty() ? s : (c.isNull(0) ? "" : c.getString(0).trim());
         String k = normalizeTitleKey(t);

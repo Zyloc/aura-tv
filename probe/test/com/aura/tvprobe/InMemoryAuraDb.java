@@ -190,7 +190,7 @@ public class InMemoryAuraDb extends AuraDb {
 
     private void addHistoryExcludedKey(JSONObject h, Set<String> keys) {
         int pos = h.optInt("position_sec", 0), dur = h.optInt("duration_sec", 0);
-        if ((pos == 1200 && dur == 2700) || (pos == 1350 && dur == 3000)) return;
+        if (pos == 1350 && dur == 3000) return;
         String t = h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title");
         String k = normalizeTitleKey(t);
         if (!k.isEmpty()) keys.add(k);

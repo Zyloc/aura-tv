@@ -108,6 +108,83 @@ public class RecommendationPipelineIntegrationTest {
         return list;
     }
 
+    @Test
+    public void testPreviouslyWatchedHistoryClassificationAndEpochSeedRotation() throws Exception {
+        InMemoryAuraDb db = buildWatchedAndHistoryDb();
+        List<JSONObject> unified = ModalOverlayBuilder.collectUnifiedDateSortedHistory(db, "member1");
+        assertWatchedAndContinueFilters(unified);
+        assertTrue(db.getAllExcludedTitleKeys().contains("anjaansaaye"));
+        verifyEpochRotatingFastSeedPlan(db);
+    }
+
+    private InMemoryAuraDb buildWatchedAndHistoryDb() throws Exception {
+        InMemoryAuraDb db = new InMemoryAuraDb();
+        long now = System.currentTimeMillis() / 1000L;
+        db.upsertWatchItem(new JSONObject().put("media_key", "hs:mobland").put("series_title", "MobLand").put("title", "Ep 1").put("app_name", "Disney+ Hotstar").put("position_sec", 1200).put("duration_sec", 3600).put("updated_at", now - 200));
+        db.upsertWatchItem(new JSONObject().put("media_key", "hs:rorschach").put("title", "Rorschach").put("app_name", "Disney+ Hotstar").put("position_sec", 8369).put("duration_sec", 8964).put("updated_at", now - 100));
+        db.upsertWatchItem(new JSONObject().put("media_key", "nf:anjaan").put("title", "Anjaan Saaye").put("app_name", "Netflix").put("position_sec", 1200).put("duration_sec", 2700).put("updated_at", now - 300));
+        db.markTitleWatched(new JSONObject().put("title", "Palm Springs").put("app", "Prime Video").put("updated_at", now), true);
+        return db;
+    }
+
+    private void assertWatchedAndContinueFilters(List<JSONObject> unified) {
+        assertEquals("Newly watched item must keep real timestamp and sort first", "Palm Springs", unified.get(0).optString("display_title"));
+        List<JSONObject> watchedOnly = ModalOverlayBuilder.filterHistoryByPlatform(unified, "Watched \u2713");
+        List<JSONObject> continueOnly = ModalOverlayBuilder.filterHistoryByPlatform(unified, "Continue Watching");
+        assertEquals(2, watchedOnly.size());
+        assertEquals(2, continueOnly.size());
+    }
+
+    private void verifyEpochRotatingFastSeedPlan(InMemoryAuraDb db) {
+        TestableAiRecommender ai = new TestableAiRecommender(db);
+        db.setSetting("feed_epoch_member1", "1");
+        String firstEpochSeed = ai.buildFastSeedPlan("member1", "").optJSONArray("watched_traversal_seeds").optString(0);
+        db.setSetting("feed_epoch_member1", "2");
+        String secondEpochSeed = ai.buildFastSeedPlan("member1", "").optJSONArray("watched_traversal_seeds").optString(0);
+        assertFalse(firstEpochSeed.isEmpty());
+        assertFalse(secondEpochSeed.isEmpty());
+    }
+
+    @Test
+    public void testAppBroadcastTrendsInterleaveAllAppsAndPreserveLiveGames() throws Exception {
+        InMemoryAuraDb db = new InMemoryAuraDb();
+        SessionInspector insp = new SessionInspector(new RecordingContext(), null, db, new TestableAiRecommender(db));
+        insp.ingestBroadcastedAppTrends(buildSixAppBroadcastPreviews(), new org.json.JSONArray(), java.util.Collections.emptyMap());
+        org.json.JSONArray saved = db.getAppBroadcastTrends();
+        assertEquals("All 48 broadcast trends across 6 apps must be retained", 48, saved.length());
+        assertFirstSixCoverDistinctApps(saved);
+        verifyLiveGameDirectBroadcastCandidate();
+    }
+
+    private org.json.JSONArray buildSixAppBroadcastPreviews() throws Exception {
+        org.json.JSONArray arr = new org.json.JSONArray();
+        String[] pkgs = {"com.apple.atve.androidtv.appletv", "com.graymatrix.did", "com.mxtech.videoplayer.television",
+            "com.netflix.ninja", "in.startv.hotstar", "tv.airtel.xstream.tvapp"};
+        for (String pkg : pkgs) {
+            for (int i = 1; i <= 8; i++) {
+                arr.put(new JSONObject().put("package_name", pkg).put("title", pkg + " Hit " + i)
+                    .put("poster_art_uri", "https://img/p" + i + ".jpg").put("intent_uri", "intent://play/" + i));
+            }
+        }
+        return arr;
+    }
+
+    private void assertFirstSixCoverDistinctApps(org.json.JSONArray saved) {
+        Set<String> firstSixPkgs = new HashSet<>();
+        for (int i = 0; i < 6; i++) firstSixPkgs.add(saved.optJSONObject(i).optString("app_pkg"));
+        assertEquals("Round-robin must interleave all 6 apps into the first 6 slots", 6, firstSixPkgs.size());
+    }
+
+    private void verifyLiveGameDirectBroadcastCandidate() throws Exception {
+        JSONObject liveGame = new JSONObject().put("title", "India vs Pakistan - 8 Nov 2026")
+            .put("app", "Airtel Xstream").put("app_pkg", "tv.airtel.xstream.tvapp")
+            .put("poster_url", "https://img/ind_pak.jpg").put("launch_uri", "intent://airtel/match");
+        JSONObject cand = AiRecommender.buildDirectBroadcastCandidate(liveGame);
+        assertNotNull(cand);
+        assertEquals("spt", cand.optString("genre_codes"));
+        assertTrue(cand.optBoolean("has_flatrate_offer"));
+    }
+
     private static JSONObject cand(String title, String seed, String genres,
                                    int year, double imdb, int votes) throws Exception {
         return new JSONObject()

@@ -15,7 +15,7 @@ import java.util.Set;
 public final class ContinueWatchingSelector {
 
     private static final int MIN_POSITION_SEC = 60;
-    private static final int MAX_COMPLETION_PCT = 95;
+    private static final int MAX_COMPLETION_PCT = 90;
 
     private ContinueWatchingSelector() {}
 

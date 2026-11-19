@@ -143,7 +143,7 @@ public class AiRecommender {
         submitPlannedQueryTasks(exec, taste, seedPlan, minModernYear, seenKeys, pool);
         submitStructuredDiscoveryTasks(exec, taste, minModernYear, currentYear, seenKeys, pool);
         exec.shutdown();
-        try { exec.awaitTermination(12, TimeUnit.SECONDS); } catch (Exception ignored) {}
+        try { exec.awaitTermination(8, TimeUnit.SECONDS); } catch (Exception ignored) {}
     }
 
     private void submitAppBroadcastTrendTasks(
@@ -151,8 +151,8 @@ public class AiRecommender {
             Set<String> seenKeys, List<JSONObject> pool) {
         JSONArray trends = db.getAppBroadcastTrends();
         if (trends.length() == 0) return;
-        int offset = Math.abs(taste.getCurrentEpoch() * 4) % Math.max(1, trends.length());
-        for (int i = 0; i < Math.min(10, trends.length()); i++) {
+        int offset = Math.abs(taste.getCurrentEpoch() * 5) % Math.max(1, trends.length());
+        for (int i = 0; i < Math.min(14, trends.length()); i++) {
             final int rankIdx = i;
             final JSONObject tObj = trends.optJSONObject((offset + i) % trends.length());
             if (tObj != null) exec.submit(() -> retrieveBroadcastTrendCandidate(tObj, rankIdx, taste, seenKeys, pool));
@@ -165,9 +165,40 @@ public class AiRecommender {
         String title = trend.optString("title", "").trim();
         if (title.isEmpty() || seenKeys.contains(AuraDb.normalizeTitleKey(title))) return;
         JSONObject hit = JustWatchGraph.lookupTitle(title);
+        if (hit == null) hit = buildDirectBroadcastCandidate(trend);
         if (hit == null) return;
         overlayBroadcastMetadata(hit, trend, rankIdx);
-        addSotaCandidate(hit, null, Math.max(0.88, 1.12 - rankIdx * 0.03), taste, seenKeys, pool);
+        addSotaCandidate(hit, null, Math.max(0.92, 1.18 - rankIdx * 0.025), taste, seenKeys, pool);
+    }
+
+    static JSONObject buildDirectBroadcastCandidate(JSONObject trend) {
+        String poster = trend.optString("poster_url", "").trim();
+        String uri = trend.optString("launch_uri", "").trim();
+        if (poster.isEmpty() || uri.isEmpty()) return null;
+        try {
+            return populateDirectBroadcastJson(trend, poster, uri);
+        } catch (Exception e) { return null; }
+    }
+
+    private static JSONObject populateDirectBroadcastJson(JSONObject trend, String poster, String uri) throws Exception {
+        String title = trend.optString("title", "").trim();
+        String app = trend.optString("app", "TV");
+        String gCodes = inferBroadcastGenreCodes(title, trend.optString("channel", ""));
+        return new JSONObject().put("title", title).put("app", app).put("badge", app)
+            .put("launch_pkg", trend.optString("app_pkg", "")).put("launch_uri", uri)
+            .put("poster_url", poster).put("backdrop_url", poster).put("has_flatrate_offer", true)
+            .put("year", JustWatchGraph.getCurrentYear()).put("type", "spt".equals(gCodes) ? "Live / Sports" : "Series")
+            .put("genres", "spt".equals(gCodes) ? "Sports, Live" : "Trending").put("genre_codes", gCodes)
+            .put("synopsis", trend.optString("synopsis", "Trending now on " + app)).put("imdb_raw", 0.0).put("imdb_votes", 0);
+    }
+
+    private static String inferBroadcastGenreCodes(String title, String channel) {
+        String low = (title + " " + channel).toLowerCase(Locale.US);
+        if (low.contains(" vs ") || low.contains("cricket") || low.contains("match") || low.contains("ipl")
+                || low.contains("football") || low.contains("f1") || low.contains("sport") || low.contains("messi")) {
+            return "spt";
+        }
+        return "drm,trl";
     }
 
     private void overlayBroadcastMetadata(JSONObject hit, JSONObject trend, int rankIdx) {
@@ -176,7 +207,8 @@ public class AiRecommender {
             if (!uri.isEmpty()) hit.put("launch_uri", uri);
             String app = trend.optString("app", "");
             String ch = trend.optString("channel", "Trending Now");
-            if (!app.isEmpty()) hit.put("app", app);
+            if (!app.isEmpty()) hit.put("app", app).put("badge", app);
+            hit.put("has_flatrate_offer", true);
             hit.put("broadcast_badge", ch + (app.isEmpty() ? "" : (" on " + app)));
             hit.put("source_channel", "app_trending").put("llm_rank", rankIdx + 2);
         } catch (Exception ignored) {}
@@ -366,13 +398,22 @@ public class AiRecommender {
     }
 
     private boolean passesQualityAndAnimationGate(JSONObject o, String seedAnchor, UserTasteProfile taste) {
-        boolean isTrend = "app_trending".equals(o.optString("source_channel"));
-        boolean hasSeed = isTrend || (seedAnchor != null && !seedAnchor.isEmpty());
-        int minYear = isTrend ? 2018 : (hasSeed ? Math.min(JustWatchGraph.getDefaultMinModernYear(), 2020) : JustWatchGraph.getDefaultMinModernYear());
+        if ("app_trending".equals(o.optString("source_channel"))) {
+            return passesAppTrendingGate(o, taste);
+        }
+        boolean hasSeed = seedAnchor != null && !seedAnchor.isEmpty();
+        int minYear = hasSeed ? Math.min(JustWatchGraph.getDefaultMinModernYear(), 2020) : JustWatchGraph.getDefaultMinModernYear();
         boolean valid = hasSeed
-            ? CandidateValidator.isValidCoWatchCandidate(o, minYear, isTrend ? 7.0 : 7.1)
+            ? CandidateValidator.isValidCoWatchCandidate(o, minYear, 7.1)
             : CandidateValidator.isValidCatalogCandidate(o, minYear, 7.1);
         return valid && !CandidateValidator.isUnwantedAnimation(o.optString("genre_codes", ""), taste.isAnimeEnabled());
+    }
+
+    private boolean passesAppTrendingGate(JSONObject o, UserTasteProfile taste) {
+        if (o.optString("poster_url").isEmpty()) return false;
+        if (CandidateValidator.isUnwantedAnimation(o.optString("genre_codes", ""), taste.isAnimeEnabled())) return false;
+        double imdb = o.optDouble("imdb_raw", o.optDouble("imdb_score", 0.0));
+        return imdb == 0.0 || imdb >= 6.4;
     }
 
     private void enrichAndStoreCandidate(
@@ -417,7 +458,8 @@ public class AiRecommender {
     }
 
     private void appendProfileAnchorsToSeedPlan(String profileId, JSONArray pq, JSONArray seeds) {
-        for (String a : db.getDynamicTasteAnchors(profileId)) {
+        int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
+        for (String a : db.getRotatingTasteAnchors(profileId, epoch)) {
             if (seeds.length() < 5) seeds.put(a);
             if (pq.length() < 5) pq.put(a);
         }
@@ -514,7 +556,7 @@ public class AiRecommender {
         String profileId, String userQuery, List<String> watchedList, int minModernYear, int currentYear
     ) {
         String plannerPrompt = buildPlannerPrompt(profileId, userQuery, watchedList, minModernYear, currentYear);
-        String raw = callGeminiJson(plannerPrompt);
+        String raw = callGeminiJsonFast(plannerPrompt);
         if (raw != null) {
             JSONObject parsed = tryParsePlannerResponse(profileId, raw);
             if (parsed != null) return parsed;
@@ -708,7 +750,7 @@ public class AiRecommender {
     private List<JSONObject> runLlmStageThreeRerank(
             String profileId, List<JSONObject> freshPool, List<JSONObject> baseSlate, int epoch) {
         AgentStatusNarrator.publishLiveStep("Curating personalized picks");
-        String raw = callGeminiJson(buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(freshPool, 36), epoch));
+        String raw = callGeminiJsonFast(buildAgentRankingPrompt(profileId, collectCandidateSummariesForLlm(freshPool, 36), epoch));
         AgentStatusNarrator.publishLiveStep("Publishing fresh recommendations");
         return applyLlmFilteredSlate(freshPool, baseSlate, raw);
     }
@@ -722,7 +764,7 @@ public class AiRecommender {
             if (ImpressionTracker.isRecentlyShown(key, epoch, impressions)) recycled.add(item);
             else fresh.add(item);
         }
-        for (int i = 0; i < recycled.size() && fresh.size() < 24; i++) fresh.add(recycled.get(i));
+        for (int i = 0; i < recycled.size() && fresh.size() < 12; i++) fresh.add(recycled.get(i));
         return fresh.size() > limit ? fresh.subList(0, limit) : fresh;
     }
 
@@ -853,7 +895,7 @@ public class AiRecommender {
         return "7. SCATTER-GATHER JUSTWATCH CANDIDATE POOL: " + verifiedCandidates.toString() + "\n\n" +
             "Task:\n" +
             "- Strictly reject any candidate whose genre, tone, or premise does not match the user's watched & rated library and Guide AI (never include generic soaps, kids cartoons, or unrelated genres).\n" +
-            "- Only include Anchor=LIVE_TV_TRENDING(...) items if they genuinely match the user's sci-fi, mystery, thriller, or prestige drama taste.\n" +
+            "- Actively include 2 to 4 fresh Anchor=LIVE_TV_TRENDING(...) shows, new drops, or live sports/games from the user's installed TV apps when they fit the household's tastes.\n" +
             "- Select & rank the top 18 candidates from the pool that '" + profileName + "' will genuinely love watching next.\n" +
             "- Return ONLY a JSON object with key 'results': an array of objects, each with keys 'title' (exact title from the pool) and 'reason' (12-18 words explaining specifically how its plot/theme connects to one of their watched shows).";
     }
@@ -1001,17 +1043,26 @@ public class AiRecommender {
         info.put("runtime_min", tv.optInt("runtime_min", 60));
     }
 
+    private static final ThreadLocal<Integer> TL_GEMINI_READ_TIMEOUT_MS = new ThreadLocal<>();
+
     public String callGeminiJson(String prompt) {
         return callGeminiMultimodalJson(prompt, null);
+    }
+
+    public String callGeminiJsonFast(String prompt) {
+        TL_GEMINI_READ_TIMEOUT_MS.set(12000);
+        try { return callGeminiMultimodalJson(prompt, null); }
+        finally { TL_GEMINI_READ_TIMEOUT_MS.remove(); }
     }
 
     public String callGeminiMultimodalJson(String prompt, String base64Jpeg) {
         String apiKey = getApiKey();
         if (apiKey.isEmpty()) return null;
-        for (int attempt = 0; attempt < 2; attempt++) {
+        int maxAttempts = TL_GEMINI_READ_TIMEOUT_MS.get() != null ? 1 : 2;
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
             String out = tryAllGeminiModelsOnce(apiKey, prompt, base64Jpeg);
             if (out != null || Thread.currentThread().isInterrupted()) return out;
-            sleepQuietly(600L);
+            if (attempt + 1 < maxAttempts) sleepQuietly(600L);
         }
         return null;
     }
@@ -1085,9 +1136,11 @@ public class AiRecommender {
     }
 
     private String httpPost(final String urlStr, final String jsonBody) throws Exception {
-        java.util.concurrent.Future<String> fut = HTTP_EXEC.submit(() -> executeHttpPost(urlStr, jsonBody));
+        Integer customReadMs = TL_GEMINI_READ_TIMEOUT_MS.get();
+        final int readTimeoutMs = customReadMs != null ? customReadMs : 35000;
+        java.util.concurrent.Future<String> fut = HTTP_EXEC.submit(() -> executeHttpPost(urlStr, jsonBody, readTimeoutMs));
         try {
-            return fut.get();
+            return fut.get(readTimeoutMs + 7000L, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             fut.cancel(true);
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
@@ -1095,10 +1148,10 @@ public class AiRecommender {
         }
     }
 
-    private String executeHttpPost(String urlStr, String jsonBody) throws Exception {
+    private String executeHttpPost(String urlStr, String jsonBody, int readTimeoutMs) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
         conn.setConnectTimeout(6000);
-        conn.setReadTimeout(35000);
+        conn.setReadTimeout(readTimeoutMs);
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");

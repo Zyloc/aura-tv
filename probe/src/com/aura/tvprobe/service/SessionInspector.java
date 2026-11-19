@@ -13,8 +13,10 @@ import android.net.Uri;
 import android.os.Bundle;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -218,20 +220,21 @@ public class SessionInspector {
     }
 
     public void ingestBroadcastedAppTrends(JSONArray previews, JSONArray watchNext, Map<Long, String> chMap) {
-        JSONArray trends = new JSONArray();
+        Map<String, List<JSONObject>> byApp = new LinkedHashMap<>();
         Set<String> seen = new HashSet<>();
-        collectTrendRowsFromArray(previews, chMap, false, seen, trends);
-        collectTrendRowsFromArray(watchNext, chMap, true, seen, trends);
+        collectTrendRowsByApp(previews, chMap, false, seen, byApp);
+        collectTrendRowsByApp(watchNext, chMap, true, seen, byApp);
+        JSONArray trends = interleaveTrendsByApp(byApp, 64);
         if (trends.length() > 0) db.saveAppBroadcastTrends(trends);
     }
 
-    private void collectTrendRowsFromArray(JSONArray rows, Map<Long, String> chMap,
-                                           boolean isWatchNext, Set<String> seen, JSONArray out) {
+    private void collectTrendRowsByApp(JSONArray rows, Map<Long, String> chMap,
+                                       boolean isWatchNext, Set<String> seen, Map<String, List<JSONObject>> byApp) {
         if (rows == null) return;
-        for (int i = 0; i < rows.length() && out.length() < 32; i++) {
+        for (int i = 0; i < rows.length(); i++) {
             JSONObject r = rows.optJSONObject(i);
             if (isEligibleBroadcastTrendRow(r, isWatchNext)) {
-                appendBroadcastTrendEntry(r, chMap, isWatchNext, seen, out);
+                appendBroadcastTrendByApp(r, chMap, isWatchNext, seen, byApp);
             }
         }
     }
@@ -245,14 +248,34 @@ public class SessionInspector {
         return !title.isEmpty() && !title.equalsIgnoreCase(friendlyApp(pkg)) && !title.equalsIgnoreCase("Program");
     }
 
-    private void appendBroadcastTrendEntry(JSONObject r, Map<Long, String> chMap,
-                                           boolean isWatchNext, Set<String> seen, JSONArray out) {
+    private void appendBroadcastTrendByApp(JSONObject r, Map<Long, String> chMap,
+                                           boolean isWatchNext, Set<String> seen, Map<String, List<JSONObject>> byApp) {
         String title = r.optString("title", "").trim();
         String norm = AuraDb.normalizeTitleKey(title);
         if (norm.isEmpty() || !seen.add(norm)) return;
         try {
-            out.put(buildBroadcastTrendJson(r, title, chMap, isWatchNext));
+            JSONObject entry = buildBroadcastTrendJson(r, title, chMap, isWatchNext);
+            byApp.computeIfAbsent(entry.optString("app_pkg", "other"), k -> new ArrayList<>()).add(entry);
         } catch (Exception ignored) {}
+    }
+
+    private JSONArray interleaveTrendsByApp(Map<String, List<JSONObject>> byApp, int maxTotal) {
+        JSONArray out = new JSONArray();
+        for (int pass = 0; out.length() < maxTotal; pass++) {
+            if (!appendTrendPass(byApp, pass, maxTotal, out)) break;
+        }
+        return out;
+    }
+
+    private boolean appendTrendPass(Map<String, List<JSONObject>> byApp, int pass, int maxTotal, JSONArray out) {
+        boolean added = false;
+        for (List<JSONObject> list : byApp.values()) {
+            if (pass < list.size() && out.length() < maxTotal) {
+                out.put(list.get(pass));
+                added = true;
+            }
+        }
+        return added;
     }
 
     private JSONObject buildBroadcastTrendJson(JSONObject r, String title,
