@@ -30,12 +30,30 @@ public final class DynamicRailClusterer {
         List<RailGroup> rails = new ArrayList<>();
         if (all == null || all.isEmpty()) return rails;
         Set<String> usedKeys = new HashSet<>();
-
         addRailIfNotEmpty(rails, "For You", buildForYouRail(all, usedKeys, 8));
+        addRailIfMinSize(rails, "Live & Trending Across Your Apps", buildAppTrendingRail(all, usedKeys, 7), usedKeys, 2);
+        addRailIfMinSize(rails, "Indian Crime, Drama & Regional Picks", buildRegionalRail(all, usedKeys, 7), usedKeys, 2);
         addRailIfNotEmpty(rails, "Sci-Fi, Crime & High-Stakes Thrillers", buildThrillerSciFiRail(all, usedKeys, 8));
         addRailIfMinSize(rails, "Sports, Docuseries & True Stories", buildSportsAndDocRail(all, usedKeys, 7), usedKeys, 2);
         addRailIfNotEmpty(rails, "Critically Acclaimed Across Your Apps", buildAcclaimedRail(all, usedKeys, 8));
         return rails;
+    }
+
+    private static List<JSONObject> buildAppTrendingRail(List<JSONObject> all, Set<String> usedKeys, int maxCount) {
+        List<JSONObject> out = new ArrayList<>();
+        for (JSONObject item : all) {
+            boolean isTrend = "app_trending".equals(item.optString("source_channel")) || !item.optString("broadcast_badge").isEmpty();
+            if (isTrend && tryClaimItem(item, usedKeys, out) && out.size() >= maxCount) break;
+        }
+        return out;
+    }
+
+    private static List<JSONObject> buildRegionalRail(List<JSONObject> all, Set<String> usedKeys, int maxCount) {
+        List<JSONObject> out = new ArrayList<>();
+        for (JSONObject item : all) {
+            if ("IN".equalsIgnoreCase(item.optString("country")) && tryClaimItem(item, usedKeys, out) && out.size() >= maxCount) break;
+        }
+        return out;
     }
 
     private static void addRailIfNotEmpty(List<RailGroup> rails, String title, List<JSONObject> items) {

@@ -53,6 +53,7 @@ public final class DetailOverlay {
         void onWatchClicked(JSONObject item);
         default void onTrailerClicked(JSONObject item) {}
         default void onCatchMeUpClicked(JSONObject item) {}
+        default void onNotInterested(JSONObject item) {}
         void onWatchedToggle(JSONObject item);
         void onSimilarClicked(JSONObject item);
         void onRated(JSONObject item, int score);
@@ -485,7 +486,18 @@ public final class DetailOverlay {
         TextView watchedBtn = buildActionButton(ctx, watchedLabel, false);
         watchedBtn.setOnClickListener(v -> cb.onWatchedToggle(item));
         row.addView(watchedBtn);
+        row.addView(createNotInterestedButton(overlay, item, ctx, cb));
         bindActionButtonsDpad(overlay, row, cb);
+    }
+
+    private static TextView createNotInterestedButton(FrameLayout overlay, JSONObject item,
+                                                      Context ctx, DetailCallback cb) {
+        TextView hideBtn = buildActionButton(ctx, "\u2715  Not for me", false);
+        hideBtn.setOnClickListener(v -> {
+            dismiss(overlay);
+            cb.onNotInterested(item);
+        });
+        return hideBtn;
     }
 
     private static void addWatchAndSimilarButtons(FrameLayout overlay, LinearLayout row,

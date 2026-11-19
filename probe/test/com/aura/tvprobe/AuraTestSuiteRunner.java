@@ -35,7 +35,8 @@ public final class AuraTestSuiteRunner {
         RecommendationPipelineIntegrationTest.class,
         VoiceAndContinueWatchingIntegrationTest.class,
         LiveJustWatchGraphIntegrationTest.class,
-        CatchMeUpCompanionIntegrationTest.class
+        CatchMeUpCompanionIntegrationTest.class,
+        TasteIntelligenceIntegrationTest.class
     };
 
     public static void main(String[] args) {

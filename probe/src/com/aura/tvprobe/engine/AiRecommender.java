@@ -70,13 +70,38 @@ public class AiRecommender {
         String profileId, JSONArray history, boolean forceManual, AgentProgressListener progress, long entryMs
     ) {
         db.purgeUnreleasedFromRecos();
-        JSONArray cached = db.getProfileRecommendations(profileId);
+        JSONArray cached = TasteIntelligenceEngine.filterOutDismissed(db, profileId, db.getProfileRecommendations(profileId));
+        if (forceManual) {
+            JSONArray swapped = trySwapReserveAndWarmNext(profileId, history);
+            if (swapped != null) return swapped;
+        }
         if (cached.length() >= 12 && (lastRefreshEndMs > entryMs || (!forceManual && db.isRecoCacheFresh(profileId)))) {
+            ReserveSlateManager.warmNextReserveAsync(db, this, profileId, history);
             return cached;
         }
+        return finishFreshPipelineAndWarmReserve(profileId, history, progress, cached);
+    }
+
+    private JSONArray trySwapReserveAndWarmNext(String profileId, JSONArray history) {
+        JSONArray swapped = ReserveSlateManager.tryPopFreshReserveSlate(db, profileId);
+        if (swapped == null) return null;
+        lastRefreshEndMs = System.currentTimeMillis();
+        ReserveSlateManager.warmNextReserveAsync(db, this, profileId, history);
+        return swapped;
+    }
+
+    private JSONArray finishFreshPipelineAndWarmReserve(
+            String profileId, JSONArray history, AgentProgressListener progress, JSONArray cached) {
         JSONArray out = finalizeRecommendations(profileId, executeRefreshPipeline(profileId, history, progress), cached);
         lastRefreshEndMs = System.currentTimeMillis();
+        ReserveSlateManager.warmNextReserveAsync(db, this, profileId, history);
         return out;
+    }
+
+    public JSONArray generateNextEpochSlateWithoutSaving(String profileId, JSONArray history) {
+        synchronized (REFRESH_LOCK) {
+            return executeRefreshPipeline(profileId, history, null);
+        }
     }
 
     private JSONArray executeRefreshPipeline(String profileId, JSONArray history, AgentProgressListener progress) {
@@ -127,6 +152,7 @@ public class AiRecommender {
     private Set<String> initSeenTitleKeys(String profileId, UserTasteProfile taste) {
         Set<String> seenKeys = Collections.synchronizedSet(new HashSet<>(db.getAllExcludedTitleKeys()));
         seenKeys.addAll(db.getHistoryTitleKeys(profileId));
+        seenKeys.addAll(TasteIntelligenceEngine.getDismissedTitleKeys(db, profileId));
         for (String a : taste.getAnchors()) {
             seenKeys.add(AuraDb.normalizeTitleKey(a));
         }
@@ -350,11 +376,22 @@ public class AiRecommender {
 
     private void scoreAndRerankPool(List<JSONObject> pool, UserTasteProfile taste, int currentYear) {
         taste.ensureDefaultGenreWeightsIfEmpty();
+        String prof = db.getValidActiveProfile();
+        Map<String, Double> negG = TasteIntelligenceEngine.buildNegativeGenrePenalties(db, prof);
+        Set<String> negS = TasteIntelligenceEngine.buildNegativeSeedSet(db, prof);
+        Map<String, ImpressionTracker.ImpressionRecord> imp = ImpressionTracker.loadActiveImpressions(db);
         for (JSONObject item : pool) {
-            double score = HybridScorer.computeHybridScore(item, taste, currentYear);
-            try { item.put("sota_score", score); } catch (Exception ignored) {}
+            applyHybridAndNegativeScore(item, taste, currentYear, negG, negS, imp);
         }
         pool.sort((a, b) -> Double.compare(b.optDouble("sota_score", 0.0), a.optDouble("sota_score", 0.0)));
+    }
+
+    private void applyHybridAndNegativeScore(
+            JSONObject item, UserTasteProfile taste, int currentYear, Map<String, Double> negG,
+            Set<String> negS, Map<String, ImpressionTracker.ImpressionRecord> imp) {
+        double score = HybridScorer.computeHybridScore(item, taste, currentYear)
+            + TasteIntelligenceEngine.computeNegativeAndSkipPenalty(item, negG, negS, imp);
+        try { item.put("sota_score", score); } catch (Exception ignored) {}
     }
 
     private JSONArray packRankedItems(List<JSONObject> items) {
@@ -629,6 +666,7 @@ public class AiRecommender {
         String richHistStr = isSearch ? db.getRotatingTasteAnchors(profileId, epoch).toString() : buildRichWatchedContext(profileId).toString();
         return "You are Aura's Unified Dynamic JustWatch GraphQL Query & Filter Planner Agent. Current Date: " + JustWatchGraph.getCurrentDateString() + ".\n" +
             "Profile: '" + db.getProfileLabel(profileId) + "'. Personal Guide AI: " + (personalGuide.isEmpty() ? "(None)" : personalGuide) + "\n" +
+            "Structured Taste DNA: " + TasteIntelligenceEngine.getTasteDnaPromptSummary(db, profileId) + "\n" +
             "User Ratings Feedback: " + db.getRatingFeedbackSummary() + "\n" +
             "Recent User Search Curiosity: " + extractRecentSearchCuriosity(profileId) + "\n" +
             "Previous Evolved Taste Memo: " + db.getSetting("evolved_taste_memo_" + profileId, "(Initial Evolution Round)") + "\n" +
@@ -884,6 +922,7 @@ public class AiRecommender {
         return "You are Aura's Stage-3 Post-Filter & Reranking Agent for Android TV in " + region + ".\n" +
             "Current Date: " + JustWatchGraph.getCurrentDateString() + ". Active Profile: '" + profileName + "'. Refresh Epoch #" + epoch + "\n" +
             "0. EVOLVING TASTE HYPOTHESIS & RECENT SEARCH CURIOSITY: " + memo + " | Recent Searches: " + extractRecentSearchCuriosity(profileId) + "\n" +
+            "0b. STRUCTURED TASTE DNA: " + TasteIntelligenceEngine.getTasteDnaPromptSummary(db, profileId) + "\n" +
             "1. PERSONAL GUIDE AI: " + (personalGuide.isEmpty() ? "(Use Default Guide AI and Watch History)" : "\"" + personalGuide + "\"") + "\n" +
             "2. DEFAULT GUIDE AI: \"" + db.getDefaultTasteGuide() + "\"\n3. USER RATINGS FEEDBACK: " + (ratingsFeedback.isEmpty() ? "None yet" : ratingsFeedback) + "\n" +
             "4. ACTIVE FILTERS: " + (activeFilters.isEmpty() ? "All categories" : activeFilters.toString()) + "\n" +

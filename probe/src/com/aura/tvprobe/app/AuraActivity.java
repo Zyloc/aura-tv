@@ -86,6 +86,7 @@ public class AuraActivity extends Activity implements
     private VoiceConcierge voice;
     private SessionInspector inspector;
     private String activeProfile = AuraDb.DEFAULT_PROFILE;
+    private String activeMoodKey = TasteIntelligenceEngine.MOOD_ALL;
     private boolean initialFocusSet = false;
     private String lastSearchQuery = "";
     private int homeHintIndex = 0;
@@ -911,9 +912,32 @@ public class AuraActivity extends Activity implements
 
     private void populateTraversalChips() {
         chipsRow.removeAllViews();
+        addMoodPillButton("For You", TasteIntelligenceEngine.MOOD_ALL);
+        addMoodPillButton("Mind-Bending", TasteIntelligenceEngine.MOOD_MIND_BENDING);
+        addMoodPillButton("Light & Smart", TasteIntelligenceEngine.MOOD_LIGHT_SMART);
+        addMoodPillButton("Edge-of-Seat", TasteIntelligenceEngine.MOOD_EDGE_OF_SEAT);
+        addMoodPillButton("Under 2 hrs", TasteIntelligenceEngine.MOOD_UNDER_2H);
         for (String chip : db.getTraversalChips(activeProfile)) {
             chipsRow.addView(buildTraversalChipButton(chip));
         }
+    }
+
+    private void addMoodPillButton(String label, String moodKey) {
+        boolean active = moodKey.equals(activeMoodKey);
+        TextView btn = GlassTheme.makeGlassButton(this, (active ? "\u25CF " : "") + label);
+        btn.setTextSize(10.5f);
+        btn.setPadding(dp(10), dp(5), dp(10), dp(5));
+        LinearLayout.LayoutParams lp = GlassTheme.wrapParams();
+        lp.rightMargin = dp(6);
+        btn.setLayoutParams(lp);
+        btn.setOnClickListener(v -> applyInstantMoodFilter(moodKey));
+        chipsRow.addView(btn);
+    }
+
+    private void applyInstantMoodFilter(String moodKey) {
+        activeMoodKey = moodKey;
+        populateTraversalChips();
+        renderHomeContent(db.getProfileRecommendations(activeProfile));
     }
 
     private TextView buildTraversalChipButton(String chip) {
@@ -939,8 +963,11 @@ public class AuraActivity extends Activity implements
     }
 
     private List<JSONObject> sliceTopHomeRecos(JSONArray recos) {
-        List<JSONObject> fullList = toJsonList(recos);
-        return fullList.subList(0, Math.min(16, fullList.size()));
+        JSONArray clean = TasteIntelligenceEngine.filterOutDismissed(db, activeProfile, recos);
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        List<JSONObject> ranked = TasteIntelligenceEngine.rerankForMoodAndContext(
+            toJsonList(clean), activeMoodKey, cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.DAY_OF_WEEK));
+        return ranked.subList(0, Math.min(24, ranked.size()));
     }
 
     private void populateHeroAndScreensaver(List<JSONObject> all) {
@@ -1120,7 +1147,8 @@ public class AuraActivity extends Activity implements
 
     @Override
     public void onRefreshRecommendations(boolean forceRefresh) {
-        refreshAllData(forceRefresh, forceRefresh);
+        boolean instant = forceRefresh && ReserveSlateManager.hasReadyReserve(db, activeProfile);
+        refreshAllData(forceRefresh, forceRefresh && !instant);
     }
 
     @Override
@@ -1589,10 +1617,21 @@ public class AuraActivity extends Activity implements
     }
 
     @Override
+    public void onNotInterested(JSONObject item) {
+        if (item == null) return;
+        TasteIntelligenceEngine.recordNotInterested(db, activeProfile, item);
+        ReserveSlateManager.pruneTitleFromReserve(db, activeProfile);
+        watchedChangedWhileInDetail = true;
+        Toast.makeText(this, "Hidden \u2014 Aura learned your taste", Toast.LENGTH_SHORT).show();
+        onDismiss();
+    }
+
+    @Override
     public void onWatchedToggle(JSONObject item) {
         String title = resolveCanonicalTitle(item, "");
         boolean nowWatched = !db.isTitleWatched(title);
         db.markTitleWatched(item, nowWatched);
+        TasteIntelligenceEngine.buildAndPersistTasteDna(db, activeProfile);
         watchedChangedWhileInDetail = true;
         int rating = db.getUserRatingsMap().getOrDefault(AuraDb.normalizeTitleKey(title), 0);
         DetailOverlay.updateUserFeedback(detailOverlay, item, nowWatched, rating, this, this);
@@ -1603,6 +1642,7 @@ public class AuraActivity extends Activity implements
     public void onRated(JSONObject item, int score) {
         String title = resolveCanonicalTitle(item, "");
         db.rateTitle(item, score);
+        TasteIntelligenceEngine.buildAndPersistTasteDna(db, activeProfile);
         watchedChangedWhileInDetail = true;
         Toast.makeText(this, "Rated " + score + "/10", Toast.LENGTH_SHORT).show();
         boolean watched = db.isTitleWatched(title);
