@@ -27,7 +27,6 @@ import java.util.Map;
 public final class MediaEventWatcher implements MediaSessionManager.OnActiveSessionsChangedListener {
 
     private static final Uri URI_WATCH_NEXT = Uri.parse("content://android.media.tv/watch_next_program");
-    private static final Uri URI_PREVIEW = Uri.parse("content://android.media.tv/preview_program");
     private static final long PROVIDER_DEBOUNCE_MS = 1500L;
 
     private final Context ctx;
@@ -237,8 +236,16 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
 
         @Override
         public void onPlaybackStateChanged(PlaybackState state) {
+            if (pauseIfCompanionSilenceActive(state)) return;
             if (stopIfPlayingBehindAuraHome(state)) return;
             handleStateTransition(state);
+        }
+
+        private boolean pauseIfCompanionSilenceActive(PlaybackState state) {
+            if (state == null || !CompanionAudioFocusController.isCompanionSilenceActive()) return false;
+            if (!CompanionAudioFocusController.isActivePlaybackState(state.getState())) return false;
+            CompanionAudioFocusController.pauseControllerIfActiveExternal(mc);
+            return true;
         }
 
         private boolean stopIfPlayingBehindAuraHome(PlaybackState state) {

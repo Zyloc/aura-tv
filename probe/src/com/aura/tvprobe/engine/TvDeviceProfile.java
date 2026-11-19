@@ -99,17 +99,6 @@ public final class TvDeviceProfile {
         return "com.mediatek.tvinput/.hdmi.HDMIInputService/HW" + (safePort + 1);
     }
 
-    public static String inferCountryFromInstalledApps(Set<String> installedPkgs) {
-        if (installedPkgs == null || installedPkgs.isEmpty()) return "";
-        if (installedPkgs.contains("bbc.iplayer.android") || installedPkgs.contains("air.ITVMobilePlayer")) return "GB";
-        if (installedPkgs.contains("jp.unext.mediaplayer") || installedPkgs.contains("tv.abema")) return "JP";
-        if (installedPkgs.contains("in.startv.hotstar") || installedPkgs.contains("com.sonyliv")) return "IN";
-        if (installedPkgs.contains("au.com.stan.and") || installedPkgs.contains("com.seven.plus")) return "AU";
-        if (installedPkgs.contains("com.globo.globotv")) return "BR";
-        if (installedPkgs.contains("com.hulu.livingroomplus") || installedPkgs.contains("com.peacocktv.peacockandroid")) return "US";
-        return "";
-    }
-
     public static Set<String> discoverInstalledOttPackages(Context ctx) {
         if (ctx == null) return Collections.emptySet();
         Set<String> out = new LinkedHashSet<>();

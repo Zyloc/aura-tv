@@ -86,11 +86,6 @@ public final class CandidateValidator {
         return votes >= 650 && (pop >= 5.5 || votes >= 1800);
     }
 
-    public static boolean isUnwantedKidsAnimation(String genreCodes) {
-        if (genreCodes == null) return false;
-        return genreCodes.contains("fml") || genreCodes.contains("ani");
-    }
-
     public static boolean isUnwantedAnimation(String genreCodes, boolean animeEnabled) {
         if (genreCodes == null) return false;
         if (genreCodes.contains("fml")) return true;

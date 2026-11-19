@@ -316,14 +316,14 @@ public class MediaProbeService extends NotificationListenerService {
         boolean shouldSpeak = !"0".equals(optParam(uri, "speak", "1"));
         populateCatchupItemFromUri(uri, item);
         JSONObject recap = executeRouteCompanionTurn(prof, q, item, shouldSpeak);
-        if (shouldSpeak && recap != null) presentInAppCatchupAudio(recap);
+        if (shouldSpeak && recap != null && !Thread.currentThread().isInterrupted()) presentInAppCatchupAudio(recap);
         writeHttpResponse(out, "application/json", recap != null ? recap.toString() : "{}");
         return true;
     }
 
     private JSONObject executeRouteCompanionTurn(String prof, String q, JSONObject item, boolean shouldSpeak) {
         final Thread caller = Thread.currentThread();
-        if (shouldSpeak && !AuraActivity.isInForeground()) {
+        if (shouldSpeak) {
             overlay.showCompanionLoader(q, "Preparing Catch Me Up\u2026", caller::interrupt);
         }
         return ShowCompanionAgent.executeCompanionTurn(
@@ -331,13 +331,7 @@ public class MediaProbeService extends NotificationListenerService {
     }
 
     private void presentInAppCatchupAudio(JSONObject recap) {
-        if (!AuraActivity.isInForeground()) {
-            overlay.showInAppCompanionRecap(recap);
-        } else {
-            overlay.showVoiceStatusPill("\u2726 AURA SHOW COMPANION",
-                "Catch Me Up works inside your app",
-                "Open your show in Netflix, Hotstar, Prime, or YouTube to play audio recap.", 6);
-        }
+        overlay.showInAppCompanionRecap(recap, () -> {});
     }
 
     private void populateCatchupItemFromUri(Uri uri, JSONObject item) throws Exception {

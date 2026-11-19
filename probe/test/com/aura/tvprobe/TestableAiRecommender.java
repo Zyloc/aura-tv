@@ -14,6 +14,7 @@ public class TestableAiRecommender extends AiRecommender {
     private final Deque<String> queuedLlmResponses = new ArrayDeque<>();
     private final Map<String, JSONObject> cannedMetadata = new HashMap<>();
     public String defaultLlmResponse = "";
+    public String lastPromptText = "";
     public int llmCallCount = 0;
 
     public TestableAiRecommender(AuraDb db) {
@@ -31,6 +32,7 @@ public class TestableAiRecommender extends AiRecommender {
     @Override
     public String callGeminiMultimodalJson(String promptText, String base64Jpeg) {
         llmCallCount++;
+        lastPromptText = promptText != null ? promptText : "";
         if (!queuedLlmResponses.isEmpty()) return queuedLlmResponses.removeFirst();
         return defaultLlmResponse;
     }

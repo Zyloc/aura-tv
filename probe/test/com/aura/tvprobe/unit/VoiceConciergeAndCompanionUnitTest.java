@@ -158,9 +158,15 @@ public class VoiceConciergeAndCompanionUnitTest {
         assertEquals("Flynne enters the", LiveSubtitleBar.buildProgressiveText(s, 17));
         assertEquals(s, LiveSubtitleBar.buildProgressiveText(s, 999));
         assertEquals("Season 1, Episode 2 recap.", AuraTtsNarrator.cleanSpokenText("[CURRENT EPISODE] Premise: S1E2 recap."));
+        verifyVoiceScoringAndHijackRules();
+    }
+
+    private void verifyVoiceScoringAndHijackRules() {
         int netScore = AuraTtsNarrator.scoreVoiceAttributes("en", "US", "en-us-x-iog-server", 400, true);
         int embScore = AuraTtsNarrator.scoreVoiceAttributes("en", "US", "en-us-x-iog-lstm-embedded", 400, false);
         assertTrue(netScore > embScore);
+        assertFalse(InAppVoiceRouter.isHijackForegroundPkg("com.google.android.katniss", "com.amazon.amazonvideo.livingroom"));
+        assertFalse(InAppVoiceRouter.isHijackForegroundPkg("com.google.android.katniss:search", "com.netflix.ninja"));
         assertTrue(InAppVoiceRouter.isHijackForegroundPkg("com.google.android.youtube.tv", "com.amazon.amazonvideo.livingroom"));
         assertFalse(InAppVoiceRouter.isHijackForegroundPkg("com.google.android.youtube.tv", "com.google.android.youtube.tv"));
     }
@@ -173,8 +179,47 @@ public class VoiceConciergeAndCompanionUnitTest {
         java.util.List<String> steps = new java.util.ArrayList<>();
         JSONObject item = new JSONObject().put("series_title", "Severance").put("season", 1).put("episode", 2).put("position_sec", 600);
         JSONObject fb = ShowCompanionAgent.executeCompanionTurn(ai, db, "m1", "catch me up", item, steps::add);
-        assertTrue(fb.optBoolean("is_fallback"));
-        assertFalse(fb.optString("spoken_narration").contains("S1E1"));
-        assertTrue(steps.size() >= 3);
+        assertTrue(fb.optBoolean("is_fallback") && !fb.optString("spoken_narration").contains("S1E1") && steps.size() >= 3);
+        verifyVideoScreenVsDetailPageAndAudioSilence(db);
+    }
+
+    private void verifyVideoScreenVsDetailPageAndAudioSilence(InMemoryAuraDb db) throws Exception {
+        verifyLivePlayerScreenDetection();
+        verifyDetailPageVisionMergeAndAudioState(db);
+    }
+
+    private void verifyLivePlayerScreenDetection() throws Exception {
+        JSONObject pausedJustNow = new JSONObject().put("package", "com.amazon.amazonvideo.livingroom").put("state", 2).put("age_since_update_ms", 3500L);
+        JSONObject pausedOld = new JSONObject().put("package", "com.amazon.amazonvideo.livingroom").put("state", 2).put("age_since_update_ms", 95000L);
+        assertTrue(SessionInspector.isLikelyOnVideoPlayerScreen(pausedJustNow));
+        assertFalse(SessionInspector.isLikelyOnVideoPlayerScreen(pausedOld));
+        JSONArray sessions = new JSONArray().put(pausedJustNow);
+        assertNotNull(SessionInspector.findLiveSessionForPackage(sessions, "com.amazon.amazonvideo.livingroom"));
+        assertEquals(3, ShowCompanionAgent.findPngHeaderOffset(new byte[]{'w', 'r', 'n', (byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}));
+    }
+
+    private void verifyDetailPageVisionMergeAndAudioState(InMemoryAuraDb db) throws Exception {
+        assertNull(ShowCompanionAgent.parseDetectedDetailPageJson("{\"title\":\"Prime Video\"}"));
+        db.upsertWatchItem(new JSONObject().put("media_key", "prime:the peripheral:jackpot").put("app_pkg", "com.amazon.amazonvideo.livingroom")
+            .put("series_title", "The Peripheral").put("title", "Jackpot").put("season", 1).put("episode", 4).put("position_sec", 3036));
+        TestableAiRecommender ai = new TestableAiRecommender(db);
+        ai.enqueueLlmResponse("{\"title\":\"The Peripheral\",\"season\":1,\"episode\":0}");
+        JSONObject resolved = ShowCompanionAgent.resolveDetailPageItemIfNeeded(ai, db, "default", "catch me up", new JSONObject(), "ZmFrZQ==", null);
+        assertEquals(4, resolved.optInt("episode"));
+        assertEquals(3036, resolved.optInt("position_sec"));
+        verifyCompanionAudioSilenceToggle();
+    }
+
+    private void verifyCompanionAudioSilenceToggle() throws Exception {
+        CompanionAudioFocusController.engageCompanionSilence(null);
+        assertTrue(CompanionAudioFocusController.isCompanionSilenceActive());
+        CompanionAudioFocusController.releaseCompanionSilence(null);
+        assertFalse(CompanionAudioFocusController.isCompanionSilenceActive());
+        JSONObject out = new JSONObject();
+        JSONArray wn = new JSONArray().put(new JSONObject().put("package_name", "com.graymatrix.did")
+            .put("title", "Tu Hi Re Dil Mein").put("episode_title", "Sanjog Shock").put("season_display_number", "1").put("episode_display_number", "149"));
+        assertTrue(SessionInspector.applyEpisodeMatchFromRows(out, wn, "com.graymatrix.did", "Sanjog Shock", false));
+        assertEquals("Tu Hi Re Dil Mein", out.optString("series_title"));
+        assertEquals(149, out.optInt("episode"));
     }
 }

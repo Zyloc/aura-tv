@@ -209,10 +209,6 @@ public final class RegionProviderRegistry {
         return arr;
     }
 
-    public static List<String> getDefaultPackageList() {
-        return Arrays.asList(GLOBAL_PROVIDER_CODES);
-    }
-
     public static List<String> getProvidersForCountry(String countryCode) {
         String c = countryCode != null ? countryCode.trim().toUpperCase(Locale.US) : "US";
         if ("IN".equals(c)) return Arrays.asList("nfx", "prv", "jhs", "atp", "snl", "zee", "cru");

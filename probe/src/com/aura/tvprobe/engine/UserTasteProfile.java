@@ -103,10 +103,6 @@ public final class UserTasteProfile {
         return topAnchor;
     }
 
-    public String getRegionCountry() {
-        return regionCountry;
-    }
-
     public String getRankMode() {
         return rankMode;
     }

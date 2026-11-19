@@ -33,8 +33,6 @@ public final class RailBuilder {
     private static final int TAG_SCROLL_ANIM        = 0x7F0B0002;
     private static final int TAG_LAST_FOCUSED_INDEX = 0x7F0B0003;
     private static final int CARD_GAP = 10;
-    private static final int APP_W = 104;
-    private static final int APP_H = 56;
     private static final int APP_RADIUS = 11;
     private static final int PROGRESS_H = 3;
     private static final int MAX_CONTINUE = 5;

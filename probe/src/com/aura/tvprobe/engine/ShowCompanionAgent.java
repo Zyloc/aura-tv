@@ -435,10 +435,106 @@ public final class ShowCompanionAgent {
 
     private static Bitmap decodeProcessBitmap(InputStream is) {
         try {
+            byte[] raw = readAllBytesBounded(is);
+            int pngIdx = findPngHeaderOffset(raw);
+            if (pngIdx < 0) return null;
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inSampleSize = 2;
-            return BitmapFactory.decodeStream(is, null, opts);
+            return BitmapFactory.decodeByteArray(raw, pngIdx, raw.length - pngIdx, opts);
         } catch (Throwable t) { return null; }
+    }
+
+    private static byte[] readAllBytesBounded(InputStream is) throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(262_144);
+        byte[] buf = new byte[16_384];
+        int n;
+        while ((n = is.read(buf)) != -1 && bos.size() < 8_388_608) bos.write(buf, 0, n);
+        return bos.toByteArray();
+    }
+
+    public static int findPngHeaderOffset(byte[] raw) {
+        if (raw == null || raw.length < 8) return -1;
+        for (int i = 0; i <= Math.min(raw.length - 8, 512); i++) {
+            if ((raw[i] & 0xFF) == 0x89 && raw[i + 1] == 'P' && raw[i + 2] == 'N' && raw[i + 3] == 'G') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    public static JSONObject resolveDetailPageItemIfNeeded(
+            AiRecommender ai, AuraDb db, String profileId, String userQuery,
+            JSONObject fallbackItem, String screenFrameB64, AiRecommender.AgentProgressListener stepListener) {
+        if (ai == null || screenFrameB64 == null || screenFrameB64.isEmpty()) return fallbackItem;
+        if (!extractTitleFromCompanionQuery(userQuery).isEmpty()) return fallbackItem;
+        emitStep(stepListener, "Reading show page on screen\u2026");
+        String raw = ai.callGeminiMultimodalJson(buildDetailPageVisionPrompt(), screenFrameB64);
+        JSONObject detected = parseDetectedDetailPageJson(raw);
+        return detected != null ? mergeDetectedShowWithHistory(db, profileId, detected, fallbackItem) : fallbackItem;
+    }
+
+    private static String buildDetailPageVisionPrompt() {
+        return "Identify the featured movie or TV series title currently open on this TV app detail page. "
+            + "Ignore app names (Netflix, Prime Video, Hotstar, YouTube) or generic navigation rows. "
+            + "Return ONLY JSON: {\"title\":\"\",\"season\":0,\"episode\":0}";
+    }
+
+    public static JSONObject parseDetectedDetailPageJson(String rawJson) {
+        if (rawJson == null || rawJson.trim().isEmpty()) return null;
+        try {
+            JSONObject o = new JSONObject(rawJson.trim());
+            String t = o.optString("title", "").trim();
+            if (t.length() < 2 || isGenericAppOrUiLabel(t)) return null;
+            return o;
+        } catch (Exception ignored) { return null; }
+    }
+
+    private static boolean isGenericAppOrUiLabel(String t) {
+        String low = t.toLowerCase(Locale.US).trim();
+        return low.equals("netflix") || low.equals("prime video") || low.equals("amazon prime")
+            || low.contains("hotstar") || low.equals("youtube") || low.equals("sonyliv")
+            || low.equals("home") || low.equals("search") || low.equals("unknown");
+    }
+
+    public static JSONObject mergeDetectedShowWithHistory(
+            AuraDb db, String profileId, JSONObject detected, JSONObject fallbackItem) {
+        String rawSeries = detected.optString("series_title", "").trim();
+        String title = rawSeries.isEmpty() ? detected.optString("title", "").trim() : rawSeries;
+        JSONObject histMatch = findMatchingHistoryForTitle(db, profileId, title);
+        if (histMatch != null) return applyScreenSeasonOverrideIfHigher(histMatch, detected);
+        return buildFreshDetailPageContext(title, detected, fallbackItem);
+    }
+
+    private static JSONObject findMatchingHistoryForTitle(AuraDb db, String profileId, String title) {
+        if (db == null || title.isEmpty()) return null;
+        String targetNorm = AuraDb.normalizeTitleKey(title);
+        JSONArray hist = db.listHistory(profileId);
+        for (int i = 0; i < hist.length(); i++) {
+            JSONObject h = hist.optJSONObject(i);
+            String ht = h != null ? (h.optString("series_title").isEmpty() ? h.optString("title") : h.optString("series_title")) : "";
+            if (!targetNorm.isEmpty() && targetNorm.equals(AuraDb.normalizeTitleKey(ht))) return cloneJson(h);
+        }
+        return null;
+    }
+
+    private static JSONObject applyScreenSeasonOverrideIfHigher(JSONObject histItem, JSONObject detected) {
+        try {
+            int detS = detected.optInt("season", 0);
+            int detE = detected.optInt("episode", 0);
+            if (detS > histItem.optInt("season", 0)) histItem.put("season", detS).put("episode", Math.max(1, detE));
+        } catch (Exception ignored) {}
+        return histItem;
+    }
+
+    private static JSONObject buildFreshDetailPageContext(String title, JSONObject detected, JSONObject fallbackItem) {
+        JSONObject out = fallbackItem != null ? cloneJson(fallbackItem) : new JSONObject();
+        try {
+            out.put("title", title).put("series_title", title);
+            out.put("season", Math.max(1, detected.optInt("season", 1)));
+            out.put("episode", Math.max(1, detected.optInt("episode", 1)));
+            if (out.optInt("position_sec", 0) <= 0) out.put("position_sec", 1200);
+        } catch (Exception ignored) {}
+        return out;
     }
 
     private static boolean isMostlyBlackDrmFrame(Bitmap bmp) {

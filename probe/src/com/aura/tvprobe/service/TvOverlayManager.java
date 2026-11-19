@@ -27,70 +27,113 @@ import org.json.JSONObject;
 public class TvOverlayManager {
     private static final String TAG_SUBTEXT = "aura_overlay_subtext";
     private static final int TAG_ORB_STEP = 0x7F0B1001;
+    private static final int TAG_LOADER_COL = 0x7F0B1002;
+    private static final int TAG_BLACKOUT_ROOT = 0x7F0B1003;
     private static volatile TvOverlayManager sActiveInstance;
 
     private final Context ctx;
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Handler mainHandler = createMainHandlerSafe();
     private final Runnable autoDismissTask = this::dismissOverlay;
+    private volatile boolean companionSessionActive = false;
     private View currentBanner;
     private FrameLayout floatingSubtitleWrap;
     private Runnable activeCancelAction;
 
     public TvOverlayManager(Context ctx) {
-        this.ctx = ctx.getApplicationContext();
+        this.ctx = ctx != null ? ctx.getApplicationContext() : null;
         sActiveInstance = this;
+    }
+
+    private static Handler createMainHandlerSafe() {
+        try { return new Handler(Looper.getMainLooper()); } catch (Throwable ignored) { return null; }
+    }
+
+    private void postToMain(Runnable r) {
+        if (mainHandler != null) mainHandler.post(r);
+        else r.run();
     }
 
     public static TvOverlayManager peekInstance() {
         return sActiveInstance;
     }
 
+    public static boolean isCompanionSessionActive() {
+        TvOverlayManager inst = sActiveInstance;
+        return inst != null && inst.companionSessionActive;
+    }
+
+    public boolean cancelCompanionByBackKey() {
+        Runnable cancel = activeCancelAction;
+        if (cancel == null) return false;
+        cancel.run();
+        return true;
+    }
+
     public static void dismissActiveInstanceOverlays() {
         TvOverlayManager inst = sActiveInstance;
-        if (inst != null) inst.dismissCompanionOverlays();
+        if (inst != null && !inst.companionSessionActive) inst.dismissCompanionOverlays();
     }
 
     public void showUpNextCard(String badge, String title, String reason, int durationSec) {
-        mainHandler.post(() -> renderCardAt(
+        postToMain(() -> renderCardAt(
             badge, title, reason, Gravity.BOTTOM | Gravity.END, 48, 48, 640, "#7C6EF7", durationSec));
     }
 
     public void showVoiceStatusPill(String badge, String headline, String subtext, int durationSec) {
-        mainHandler.post(() -> renderCardAt(
+        postToMain(() -> renderCardAt(
             badge, headline, subtext, Gravity.TOP | Gravity.END, 36, 32, 520, "#38BDF8", durationSec));
     }
 
     public void showCompanionLoader(String spokenQuery, String initialStep, Runnable onBackCancel) {
-        mainHandler.post(() -> mountCompanionLoaderOnMain(spokenQuery, initialStep, onBackCancel));
+        postToMain(() -> mountCompanionLoaderOnMain(spokenQuery, initialStep, onBackCancel));
     }
 
     private void mountCompanionLoaderOnMain(String spokenQuery, String initialStep, Runnable onBackCancel) {
+        companionSessionActive = true;
+        CompanionAudioFocusController.engageCompanionSilence(ctx);
         dismissOverlay();
-        removeFloatingSubtitleWindow();
         activeCancelAction = wrapCancelAction(onBackCancel);
-        FrameLayout root = buildCompanionLoaderRoot(spokenQuery, initialStep);
-        LiveSubtitleBar.attachBackCancelHandler(root, activeCancelAction);
-        addWindowViewSafe(root, buildFullScreenFocusableParams());
-        currentBanner = root;
+        tryMountBlackoutView(spokenQuery, initialStep);
+    }
+
+    private void tryMountBlackoutView(String spokenQuery, String initialStep) {
+        try {
+            FrameLayout root = buildCompanionBlackoutRoot(spokenQuery, initialStep);
+            LiveSubtitleBar.attachBackCancelHandler(root, activeCancelAction);
+            if (addWindowViewSafe(root, buildFullScreenFocusableParams())) currentBanner = root;
+        } catch (Throwable ignored) {}
     }
 
     private Runnable wrapCancelAction(Runnable onBackCancel) {
         return () -> {
+            activeCancelAction = null;
             if (onBackCancel != null) onBackCancel.run();
-            AuraTtsNarrator.stop(ctx);
-            dismissCompanionOverlays();
+            if (companionSessionActive) {
+                AuraTtsNarrator.stop(ctx);
+                dismissCompanionOverlays();
+            }
         };
     }
 
-    private FrameLayout buildCompanionLoaderRoot(String spokenQuery, String initialStep) {
+    private FrameLayout buildCompanionBlackoutRoot(String spokenQuery, String initialStep) {
         FrameLayout root = new FrameLayout(ctx);
-        root.setBackgroundColor(Color.argb(175, 6, 9, 18));
+        root.setTag(TAG_BLACKOUT_ROOT);
+        root.setBackgroundColor(Color.BLACK);
+        LinearLayout col = buildTaggedLoaderColumn(spokenQuery, initialStep);
+        floatingSubtitleWrap = LiveSubtitleBar.buildBlackoutStage(ctx);
+        root.addView(col);
+        root.addView(floatingSubtitleWrap, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return root;
+    }
+
+    private LinearLayout buildTaggedLoaderColumn(String spokenQuery, String initialStep) {
         LinearLayout col = AgenticOrbView.buildFloatingLoaderColumn(ctx, TAG_ORB_STEP, 0);
+        col.setTag(TAG_LOADER_COL);
         TextView stepTv = col.findViewWithTag(TAG_ORB_STEP);
         if (stepTv != null) stepTv.setText(initialStep != null ? initialStep : "Preparing Catch Me Up\u2026");
         col.addView(buildCancelHintCaption(spokenQuery));
-        root.addView(col);
-        return root;
+        return col;
     }
 
     private TextView buildCancelHintCaption(String spokenQuery) {
@@ -106,7 +149,7 @@ public class TvOverlayManager {
     }
 
     public void updateVoiceStatusSubtext(String subtext) {
-        mainHandler.post(() -> applySubtextIfVisible(subtext));
+        postToMain(() -> applySubtextIfVisible(subtext));
     }
 
     private void applySubtextIfVisible(String subtext) {
@@ -123,48 +166,49 @@ public class TvOverlayManager {
 
     public void showInAppCompanionRecap(JSONObject recap, Runnable onBackCancel) {
         if (recap == null) return;
-        mainHandler.post(() -> presentCompanionRecapOnMain(recap, onBackCancel));
+        postToMain(() -> presentCompanionRecapOnMain(recap, onBackCancel));
     }
 
     private void presentCompanionRecapOnMain(JSONObject recap, Runnable onBackCancel) {
         String spoken = recap.optString("spoken_narration", "").trim();
         if (spoken.isEmpty()) { dismissCompanionOverlays(); return; }
+        companionSessionActive = true;
+        CompanionAudioFocusController.engageCompanionSilence(ctx);
         if (onBackCancel != null || activeCancelAction == null) activeCancelAction = wrapCancelAction(onBackCancel);
-        ensureLoaderUntilSpeechStarts(recap.optString("title", ""));
-        startFloatingSubtitleNarration(spoken);
+        ensureBlackoutStageMounted(recap.optString("title", ""));
+        startBlackoutSubtitleNarration(spoken);
     }
 
-    private void ensureLoaderUntilSpeechStarts(String showTitle) {
+    private void ensureBlackoutStageMounted(String showTitle) {
         String msg = "Starting Google Speech narration" + (showTitle.isEmpty() ? "\u2026" : (" for " + showTitle + "\u2026"));
-        if (currentBanner != null && currentBanner.findViewWithTag(TAG_ORB_STEP) != null) {
+        if (currentBanner != null && Integer.valueOf(TAG_BLACKOUT_ROOT).equals(currentBanner.getTag())) {
             applySubtextIfVisible(msg);
+            if (currentBanner instanceof FrameLayout) {
+                LiveSubtitleBar.attachBackCancelHandler((FrameLayout) currentBanner, activeCancelAction);
+            }
         } else {
-            mountCompanionLoaderOnMain("", msg, null);
+            dismissOverlay();
+            tryMountBlackoutView("", msg);
         }
     }
 
-    private void startFloatingSubtitleNarration(String spoken) {
-        attachFloatingSubtitleWindow();
-        bindFloatingSubtitleListener();
+    private void startBlackoutSubtitleNarration(String spoken) {
+        bindBlackoutSubtitleListener();
         AuraTtsNarrator.speak(ctx, spoken, this::dismissCompanionOverlays);
     }
 
-    private void attachFloatingSubtitleWindow() {
-        removeFloatingSubtitleWindow();
-        floatingSubtitleWrap = LiveSubtitleBar.build(ctx);
-        LiveSubtitleBar.attachBackCancelHandler(floatingSubtitleWrap,
-            activeCancelAction != null ? activeCancelAction : wrapCancelAction(null));
-        if (!addWindowViewSafe(floatingSubtitleWrap, buildSubtitleWindowParams())) {
-            floatingSubtitleWrap = null;
+    private void transitionFromLoaderToSubtitle(String firstSentence) {
+        if (currentBanner != null) {
+            View loaderCol = currentBanner.findViewWithTag(TAG_LOADER_COL);
+            if (loaderCol != null) loaderCol.setVisibility(View.GONE);
+            currentBanner.requestFocus();
         }
+        LiveSubtitleBar.animateNewSentence(floatingSubtitleWrap, firstSentence);
     }
 
-    private void bindFloatingSubtitleListener() {
+    private void bindBlackoutSubtitleListener() {
         AuraTtsNarrator.setSubtitleListener(new AuraTtsNarrator.SubtitleListener() {
-            @Override public void onSentenceStart(String s) {
-                dismissOverlay();
-                LiveSubtitleBar.animateNewSentence(floatingSubtitleWrap, s);
-            }
+            @Override public void onSentenceStart(String s) { transitionFromLoaderToSubtitle(s); }
             @Override public void onWordHighlight(String s, int ws, int we) {
                 LiveSubtitleBar.updateWordHighlight(floatingSubtitleWrap, s, ws, we);
             }
@@ -173,20 +217,11 @@ public class TvOverlayManager {
     }
 
     private WindowManager.LayoutParams buildFullScreenFocusableParams() {
-        int flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+        int flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
         return new WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
-    }
-
-    private WindowManager.LayoutParams buildSubtitleWindowParams() {
-        int flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
-        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-            GlassTheme.dp(ctx, 920), GlassTheme.dp(ctx, 128),
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
-        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        lp.y = 12;
-        return lp;
     }
 
     private boolean addWindowViewSafe(View view, WindowManager.LayoutParams lp) {
@@ -199,31 +234,26 @@ public class TvOverlayManager {
     }
 
     public void dismissCompanionOverlays() {
-        mainHandler.post(() -> {
+        postToMain(() -> {
+            companionSessionActive = false;
             activeCancelAction = null;
+            floatingSubtitleWrap = null;
+            CompanionAudioFocusController.releaseCompanionSilence(ctx);
             dismissOverlay();
-            removeFloatingSubtitleWindow();
             AuraActivity.rebindLauncherSubtitleIfActive();
         });
-    }
-
-    private void removeFloatingSubtitleWindow() {
-        if (floatingSubtitleWrap == null) return;
-        try {
-            WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
-            if (wm != null) wm.removeView(floatingSubtitleWrap);
-        } catch (Exception ignored) {}
-        floatingSubtitleWrap = null;
     }
 
     private void renderCardAt(String badge, String title, String reason,
                               int gravity, int x, int y, int widthPx, String strokeHex, int durationSec) {
         dismissOverlay();
-        LinearLayout card = buildCardLayout(badge, title, reason, strokeHex);
-        if (addWindowViewSafe(card, buildWindowParams(gravity, x, y, widthPx))) {
-            currentBanner = card;
-            if (durationSec > 0) mainHandler.postDelayed(autoDismissTask, Math.max(3, durationSec) * 1000L);
-        }
+        try {
+            LinearLayout card = buildCardLayout(badge, title, reason, strokeHex);
+            if (addWindowViewSafe(card, buildWindowParams(gravity, x, y, widthPx))) {
+                currentBanner = card;
+                if (durationSec > 0 && mainHandler != null) mainHandler.postDelayed(autoDismissTask, Math.max(3, durationSec) * 1000L);
+            }
+        } catch (Throwable ignored) {}
     }
 
     private LinearLayout buildCardLayout(String badge, String title, String reason, String strokeHex) {
@@ -276,7 +306,7 @@ public class TvOverlayManager {
     }
 
     public void dismissOverlay() {
-        mainHandler.removeCallbacks(autoDismissTask);
+        if (mainHandler != null) mainHandler.removeCallbacks(autoDismissTask);
         if (currentBanner == null) return;
         try {
             WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);

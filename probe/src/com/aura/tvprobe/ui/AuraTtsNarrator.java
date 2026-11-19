@@ -74,14 +74,6 @@ public final class AuraTtsNarrator {
         sSubtitleListener = listener;
     }
 
-    public static String getSelectedVoiceName() {
-        return sSelectedVoiceName;
-    }
-
-    public static int getActiveWordIndex() {
-        return sDisplayedWordIdx;
-    }
-
     public static synchronized void warmup(Context ctx) {
         if (sTts != null || ctx == null) return;
         final Context appCtx = ctx.getApplicationContext();
@@ -400,18 +392,6 @@ public final class AuraTtsNarrator {
         if (sOnCompleteCallback != null) sOnCompleteCallback.run();
     }
 
-    public static synchronized boolean toggleSpeakOrStop(Context ctx, Runnable onComplete) {
-        if (isSpeaking() || sDisplayedSentenceIdx >= 0) {
-            stop(ctx);
-            return false;
-        }
-        if (!sLastSpokenScript.isEmpty()) {
-            speak(ctx, sLastSpokenScript, onComplete);
-            return true;
-        }
-        return false;
-    }
-
     public static synchronized boolean isSpeaking() {
         try {
             return sReady && sTts != null && sTts.isSpeaking();
@@ -433,21 +413,23 @@ public final class AuraTtsNarrator {
         abandonAudioFocusSafe(ctx);
     }
 
+    private static final android.media.AudioManager.OnAudioFocusChangeListener TTS_FOCUS_LISTENER = c -> {};
+
     private static void requestAudioFocusSafe(Context ctx) {
-        if (ctx == null) return;
+        if (ctx == null || CompanionAudioFocusController.isCompanionSilenceActive()) return;
         try {
             AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
             if (am != null) {
-                am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
+                am.requestAudioFocus(TTS_FOCUS_LISTENER, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE);
             }
         } catch (Throwable ignored) {}
     }
 
     private static void abandonAudioFocusSafe(Context ctx) {
-        if (ctx == null) return;
+        if (ctx == null || CompanionAudioFocusController.isCompanionSilenceActive()) return;
         try {
             AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-            if (am != null) am.abandonAudioFocus(null);
+            if (am != null) am.abandonAudioFocus(TTS_FOCUS_LISTENER);
         } catch (Throwable ignored) {}
     }
 

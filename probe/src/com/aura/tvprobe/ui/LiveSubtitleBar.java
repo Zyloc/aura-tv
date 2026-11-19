@@ -19,6 +19,7 @@ public final class LiveSubtitleBar {
     private static final String TAG_TEXT = "live_sub_text";
     private static final int SUBTITLE_WIDTH_DP = 760;
     private static final int SUBTITLE_HEIGHT_DP = 82;
+    private static final int BLACKOUT_STAGE_WIDTH_DP = 840;
 
     private LiveSubtitleBar() {}
 
@@ -31,6 +32,18 @@ public final class LiveSubtitleBar {
             GlassTheme.dp(ctx, SUBTITLE_WIDTH_DP), GlassTheme.dp(ctx, SUBTITLE_HEIGHT_DP));
         lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         lp.bottomMargin = GlassTheme.dp(ctx, 26);
+        wrap.addView(tv, lp);
+        return wrap;
+    }
+
+    public static FrameLayout buildBlackoutStage(Context ctx) {
+        FrameLayout wrap = new FrameLayout(ctx);
+        wrap.setVisibility(View.GONE);
+        wrap.setBackgroundColor(Color.TRANSPARENT);
+        TextView tv = buildBlackoutStageTextView(ctx);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+            GlassTheme.dp(ctx, BLACKOUT_STAGE_WIDTH_DP), FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.CENTER;
         wrap.addView(tv, lp);
         return wrap;
     }
@@ -68,6 +81,24 @@ public final class LiveSubtitleBar {
         tv.setMaxLines(2);
         tv.setLineSpacing(0f, 1.18f);
         tv.setShadowLayer(12f, 0f, 3f, Color.BLACK);
+    }
+
+    private static TextView buildBlackoutStageTextView(Context ctx) {
+        TextView tv = new TextView(ctx);
+        tv.setTag(TAG_TEXT);
+        tv.setBackgroundColor(Color.TRANSPARENT);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24.5f);
+        tv.setTypeface(GlassTheme.FONT_BOLD);
+        tv.setTextColor(Color.WHITE);
+        configureBlackoutStageBox(tv);
+        return tv;
+    }
+
+    private static void configureBlackoutStageBox(TextView tv) {
+        tv.setGravity(Gravity.CENTER);
+        tv.setMinLines(2);
+        tv.setMaxLines(3);
+        tv.setLineSpacing(0f, 1.24f);
     }
 
     public static void animateNewSentence(FrameLayout wrap, String sentence) {

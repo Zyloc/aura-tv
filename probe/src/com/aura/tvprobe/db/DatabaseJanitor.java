@@ -136,9 +136,10 @@ public final class DatabaseJanitor {
     }
 
     public static void saveSubtitleCacheRow(AuraDb auraDb, String cacheKey, String seriesKey, int season, int episode, String json) {
-        if (auraDb == null || json == null || json.isEmpty()) return;
+        if (auraDb == null || cacheKey == null || json == null || json.isEmpty()) return;
         try {
             SQLiteDatabase db = auraDb.getWritableDatabase();
+            if (db == null) { auraDb.saveCachedGti("subcache:" + cacheKey, json); return; }
             ensureCompanionTables(db);
             long now = System.currentTimeMillis() / 1000L;
             insertSubtitleRow(db, cacheKey, seriesKey, season, episode, json, now);
@@ -163,6 +164,7 @@ public final class DatabaseJanitor {
         if (auraDb == null || cacheKey == null) return null;
         try {
             SQLiteDatabase db = auraDb.getWritableDatabase();
+            if (db == null) return auraDb.getCachedGti("subcache:" + cacheKey);
             ensureCompanionTables(db);
             return readAndTouchSubtitleRow(db, cacheKey);
         } catch (Exception e) { return null; }

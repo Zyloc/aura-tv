@@ -108,6 +108,7 @@ public class AuraActivity extends Activity implements
     private FrameLayout liveSubtitleBar;
     private TextView globalLoaderText;
     private View lastFocusedView;
+    private JSONObject currentDetailItem;
     private int[] lastRailFocus;
     private int lastScrollY;
     private boolean watchedChangedWhileInDetail = false;
@@ -178,8 +179,10 @@ public class AuraActivity extends Activity implements
         sIsInForeground = true;
         sLastActiveWallMs = System.currentTimeMillis();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        TvOverlayManager.dismissActiveInstanceOverlays();
-        bindLiveSubtitleListener();
+        if (!TvOverlayManager.isCompanionSessionActive()) {
+            TvOverlayManager.dismissActiveInstanceOverlays();
+            bindLiveSubtitleListener();
+        }
     }
 
     private void scheduleSilenceBackgroundMediaOnResume() {
@@ -301,7 +304,10 @@ public class AuraActivity extends Activity implements
     }
 
     private void dismissDetailSearchAndNav() {
-        if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
+        if (DetailOverlay.isVisible(detailOverlay)) {
+            currentDetailItem = null;
+            DetailOverlay.dismiss(detailOverlay);
+        }
         if (SearchOverlay.isVisible(searchOverlay)) {
             SearchOverlay.dismiss(searchOverlay);
             clearRetainedSearchState();
@@ -323,7 +329,7 @@ public class AuraActivity extends Activity implements
     protected void onStop() {
         super.onStop();
         if (loadingOverlay != null && !refreshInFlight) loadingOverlay.setVisibility(View.GONE);
-        AuraTtsNarrator.stop(this);
+        if (!TvOverlayManager.isCompanionSessionActive()) AuraTtsNarrator.stop(this);
         ImageLoader.trimMemory();
     }
 
@@ -343,7 +349,17 @@ public class AuraActivity extends Activity implements
 
     public static void rebindLauncherSubtitleIfActive() {
         AuraActivity inst = sActiveInstance;
-        if (inst != null) inst.ui.post(inst::bindLiveSubtitleListener);
+        if (inst != null && !TvOverlayManager.isCompanionSessionActive()) {
+            inst.ui.post(inst::bindLiveSubtitleListener);
+        }
+    }
+
+    public static JSONObject getActiveCompanionItem(AuraDb db, String profileId) {
+        AuraActivity inst = sActiveInstance;
+        if (inst == null || !DetailOverlay.isVisible(inst.detailOverlay) || inst.currentDetailItem == null) {
+            return null;
+        }
+        return ShowCompanionAgent.mergeDetectedShowWithHistory(db, profileId, inst.currentDetailItem, inst.currentDetailItem);
     }
 
     public static Intent buildHomeLauncherIntent(Context ctx) {
@@ -1177,39 +1193,47 @@ public class AuraActivity extends Activity implements
     @Override
     public void onCatchMeUpClicked(JSONObject item) {
         if (item == null) return;
-        if (AuraTtsNarrator.isSpeaking()) {
-            AuraTtsNarrator.stop(this);
-            Toast.makeText(this, "Stopped voice narration", Toast.LENGTH_SHORT).show();
+        if (AuraTtsNarrator.isSpeaking() || TvOverlayManager.isCompanionSessionActive()) {
+            InAppVoiceRouter.cancelActiveCompanionTurn(this, getOrCreateOverlayManager(), "");
             return;
         }
         startCatchMeUpForItem(item);
     }
 
+    private TvOverlayManager getOrCreateOverlayManager() {
+        TvOverlayManager ov = TvOverlayManager.peekInstance();
+        return ov != null ? ov : new TvOverlayManager(this);
+    }
+
     private void startCatchMeUpForItem(JSONObject item) {
-        String title = item.optString("title", "Show");
-        beginBlockingLoader("Preparing 2-minute audio recap for " + title + "\u2026");
-        bgPool.submit(() -> executeCatchMeUpBackground(title, item));
+        String title = resolveCanonicalTitle(item, "Show");
+        TvOverlayManager ov = getOrCreateOverlayManager();
+        JSONObject merged = ShowCompanionAgent.mergeDetectedShowWithHistory(db, activeProfile, item, item);
+        FutureHolder holder = new FutureHolder();
+        ov.showCompanionLoader("Catch me up on " + title, "Fetching episode guide for " + title + "\u2026", holder::cancel);
+        holder.task = bgPool.submit(() -> executeCatchMeUpBlackout(title, merged, ov, holder));
     }
 
-    private void executeCatchMeUpBackground(String title, JSONObject item) {
-        AgentStatusNarrator narrator = AgentStatusNarrator.start(
-            ai, db, activeProfile, "Catch me up on " + title, this::postBlockingLoaderStep);
-        try {
-            JSONObject recap = ShowCompanionAgent.executeCompanionTurn(ai, db, activeProfile, "Catch me up on " + title, item);
-            ui.post(() -> presentCatchMeUpInDetail(title, recap));
-        } finally {
-            narrator.stop();
-        }
+    private void executeCatchMeUpBlackout(String title, JSONObject item, TvOverlayManager ov, FutureHolder holder) {
+        JSONObject recap = ShowCompanionAgent.executeCompanionTurn(
+            ai, db, activeProfile, "Catch me up on " + title, item, ov::updateVoiceStatusSubtext);
+        if (holder.cancelled || Thread.currentThread().isInterrupted() || recap == null) return;
+        ui.post(() -> {
+            if (holder.cancelled) return;
+            if (DetailOverlay.isShowingTitle(detailOverlay, item.optString("title"))) {
+                DetailOverlay.showRecapInDetail(detailOverlay, recap);
+            }
+            ov.showInAppCompanionRecap(recap, holder::cancel);
+        });
     }
 
-    private void presentCatchMeUpInDetail(String title, JSONObject recap) {
-        setBannerText("", false);
-        if (loaderDismissedByUser || recap == null) return;
-        if (DetailOverlay.isShowingTitle(detailOverlay, title) || lastFocusedView != null) {
-            DetailOverlay.showRecapInDetail(detailOverlay, recap);
+    private static final class FutureHolder {
+        volatile java.util.concurrent.Future<?> task;
+        volatile boolean cancelled = false;
+        void cancel() {
+            cancelled = true;
+            if (task != null) task.cancel(true);
         }
-        String spoken = recap.optString("spoken_narration", "");
-        if (!spoken.isEmpty()) AuraTtsNarrator.speak(this, spoken, null);
     }
 
     @Override
@@ -1429,19 +1453,11 @@ public class AuraActivity extends Activity implements
     private boolean tryPresentPureCompanionRecap(JSONObject res) {
         JSONObject recap = res.optJSONObject("companion_recap");
         if (recap == null || !recap.optString("actor_to_search", "").isEmpty()) return false;
-        showInAppOnlyCompanionHint();
+        SearchOverlay.dismiss(searchOverlay);
+        TvOverlayManager ov = TvOverlayManager.peekInstance();
+        if (ov == null) ov = new TvOverlayManager(this);
+        ov.showInAppCompanionRecap(recap);
         return true;
-    }
-
-    private void showInAppOnlyCompanionHint() {
-        JSONArray hintTurns = new JSONArray().put(new JSONObject());
-        try {
-            hintTurns = new JSONArray()
-                .put(new JSONObject().put("role", "user").put("text", lastSearchQuery))
-                .put(new JSONObject().put("role", "assistant").put("text",
-                    "Catch Me Up works directly inside your streaming app. Open your show in Hotstar, Netflix, Prime Video, or YouTube and say \u201CCatch me up\u201D."));
-        } catch (Exception ignored) {}
-        SearchOverlay.setConversationTurns(searchOverlay, hintTurns, this);
     }
 
     private List<String> extractFollowUpList(JSONArray arr) {
@@ -1519,7 +1535,10 @@ public class AuraActivity extends Activity implements
     }
 
     private void dismissActiveOverlays() {
-        if (DetailOverlay.isVisible(detailOverlay)) DetailOverlay.dismiss(detailOverlay);
+        if (DetailOverlay.isVisible(detailOverlay)) {
+            currentDetailItem = null;
+            DetailOverlay.dismiss(detailOverlay);
+        }
         if (SearchOverlay.isVisible(searchOverlay)) {
             SearchOverlay.dismiss(searchOverlay);
             clearRetainedSearchState();
@@ -1536,6 +1555,7 @@ public class AuraActivity extends Activity implements
 
     private void openDetailDrawer(JSONObject item) {
         if (item == null) return;
+        currentDetailItem = item;
         saveFocusBeforeOverlay();
         setBackgroundFocusBlocked(true);
         String title = resolveCanonicalTitle(item, "");

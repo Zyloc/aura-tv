@@ -79,7 +79,7 @@ public final class InAppVoiceRouter {
         if (!acceptTranscriptDedup(spoken)) return;
         String fgPkg = resolveActiveExternalPackage(ctx);
         if (AuraActivity.isInForeground() || fgPkg.isEmpty()) {
-            routeWhileOnLauncher(ctx, overlay, spoken);
+            routeWhileOnLauncher(ctx, db, ai, inspector, overlay, spoken);
             return;
         }
         routeWhileInsideExternalApp(ctx, db, ai, inspector, overlay, fgPkg, spoken);
@@ -94,29 +94,59 @@ public final class InAppVoiceRouter {
         return true;
     }
 
-    private static void routeWhileOnLauncher(Context ctx, TvOverlayManager overlay, String spoken) {
+    private static void routeWhileOnLauncher(
+            Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
+            TvOverlayManager overlay, String spoken) {
+        String low = spoken.toLowerCase(Locale.US);
+        if (isAnyCompanionActive() && isStopNarrationPhrase(low)) {
+            cancelActiveCompanionTurn(ctx, overlay, "");
+            return;
+        }
         if (ShowCompanionAgent.isShowCompanionQuery(spoken)) {
-            VoiceSearchHelper.silenceAssistantAudio(ctx, getMainHandlerSafe());
-            if (overlay != null) {
-                overlay.showVoiceStatusPill("\u2726 AURA SHOW COMPANION",
-                    "Catch Me Up works inside your app",
-                    "Open your show in Netflix, Hotstar, Prime, or YouTube and ask again.", 6);
-            }
+            startLauncherCompanionTurn(ctx, db, ai, inspector, overlay, spoken);
             return;
         }
         AuraActivity.onGlobalVoiceSearchQuery(ctx, spoken);
     }
 
-    private static void routeWhileInsideExternalApp(
+    private static void startLauncherCompanionTurn(
+            Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
+            TvOverlayManager overlay, String spoken) {
+        CompanionAudioFocusController.engageCompanionSilence(ctx);
+        VoiceSearchHelper.silenceAssistantAudio(ctx, getMainHandlerSafe());
+        final int runId = ++sCompanionRunId;
+        if (overlay != null) {
+            overlay.showCompanionLoader(spoken, "Checking show & timestamp\u2026",
+                () -> cancelActiveCompanionTurn(ctx, overlay, ""));
+        }
+        sActiveCompanionTask = WORKER.submit(() ->
+            executeLauncherCompanionFlow(ctx, db, ai, inspector, overlay, spoken, runId));
+    }
+
+    private static void executeLauncherCompanionFlow(
+            Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
+            TvOverlayManager overlay, String spoken, int runId) {
+        String profile = db != null ? db.getValidActiveProfile() : AuraDb.DEFAULT_PROFILE;
+        JSONObject item = AuraActivity.getActiveCompanionItem(db, profile);
+        if (item == null && inspector != null) inspector.recordActivePlaybackOnly();
+        if (item == null) item = findActiveItemForPackage(ctx, db, inspector, profile, "");
+        finishCompanionSynthesisAndSpeak(ctx, db, ai, overlay, "", profile, spoken, item, runId);
+    }
+
+    static void routeWhileInsideExternalApp(
             Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
             TvOverlayManager overlay, String fgPkg, String spoken) {
         String low = spoken.toLowerCase(Locale.US);
-        if ((AuraTtsNarrator.isSpeaking() || isCompanionRunning()) && isStopNarrationPhrase(low)) {
+        if (isAnyCompanionActive() && isStopNarrationPhrase(low)) {
             cancelActiveCompanionTurn(ctx, overlay, fgPkg);
             return;
         }
         if (isControlPhrase(low)) return;
         beginInAppInterception(ctx, db, ai, inspector, overlay, fgPkg, spoken);
+    }
+
+    private static boolean isAnyCompanionActive() {
+        return AuraTtsNarrator.isSpeaking() || isCompanionRunning() || TvOverlayManager.isCompanionSessionActive();
     }
 
     private static boolean isCompanionRunning() {
@@ -131,6 +161,7 @@ public final class InAppVoiceRouter {
             sActiveCompanionTask = null;
         }
         if (fgPkg != null && !fgPkg.isEmpty()) suppressKatnissOnceInApp(ctx, fgPkg);
+        VoiceSearchHelper.unmuteStreamMusicNow(ctx);
         AuraTtsNarrator.stop(ctx);
         if (overlay != null) overlay.dismissCompanionOverlays();
     }
@@ -140,24 +171,20 @@ public final class InAppVoiceRouter {
             TvOverlayManager overlay, String fgPkg, String spoken) {
         sLastInAppInterceptMs = System.currentTimeMillis();
         sLastInterceptedPkg = fgPkg;
+        boolean directCompanion = ShowCompanionAgent.isShowCompanionQuery(spoken);
+        if (directCompanion) CompanionAudioFocusController.engageCompanionSilence(ctx);
         startKatnissHijackGuardian(ctx, fgPkg);
         String appLabel = resolveAppLabel(ctx, fgPkg);
-        showInitialVoiceOverlay(ctx, overlay, fgPkg, appLabel, spoken);
+        if (!directCompanion) showInitialSearchIntentPill(overlay, appLabel, spoken);
         final int runId = ++sCompanionRunId;
         sActiveCompanionTask = WORKER.submit(() ->
             executeClassifiedAction(ctx, db, ai, inspector, overlay, fgPkg, appLabel, spoken, runId));
     }
 
-    private static void showInitialVoiceOverlay(
-            Context ctx, TvOverlayManager overlay, String fgPkg, String appLabel, String spoken) {
+    private static void showInitialSearchIntentPill(TvOverlayManager overlay, String appLabel, String spoken) {
         if (overlay == null) return;
-        if (ShowCompanionAgent.isShowCompanionQuery(spoken)) {
-            overlay.showCompanionLoader(spoken, "Locking " + appLabel + " & checking timestamp\u2026",
-                () -> cancelActiveCompanionTurn(ctx, overlay, fgPkg));
-        } else {
-            overlay.showVoiceStatusPill("\uD83C\uDFA4 AURA VOICE \u00B7 " + appLabel.toUpperCase(Locale.US),
-                "\u201C" + spoken + "\u201D", "Checking intent in " + appLabel + "\u2026", 6);
-        }
+        overlay.showVoiceStatusPill("\uD83C\uDFA4 AURA VOICE \u00B7 " + appLabel.toUpperCase(Locale.US),
+            "\u201C" + spoken + "\u201D", "Checking intent in " + appLabel + "\u2026", 6);
     }
 
     private static void executeClassifiedAction(
@@ -203,31 +230,56 @@ public final class InAppVoiceRouter {
     private static void runInAppCompanionFlow(
             Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector,
             TvOverlayManager overlay, String fgPkg, String spoken, int runId) {
-        JSONObject activeItem = prepareCompanionSessionContext(ctx, db, inspector, overlay, fgPkg, spoken);
+        CompanionAudioFocusController.engageCompanionSilence(ctx);
         String profile = db != null ? db.getValidActiveProfile() : AuraDb.DEFAULT_PROFILE;
+        JSONObject liveSession = inspector != null ? inspector.inspectLivePackageSession(fgPkg, profile) : null;
+        String detailFrameB64 = captureDetailPageBeforeBlackout(spoken, liveSession);
+        mountInAppCompanionBlackout(ctx, overlay, fgPkg, spoken);
+        JSONObject activeItem = resolveInAppCompanionItem(ctx, db, ai, inspector, overlay, fgPkg, profile, spoken, liveSession, detailFrameB64);
+        finishCompanionSynthesisAndSpeak(ctx, db, ai, overlay, fgPkg, profile, spoken, activeItem, runId);
+    }
+
+    private static String captureDetailPageBeforeBlackout(String spoken, JSONObject liveSession) {
+        boolean onPlayerScreen = liveSession != null && liveSession.optBoolean("live_player_screen", false);
+        if (onPlayerScreen || !ShowCompanionAgent.extractTitleFromCompanionQuery(spoken).isEmpty()) return null;
+        return ShowCompanionAgent.captureScreenVisionFrameBase64();
+    }
+
+    private static void mountInAppCompanionBlackout(
+            Context ctx, TvOverlayManager overlay, String fgPkg, String spoken) {
+        if (overlay == null) return;
+        String appLabel = resolveAppLabel(ctx, fgPkg);
+        overlay.showCompanionLoader(spoken, "Locking " + appLabel + " & checking timestamp\u2026",
+            () -> cancelActiveCompanionTurn(ctx, overlay, fgPkg));
+    }
+
+    private static JSONObject resolveInAppCompanionItem(
+            Context ctx, AuraDb db, AiRecommender ai, SessionInspector inspector, TvOverlayManager overlay,
+            String fgPkg, String profile, String spoken, JSONObject liveSession, String detailFrameB64) {
+        JSONObject base = hasValidSessionTitle(liveSession, fgPkg)
+            ? liveSession
+            : findActiveItemForPackage(ctx, db, inspector, profile, fgPkg);
+        if (detailFrameB64 == null) return base;
+        AiRecommender.AgentProgressListener step = overlay != null ? overlay::updateVoiceStatusSubtext : null;
+        return ShowCompanionAgent.resolveDetailPageItemIfNeeded(ai, db, profile, spoken, base, detailFrameB64, step);
+    }
+
+    private static boolean hasValidSessionTitle(JSONObject sessionItem, String fgPkg) {
+        if (sessionItem == null) return false;
+        String t = sessionItem.optString("series_title").isEmpty()
+            ? sessionItem.optString("title", "") : sessionItem.optString("series_title", "");
+        return !t.isEmpty() && !t.equalsIgnoreCase(SessionInspector.friendlyApp(fgPkg));
+    }
+
+    private static void finishCompanionSynthesisAndSpeak(
+            Context ctx, AuraDb db, AiRecommender ai, TvOverlayManager overlay,
+            String fgPkg, String profile, String spoken, JSONObject activeItem, int runId) {
+        if (runId != sCompanionRunId || Thread.currentThread().isInterrupted()) return;
         JSONObject recap = ShowCompanionAgent.executeCompanionTurn(
             ai, db, profile, spoken, activeItem, overlay != null ? overlay::updateVoiceStatusSubtext : null);
         if (runId != sCompanionRunId || Thread.currentThread().isInterrupted()) return;
         if (overlay != null && recap != null) {
             overlay.showInAppCompanionRecap(recap, () -> cancelActiveCompanionTurn(ctx, overlay, fgPkg));
-        }
-    }
-
-    private static JSONObject prepareCompanionSessionContext(
-            Context ctx, AuraDb db, SessionInspector inspector,
-            TvOverlayManager overlay, String fgPkg, String spoken) {
-        ensureCompanionLoaderMounted(ctx, overlay, fgPkg, spoken);
-        pausePackageSessionGently(ctx, fgPkg);
-        if (inspector != null) inspector.recordActivePlaybackOnly();
-        String profile = db != null ? db.getValidActiveProfile() : AuraDb.DEFAULT_PROFILE;
-        return findActiveItemForPackage(ctx, db, inspector, profile, fgPkg);
-    }
-
-    private static void ensureCompanionLoaderMounted(
-            Context ctx, TvOverlayManager overlay, String fgPkg, String spoken) {
-        if (overlay != null && !ShowCompanionAgent.isShowCompanionQuery(spoken)) {
-            overlay.showCompanionLoader(spoken, "Checking active show & timestamp\u2026",
-                () -> cancelActiveCompanionTurn(ctx, overlay, fgPkg));
         }
     }
 
@@ -241,10 +293,6 @@ public final class InAppVoiceRouter {
             sLastTakeoverHandledMs = now;
             guardInterceptedAppOnce(ctx, sLastInterceptedPkg);
         }
-    }
-
-    public static void suppressKatnissInAppBurst(Context ctx, String fgPkg) {
-        startKatnissHijackGuardian(ctx, fgPkg);
     }
 
     private static void startKatnissHijackGuardian(Context ctx, String fgPkg) {
@@ -266,7 +314,7 @@ public final class InAppVoiceRouter {
 
     public static boolean isHijackForegroundPkg(String topPkg, String expectedFgPkg) {
         if (topPkg == null || topPkg.isEmpty() || expectedFgPkg == null || expectedFgPkg.isEmpty()) return false;
-        if (topPkg.startsWith("com.google.android.katniss")) return true;
+        if (topPkg.equals(expectedFgPkg) || topPkg.startsWith("com.google.android.katniss")) return false;
         return topPkg.contains("youtube") && !expectedFgPkg.contains("youtube");
     }
 
@@ -277,14 +325,35 @@ public final class InAppVoiceRouter {
     }
 
     private static void refrontInterceptedApp(Context ctx, String fgPkg) {
+        if (tryMoveExistingTaskToFront(ctx, fgPkg)) return;
         try {
             PackageManager pm = ctx.getPackageManager();
             Intent intent = pm.getLeanbackLaunchIntentForPackage(fgPkg);
             if (intent == null) intent = pm.getLaunchIntentForPackage(fgPkg);
             if (intent == null) return;
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
             ctx.startActivity(intent);
         } catch (Throwable ignored) {}
+    }
+
+    @SuppressWarnings("deprecation")
+    private static boolean tryMoveExistingTaskToFront(Context ctx, String fgPkg) {
+        try {
+            ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return false;
+            return moveMatchingTaskToFront(am, fgPkg);
+        } catch (Throwable ignored) { return false; }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static boolean moveMatchingTaskToFront(ActivityManager am, String fgPkg) {
+        for (ActivityManager.RunningTaskInfo t : am.getRunningTasks(16)) {
+            if (t.baseActivity != null && fgPkg.equals(t.baseActivity.getPackageName())) {
+                am.moveTaskToFront(t.id, 0);
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String queryRawLatestForegroundPkg(Context ctx) {
@@ -314,7 +383,9 @@ public final class InAppVoiceRouter {
         try {
             ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
             if (am != null) killAssistantProcessesSafe(am, fgPkg);
-            ctx.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+            if (!TvOverlayManager.isCompanionSessionActive()) {
+                ctx.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+            }
         } catch (Throwable ignored) {}
     }
 
@@ -588,10 +659,11 @@ public final class InAppVoiceRouter {
     }
 
     private static JSONObject findHistoryForPkg(JSONArray hist, String fgPkg, int minPosSec) {
+        boolean anyApp = fgPkg == null || fgPkg.isEmpty();
         for (int i = 0; i < hist.length(); i++) {
             JSONObject h = hist.optJSONObject(i);
-            if (h != null && fgPkg.equals(h.optString("app_pkg", h.optString("launch_pkg", "")))
-                    && h.optInt("position_sec", 0) >= minPosSec) {
+            String pkg = h != null ? h.optString("app_pkg", h.optString("launch_pkg", "")) : "";
+            if (h != null && (anyApp || fgPkg.equals(pkg)) && h.optInt("position_sec", 0) >= minPosSec) {
                 return h;
             }
         }

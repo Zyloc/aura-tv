@@ -39,20 +39,46 @@ public class SessionInspector {
         this.sync = new SyncManager(db);
     }
 
-    public boolean isMediaActivelyPlaying() {
-        JSONArray sessions = getMediaSessions();
-        for (int i = 0; i < sessions.length(); i++) {
-            JSONObject s = sessions.optJSONObject(i);
-            if (s != null && s.optInt("state") == PlaybackState.STATE_PLAYING) return true;
-        }
-        return false;
-    }
-
     public void recordActivePlaybackOnly() {
         String profile = db.getValidActiveProfile();
         JSONObject raw = new JSONObject();
         try { raw.put("sessions", getMediaSessions()); } catch (Exception ignored) {}
         resolveNowPlaying(raw, profile);
+    }
+
+    public JSONObject inspectLivePackageSession(String fgPkg, String profile) {
+        JSONObject match = findLiveSessionForPackage(getMediaSessions(), fgPkg);
+        if (match == null) return null;
+        JSONObject out = sessionToNowPlaying(match, profile);
+        try { out.put("live_player_screen", isLikelyOnVideoPlayerScreen(match)); } catch (Exception ignored) {}
+        return out;
+    }
+
+    public static JSONObject findLiveSessionForPackage(JSONArray sessions, String fgPkg) {
+        if (sessions == null || sessions.length() == 0) return null;
+        JSONObject pausedFallback = null;
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject s = sessions.optJSONObject(i);
+            if (!matchesSessionPackage(s, fgPkg)) continue;
+            if (CompanionAudioFocusController.isActivePlaybackState(s.optInt("state", 0))) return s;
+            if (pausedFallback == null && s.optInt("state", 0) == PlaybackState.STATE_PAUSED) pausedFallback = s;
+        }
+        return pausedFallback;
+    }
+
+    private static boolean matchesSessionPackage(JSONObject s, String fgPkg) {
+        if (s == null) return false;
+        String pkg = s.optString("package", "");
+        if (pkg.isEmpty()) return false;
+        return fgPkg == null || fgPkg.isEmpty() || fgPkg.equals(pkg);
+    }
+
+    public static boolean isLikelyOnVideoPlayerScreen(JSONObject sessionJson) {
+        if (sessionJson == null) return false;
+        int st = sessionJson.optInt("state", 0);
+        if (CompanionAudioFocusController.isActivePlaybackState(st)) return true;
+        return st == PlaybackState.STATE_PAUSED
+            && sessionJson.optLong("age_since_update_ms", Long.MAX_VALUE) <= 30_000L;
     }
 
     public JSONObject inspectAll() {
@@ -95,11 +121,6 @@ public class SessionInspector {
             out.put("system_health", SystemResourceMonitor.collectTelemetrySnapshot(ctx, db));
         } catch (Exception ignored) {}
         return out;
-    }
-
-    public JSONObject forceSyncProvidersAndNowPlaying(String profile) {
-        lastProviderSyncMs = 0L;
-        return syncProvidersAndNowPlaying(profile);
     }
 
     public JSONObject syncProvidersAndNowPlaying(String profile) {
@@ -569,8 +590,48 @@ public class SessionInspector {
         if (t.equalsIgnoreCase(friendlyApp(pkg))) {
             hydrateSessionFromHistoryForPackage(out, pkg);
         } else if (out.optString("series_title").isEmpty()) {
-            tryResolveOrphanEpisodeCode(out, t);
+            resolveMissingSeriesFromEpisodeTitle(out, pkg, t);
         }
+    }
+
+    private void resolveMissingSeriesFromEpisodeTitle(JSONObject out, String pkg, String title) throws Exception {
+        tryResolveOrphanEpisodeCode(out, title);
+        if (!out.optString("series_title").isEmpty()) return;
+        String profile = out.optString("profile_id", AuraDb.DEFAULT_PROFILE);
+        if (applyEpisodeMatchFromRows(out, db.listHistory(profile), pkg, title, true)) return;
+        applyEpisodeMatchFromRows(out, queryTvProvider("content://android.media.tv/watch_next_program", true), pkg, title, false);
+    }
+
+    public static boolean applyEpisodeMatchFromRows(
+            JSONObject out, JSONArray rows, String pkg, String epTitle, boolean isHistorySchema) throws Exception {
+        if (rows == null || epTitle == null || epTitle.isEmpty()) return false;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.optJSONObject(i);
+            if (matchesProviderOrHistoryEpisode(r, pkg, epTitle, isHistorySchema)) {
+                copyMatchedSeriesEpisodeFields(out, r, isHistorySchema);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesProviderOrHistoryEpisode(
+            JSONObject r, String pkg, String epTitle, boolean isHistory) {
+        if (r == null) return false;
+        String rowPkg = r.optString(isHistory ? "app_pkg" : "package_name", "");
+        if (pkg != null && !pkg.isEmpty() && !pkg.equals(rowPkg)) return false;
+        String rowEp = r.optString(isHistory ? "title" : "episode_title", "").trim();
+        String rowSeries = r.optString(isHistory ? "series_title" : "title", "").trim();
+        return !rowSeries.isEmpty() && epTitle.trim().equalsIgnoreCase(rowEp);
+    }
+
+    private static void copyMatchedSeriesEpisodeFields(
+            JSONObject out, JSONObject r, boolean isHistory) throws Exception {
+        out.put("series_title", r.optString(isHistory ? "series_title" : "title", "").trim());
+        int s = isHistory ? r.optInt("season", 0) : r.optInt("season_display_number", r.optInt("season_number", 0));
+        int e = isHistory ? r.optInt("episode", 0) : r.optInt("episode_display_number", r.optInt("episode_number", 0));
+        if (s > 0) out.put("season", s);
+        if (e > 0) out.put("episode", e);
     }
 
     private void tryResolveOrphanEpisodeCode(JSONObject out, String title) throws Exception {
@@ -694,6 +755,10 @@ public class SessionInspector {
         obj.put("state", ps.getState());
         obj.put("position_ms", computeLivePositionMs(ps));
         obj.put("speed", ps.getPlaybackSpeed());
+        if (ps.getLastPositionUpdateTime() > 0L) {
+            long age = Math.max(0L, android.os.SystemClock.elapsedRealtime() - ps.getLastPositionUpdateTime());
+            obj.put("age_since_update_ms", age);
+        }
     }
 
     public static long computeLivePositionMs(PlaybackState ps) {

@@ -233,7 +233,9 @@ public final class VoiceSearchHelper {
         return (end > start) ? logLine.substring(start, end).trim() : "";
     }
 
+    private static final android.media.AudioManager.OnAudioFocusChangeListener ASSISTANT_MUTE_LISTENER = c -> {};
     private static volatile boolean sTtsUnmutedOverride = false;
+    private static volatile int sMuteEpoch = 0;
 
     public static boolean isKatnissResponseTakeoverLog(String line) {
         if (line == null) return false;
@@ -254,17 +256,23 @@ public final class VoiceSearchHelper {
 
     public static void silenceAssistantAudio(Context ctx, android.os.Handler ui) {
         if (ctx == null || ui == null || AuraTtsNarrator.isSpeaking()) return;
+        final int epoch = ++sMuteEpoch;
         sTtsUnmutedOverride = false;
         muteAssistantStreamsNow(ctx, true);
         for (long d : new long[]{700L, 1500L, 2400L, 3300L, 4100L}) {
-            ui.postDelayed(() -> { if (!sTtsUnmutedOverride && !AuraTtsNarrator.isSpeaking()) muteAssistantStreamsNow(ctx, true); }, d);
+            ui.postDelayed(() -> { if (epoch == sMuteEpoch && !sTtsUnmutedOverride && !AuraTtsNarrator.isSpeaking()) muteAssistantStreamsNow(ctx, true); }, d);
         }
-        ui.postDelayed(() -> muteAssistantStreamsNow(ctx, false), 5000L);
+        ui.postDelayed(() -> { if (epoch == sMuteEpoch) muteAssistantStreamsNow(ctx, false); }, 5000L);
     }
 
     public static void unmuteStreamMusicNow(Context ctx) {
+        sMuteEpoch++;
         sTtsUnmutedOverride = true;
         muteAssistantStreamsNow(ctx, false);
+    }
+
+    static boolean isStreamUnmutedOverride() {
+        return sTtsUnmutedOverride;
     }
 
     private static void muteAssistantStreamsNow(Context ctx, boolean mute) {
@@ -273,8 +281,8 @@ public final class VoiceSearchHelper {
             if (am == null) return;
             int dir = mute ? android.media.AudioManager.ADJUST_MUTE : android.media.AudioManager.ADJUST_UNMUTE;
             am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, dir, 0);
-            if (mute) am.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE);
-            else am.abandonAudioFocus(null);
+            if (mute) am.requestAudioFocus(ASSISTANT_MUTE_LISTENER, android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE);
+            else am.abandonAudioFocus(ASSISTANT_MUTE_LISTENER);
         } catch (Throwable ignored) {}
     }
 
@@ -284,31 +292,5 @@ public final class VoiceSearchHelper {
         int start = idx + marker.length();
         int end = line.indexOf('"', start);
         return (end > start) ? line.substring(start, end).trim() : "";
-    }
-
-    public static TextView buildMicButton(Context ctx, Runnable onClick) {
-        TextView btn = GlassTheme.makeText(ctx, "\uD83C\uDFA4", 13f,
-            GlassTheme.TEXT_PRIMARY, GlassTheme.FONT_BOLD, 1);
-        btn.setGravity(Gravity.CENTER);
-        btn.setFocusable(true);
-        btn.setClickable(true);
-        int size = GlassTheme.dp(ctx, 36);
-        btn.setLayoutParams(new LinearLayout.LayoutParams(size, size));
-        styleMicButtonFocus(ctx, btn);
-        btn.setOnClickListener(v -> { if (onClick != null) onClick.run(); });
-        return btn;
-    }
-
-    private static void styleMicButtonFocus(Context ctx, TextView btn) {
-        float r = GlassTheme.dp(ctx, 18);
-        btn.setBackground(GlassTheme.focusRounded(
-            Color.argb(185, 20, 26, 38), Color.argb(46, 255, 255, 255), GlassTheme.dp(ctx, 1), r));
-        btn.setOnFocusChangeListener((v, focused) -> {
-            btn.setBackground(focused
-                ? GlassTheme.focusRounded(GlassTheme.SURFACE_ELEV, Color.WHITE, GlassTheme.dp(ctx, 2.5f), r)
-                : GlassTheme.focusRounded(Color.argb(185, 20, 26, 38), Color.argb(46, 255, 255, 255), GlassTheme.dp(ctx, 1), r));
-            float scale = focused ? 1.08f : 1f;
-            v.animate().scaleX(scale).scaleY(scale).setDuration(150).start();
-        });
     }
 }

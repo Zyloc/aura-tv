@@ -96,13 +96,6 @@ public final class GlassTheme {
         return tv;
     }
 
-    public static TextView makeLabel(Context ctx, String text) {
-        TextView tv = makeText(ctx, text, 10.5f, TEXT_MUTED, FONT_BOLD, 1);
-        tv.setLetterSpacing(0.08f);
-        tv.setAllCaps(true);
-        return tv;
-    }
-
     public static TextView makeMuted(Context ctx, String text) {
         return makeText(ctx, text, 11.5f, TEXT_MUTED, FONT_REGULAR, 2);
     }
@@ -117,12 +110,6 @@ public final class GlassTheme {
 
     public static GradientDrawable glassCard(float radiusPx) {
         GradientDrawable gd = solidRounded(GLASS_CARD, radiusPx);
-        gd.setStroke(1, BORDER_LIGHT);
-        return gd;
-    }
-
-    public static GradientDrawable glassSubtle(float radiusPx) {
-        GradientDrawable gd = solidRounded(GLASS_SUBTLE, radiusPx);
         gd.setStroke(1, BORDER_LIGHT);
         return gd;
     }

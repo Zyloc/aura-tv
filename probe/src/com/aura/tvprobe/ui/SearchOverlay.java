@@ -50,7 +50,6 @@ public final class SearchOverlay {
     private static final int TAG_MIC_BTN       = 0x5E_000E;
 
     private static final int COLS     = 6;
-    private static final int POSTER_W = 132;
     private static final int POSTER_H = 204;
 
     public static final String[] MULTILINGUAL_HINTS = {
@@ -231,11 +230,6 @@ public final class SearchOverlay {
         LinearLayout row = findTagged(overlay, TAG_CHIPS);
         if (row == null) return;
         populateChips(overlay, row, chips, cb, ctx);
-    }
-
-    public static void addMessage(FrameLayout overlay, String sender,
-                                  String text, Context ctx) {
-        // Minimalist UI: AI reasoning is applied silently to the ranked posters without a text banner
     }
 
     private static LinearLayout buildContent(Context ctx, FrameLayout root, SearchCallback cb) {

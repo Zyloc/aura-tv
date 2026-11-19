@@ -90,23 +90,6 @@ public final class HeroSliderBuilder {
         if (!st.items.isEmpty()) showSlide(hero, 0, 0, ctx, false);
     }
 
-    public static void showItemDirect(FrameLayout hero, JSONObject item,
-                                      Context ctx, HeroCallback callback) {
-        if (item == null) return;
-        HeroState st = getState(hero);
-        if (callback != null) st.callback = callback;
-        if (isSameTitle(st.currentItem, item)) return;
-        st.currentItem = item;
-        syncIndexIfMatching(st, item);
-        bindItemToViews(hero, st, item, 1, ctx, true);
-        updateDots(st, st.index, st.items.size(), ctx);
-    }
-
-    private static boolean isSameTitle(JSONObject a, JSONObject b) {
-        if (a == null || b == null) return false;
-        return b.optString("title", "").equalsIgnoreCase(a.optString("title", ""));
-    }
-
     public static void nextSlide(FrameLayout hero) {
         HeroState st = getState(hero);
         if (st.items.isEmpty()) return;
@@ -143,16 +126,6 @@ public final class HeroSliderBuilder {
         HeroState st = new HeroState();
         hero.setTag(st);
         return st;
-    }
-
-    private static void syncIndexIfMatching(HeroState st, JSONObject item) {
-        String target = item.optString("title", "");
-        for (int i = 0; i < st.items.size(); i++) {
-            if (target.equalsIgnoreCase(st.items.get(i).optString("title", ""))) {
-                st.index = i;
-                return;
-            }
-        }
     }
 
     private static FrameLayout createContainer(Context ctx) {

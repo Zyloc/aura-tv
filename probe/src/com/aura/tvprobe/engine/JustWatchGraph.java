@@ -746,10 +746,6 @@ public class JustWatchGraph {
         return out;
     }
 
-    public static double computeItemToItemSimilarityScore(JSONObject cand, JSONObject seed, int currentYear) {
-        return HybridScorer.computeItemToItemScore(cand, seed, currentYear);
-    }
-
     public static double computeGenreJaccard(String codesA, String codesB) {
         return CandidateValidator.computeGenreJaccard(codesA, codesB);
     }
