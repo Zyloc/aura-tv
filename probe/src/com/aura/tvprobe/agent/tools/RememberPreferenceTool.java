@@ -44,8 +44,16 @@ public final class RememberPreferenceTool implements AuraTool {
     }
 
     private boolean applyMemoryAction(String action, String rule, AuraToolContext ctx) {
-        if ("save".equals(action)) return UserMemoryStore.saveMemory(ctx.db, ctx.profileId, rule);
-        if ("forget".equals(action)) return UserMemoryStore.forgetMemory(ctx.db, ctx.profileId, rule);
+        if ("save".equals(action)) {
+            boolean saved = UserMemoryStore.saveMemory(ctx.db, ctx.profileId, rule);
+            if (saved && ctx.db != null) ctx.db.setSetting("reserve_slate_" + ctx.profileId, "");
+            return saved;
+        }
+        if ("forget".equals(action)) {
+            boolean removed = UserMemoryStore.forgetMemory(ctx.db, ctx.profileId, rule);
+            if (removed && ctx.db != null) ctx.db.setSetting("reserve_slate_" + ctx.profileId, "");
+            return removed;
+        }
         return "list".equals(action);
     }
 

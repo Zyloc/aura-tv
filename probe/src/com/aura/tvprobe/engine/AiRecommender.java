@@ -138,14 +138,31 @@ public class AiRecommender {
 
     private JSONArray buildSotaRecommendationsForEpoch(
             String profileId, JSONObject seedPlan, int minModernYear, int currentYear, int epoch) {
-        final List<JSONObject> pool = Collections.synchronizedList(new ArrayList<>());
         final UserTasteProfile taste = new UserTasteProfile(db, profileId, epoch);
-        AgentStatusNarrator.publishLiveStep("Gathering candidates across apps");
-        runParallelCandidateRetrieval(taste, seedPlan, minModernYear, currentYear, initSeenTitleKeys(profileId, taste), pool);
+        final Set<String> seenKeys = initSeenTitleKeys(profileId, taste);
+        AgentStatusNarrator.publishLiveStep("Curating elite picks for your taste");
+        List<JSONObject> curated = TasteCuratedSlateEngine.curateAndVerifyElitePicks(this, db, profileId, taste, seenKeys, currentYear);
+        if (curated.size() >= 10) return finalizeCuratedEliteSlate(profileId, curated, taste, currentYear, epoch);
+        return runFallbackScatterGatherSlate(profileId, seedPlan, minModernYear, currentYear, epoch, taste, seenKeys, curated);
+    }
+
+    private JSONArray finalizeCuratedEliteSlate(
+            String profileId, List<JSONObject> curated, UserTasteProfile taste, int currentYear, int epoch) {
+        scoreAndRerankPool(curated, taste, currentYear);
+        List<JSONObject> balanced = TasteCuratedSlateEngine.enforceTasteBalance(curated, 18, 4);
+        ImpressionTracker.recordSlateImpressions(db, epoch, balanced.subList(0, Math.min(6, balanced.size())));
+        return packRankedItems(balanced);
+    }
+
+    private JSONArray runFallbackScatterGatherSlate(
+            String profileId, JSONObject seedPlan, int minModernYear, int currentYear, int epoch,
+            UserTasteProfile taste, Set<String> seenKeys, List<JSONObject> initialPool) {
+        final List<JSONObject> pool = Collections.synchronizedList(new ArrayList<>(initialPool));
+        runParallelCandidateRetrieval(taste, seedPlan, minModernYear, currentYear, seenKeys, pool);
         List<JSONObject> deMerged = AgenticSearchOrchestrator.deMergeCandidates(db, profileId, "", db.getActiveFilters(profileId), seedPlan, minModernYear, pool, false);
         scoreAndRerankPool(deMerged, taste, currentYear);
-        List<JSONObject> slate = filterAndRerankPoolWithLlm(profileId, deMerged, epoch);
-        ImpressionTracker.recordSlateImpressions(db, epoch, slate.subList(0, Math.min(16, slate.size())));
+        List<JSONObject> slate = TasteCuratedSlateEngine.enforceTasteBalance(filterAndRerankPoolWithLlm(profileId, deMerged, epoch), 18, 4);
+        ImpressionTracker.recordSlateImpressions(db, epoch, slate.subList(0, Math.min(6, slate.size())));
         return packRankedItems(slate);
     }
 
@@ -439,10 +456,11 @@ public class AiRecommender {
             return passesAppTrendingGate(o, taste);
         }
         boolean hasSeed = seedAnchor != null && !seedAnchor.isEmpty();
-        int minYear = hasSeed ? Math.min(JustWatchGraph.getDefaultMinModernYear(), 2020) : JustWatchGraph.getDefaultMinModernYear();
+        boolean isCurated = "llm_planned".equals(o.optString("source_channel"));
+        int minYear = (hasSeed || isCurated) ? TasteCuratedSlateEngine.CLASSIC_MIN_YEAR : JustWatchGraph.getDefaultMinModernYear();
         boolean valid = hasSeed
-            ? CandidateValidator.isValidCoWatchCandidate(o, minYear, 7.1)
-            : CandidateValidator.isValidCatalogCandidate(o, minYear, 7.1);
+            ? CandidateValidator.isValidCoWatchCandidate(o, minYear, 7.2)
+            : CandidateValidator.isValidCatalogCandidate(o, minYear, 7.2);
         return valid && !CandidateValidator.isUnwantedAnimation(o.optString("genre_codes", ""), taste.isAnimeEnabled());
     }
 

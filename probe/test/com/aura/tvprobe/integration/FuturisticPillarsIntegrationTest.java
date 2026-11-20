@@ -187,6 +187,27 @@ public class FuturisticPillarsIntegrationTest {
             anchors.contains("Slow Horses") || anchors.contains("The Big Bang Theory") || anchors.contains("Dark Matter"));
     }
 
+    @Test
+    public void testTasteCuratedSlateQualityFloorAndComedyBalanceGuard() throws Exception {
+        JSONObject classic = new JSONObject().put("title", "Mr. Robot").put("year", 2015)
+            .put("imdb_raw", 8.5).put("imdb_votes", 420000).put("poster_url", "https://img/mr.jpg");
+        JSONObject freshHit = new JSONObject().put("title", "Dept. Q").put("year", 2025)
+            .put("imdb_raw", 8.1).put("imdb_votes", 15000).put("poster_url", "https://img/dq.jpg");
+        JSONObject filler = new JSONObject().put("title", "Obscure 2026 Show").put("year", 2026)
+            .put("imdb_raw", 7.1).put("imdb_votes", 450).put("poster_url", "https://img/obs.jpg");
+        assertTrue(TasteCuratedSlateEngine.passesEliteQualityGate(classic, 2026));
+        assertTrue(TasteCuratedSlateEngine.passesEliteQualityGate(freshHit, 2026));
+        assertFalse("Low-vote 2026 filler must be rejected", TasteCuratedSlateEngine.passesEliteQualityGate(filler, 2026));
+
+        List<JSONObject> skewed = new ArrayList<>();
+        for (int i = 0; i < 6; i++) skewed.add(new JSONObject().put("title", "Comedy " + i).put("genre_codes", "cmy,drm"));
+        for (int i = 0; i < 6; i++) skewed.add(new JSONObject().put("title", "Thriller " + i).put("genre_codes", "crm,trl"));
+        List<JSONObject> balanced = TasteCuratedSlateEngine.enforceTasteBalance(skewed, 10, 3);
+        int pureComedies = 0;
+        for (int i = 0; i < 8; i++) if (TasteCuratedSlateEngine.isPureComedyPick(balanced.get(i))) pureComedies++;
+        assertEquals("Balance guard must cap pure comedies to 3 before deferring", 3, pureComedies);
+    }
+
     private static List<JSONObject> toList(JSONArray arr) {
         List<JSONObject> out = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {
