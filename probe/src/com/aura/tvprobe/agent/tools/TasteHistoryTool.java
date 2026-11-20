@@ -32,6 +32,7 @@ public final class TasteHistoryTool implements AuraTool {
         try {
             out.put("profile_id", ctx.profileId);
             out.put("taste_dna", TasteIntelligenceEngine.getTasteDnaPromptSummary(ctx.db, ctx.profileId));
+            out.put("long_term_memories", UserMemoryStore.formatMemoriesForPrompt(ctx.db, ctx.profileId));
             out.put("recent_history", compactHistory(ctx.db.listHistory(ctx.profileId), args.optString("title_filter", "")));
         } catch (Exception ignored) {}
         return out;

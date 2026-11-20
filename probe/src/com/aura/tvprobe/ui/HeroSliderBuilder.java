@@ -387,7 +387,14 @@ public final class HeroSliderBuilder {
         if (st.metaView != null) st.metaView.setText("   " + buildMetaString(item));
         if (st.titleView != null) st.titleView.setText(resolveDisplayTitle(item));
         if (st.synopsisView != null) st.synopsisView.setText(item.optString("synopsis", item.optString("reason", "")));
-        if (st.provenanceView != null) st.provenanceView.setVisibility(View.GONE);
+        updateHeroConciergeBadge(st, item);
+    }
+
+    private static void updateHeroConciergeBadge(HeroState st, JSONObject item) {
+        if (st.provenanceView == null) return;
+        String tag = item.optString("hero_concierge_tag", "").trim();
+        st.provenanceView.setText(tag);
+        st.provenanceView.setVisibility(tag.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private static String resolveDisplayTitle(JSONObject item) {

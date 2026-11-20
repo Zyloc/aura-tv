@@ -31,11 +31,11 @@ public class AuraAgenticToolLoopIntegrationTest {
     }
 
     @Test
-    public void testAllElevenToolSchemasAreValidGeminiDeclarations() {
+    public void testAllFourteenToolSchemasAreValidGeminiDeclarations() {
         AuraToolRegistry reg = AuraToolRegistry.createDefaultRegistry();
-        assertEquals(11, reg.size());
+        assertEquals(14, reg.size());
         JSONArray decls = reg.buildFunctionDeclarations();
-        assertEquals(11, decls.length());
+        assertEquals(14, decls.length());
         for (int i = 0; i < decls.length(); i++) {
             JSONObject d = decls.optJSONObject(i);
             assertNotNull(d);

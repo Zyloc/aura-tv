@@ -414,6 +414,17 @@ public final class AuraTtsNarrator {
         }
     }
 
+    public static synchronized void speakStreamingSentence(Context ctx, String rawSentence, boolean isFirst) {
+        String clean = cleanSpokenText(rawSentence);
+        if (clean.isEmpty()) return;
+        if (isFirst) { sSpeechEpoch++; CompanionAudioFocusController.ensureBackgroundPausedBeforeSpeech(ctx); }
+        postDelayedToMain(() -> { if (sSubtitleListener != null) sSubtitleListener.onSentenceStart(clean); }, 0L);
+        if (sTts == null || !sReady) { warmup(ctx); return; }
+        int mode = isFirst ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
+        String uid = "aura_stream_" + sSpeechEpoch + "_" + System.nanoTime();
+        try { sTts.speak(clean, mode, new Bundle(), uid); } catch (Throwable ignored) {}
+    }
+
     public static synchronized void stop(Context ctx) {
         sSpeechEpoch++;
         sPendingSpeech = "";

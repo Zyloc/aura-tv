@@ -1028,7 +1028,10 @@ public class AuraActivity extends Activity implements
 
     private void populateHeroAndScreensaver(List<JSONObject> all) {
         AmbientScreensaverOverlay.setItems(screensaverOverlay, all);
-        HeroSliderBuilder.setItems(heroSlider, all.subList(0, Math.min(6, all.size())), this, this);
+        long nowSec = System.currentTimeMillis() / 1000L;
+        List<JSONObject> heroPicks = TonightPicksCurator.buildHeroPicks(
+            db, activeProfile, all, nowSec, TasteIntelligenceEngine.detectCurrentTimeContext());
+        HeroSliderBuilder.setItems(heroSlider, heroPicks.isEmpty() ? all.subList(0, Math.min(6, all.size())) : heroPicks, this, this);
         HeroSliderBuilder.startAutoRotate(heroSlider, ui);
     }
 

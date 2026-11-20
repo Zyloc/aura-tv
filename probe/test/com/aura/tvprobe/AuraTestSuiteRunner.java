@@ -39,7 +39,8 @@ public final class AuraTestSuiteRunner {
         CatchMeUpCompanionIntegrationTest.class,
         TasteIntelligenceIntegrationTest.class,
         ReserveSyncAndTasteLifecycleIntegrationTest.class,
-        AuraAgenticToolLoopIntegrationTest.class
+        AuraAgenticToolLoopIntegrationTest.class,
+        FuturisticPillarsIntegrationTest.class
     };
 
     public static void main(String[] args) {

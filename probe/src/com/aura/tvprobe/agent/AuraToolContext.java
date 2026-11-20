@@ -34,10 +34,15 @@ public final class AuraToolContext {
     public String visualSpokenSummary = "";
     public JSONObject companionRecap;
     public JSONObject openedItem;
+    public interface VisionFrameProvider {
+        String captureBase64Jpeg();
+    }
+
     public boolean isClarification = false;
     public String clarificationQuestion = "";
     public boolean actionExecutedDirectly = false;
     public AiRecommender.AgentProgressListener progressListener;
+    public VisionFrameProvider visionFrameProvider;
 
     public AuraToolContext(
             Context androidContext, AuraDb db, AiRecommender ai, SessionInspector inspector,

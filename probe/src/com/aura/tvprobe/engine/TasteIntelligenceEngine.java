@@ -183,6 +183,7 @@ public final class TasteIntelligenceEngine {
         try {
             populateTasteDnaFields(db, profileId, dna);
             db.setSetting("taste_dna_" + profileId, dna.toString());
+            AutoMemoryDistiller.distillAndPersist(db, profileId);
         } catch (Exception ignored) {}
         return dna;
     }
@@ -216,9 +217,11 @@ public final class TasteIntelligenceEngine {
         if (db == null) return "";
         String raw = db.getSetting("taste_dna_" + profileId, "");
         JSONObject dna = parseOrBuildDna(db, profileId, raw);
+        String mem = UserMemoryStore.formatMemoriesForPrompt(db, profileId);
         return "Loved/Binged: " + dna.optJSONArray("loved_anchors")
             + " | Bounced/Avoid: " + dna.optJSONArray("bounced_anchors")
-            + " | Avoid Genres: " + dna.optJSONArray("avoid_genres");
+            + " | Avoid Genres: " + dna.optJSONArray("avoid_genres")
+            + (mem.isEmpty() ? "" : (" | Long-Term Rules: " + mem));
     }
 
     private static JSONObject parseOrBuildDna(AuraDb db, String profileId, String raw) {

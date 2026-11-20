@@ -157,6 +157,11 @@ public final class AuraAgentOrchestrator {
     private String buildUserTurnEnvelope(String userUtterance, AuraToolContext ctx) {
         StringBuilder sb = new StringBuilder();
         sb.append("[TV Context: app=").append(ctx.getForegroundAppLabel());
+        appendSessionContextHints(sb, ctx);
+        return sb.append("]\nUser: ").append(userUtterance).toString();
+    }
+
+    private void appendSessionContextHints(StringBuilder sb, AuraToolContext ctx) {
         JSONObject active = AuraConversationSession.getActiveShow();
         if (active != null && !active.optString("title").isEmpty()) {
             sb.append(", activeShow=").append(active.optString("title"));
@@ -164,7 +169,8 @@ public final class AuraAgentOrchestrator {
         if (AuraConversationSession.isAwaitingClarification()) {
             sb.append(", awaitingClarificationFor=").append(AuraConversationSession.getPendingIntent());
         }
-        return sb.append("]\nUser: ").append(userUtterance).toString();
+        String mem = UserMemoryStore.formatMemoriesForPrompt(ctx.db, ctx.profileId);
+        if (!mem.isEmpty()) sb.append(", userMemories=").append(mem);
     }
 
     private JSONObject buildPayload(JSONArray contents, JSONArray declarations) {
@@ -181,15 +187,17 @@ public final class AuraAgentOrchestrator {
 
     private static String buildSystemPrompt() {
         return "You are Aura, an intelligent Android TV AI agent. You have tools for screen awareness, "
-            + "watch history & Taste DNA, catalog search, personalized recommendations, spoiler-safe show/scene/cast "
-            + "explanations, in-app OTT search, direct playback, taste updates, TV controls, visual results, and clarification. "
+            + "on-demand screen vision (capture_screen_frame), watch history & Taste DNA, long-term memory "
+            + "(remember_user_preference), catalog search, personalized recommendations, spoiler-safe show/scene/cast "
+            + "explanations, in-app OTT search, direct playback, surprise play (play_surprise_pick), taste updates, "
+            + "TV controls, visual results, and clarification. "
             + "RULES: (1) Always call tools rather than guessing titles, progress, or what is on screen. "
-            + "(2) If the user asks about 'this show'/'catch me up'/'who is this' without naming a show, call get_screen_context first; "
-            + "if no show is on screen or in active chat, call ask_user_clarification instead of guessing. "
-            + "(3) When searching or recommending movies/shows, call search_catalog or recommend_for_user, then call present_visual_results. "
-            + "(4) When user says 'play it' or 'play the second one', call open_title_or_play with auto_play=true. "
-            + "(5) When user expresses mood or dislike ('hide horror', 'light smart mood'), call update_taste_preference immediately. "
-            + "(6) Keep final spoken replies warm, concise, and natural for TV TTS (2-4 short sentences, no markdown).";
+            + "(2) For visual questions about what's on the paused TV screen ('what is that?', 'translate that sign', 'who is on screen'), call capture_screen_frame. "
+            + "(3) If user asks about 'this show'/'catch me up' without naming a show, call get_screen_context first; if none found, call ask_user_clarification. "
+            + "(4) When searching or recommending, call search_catalog or recommend_for_user, then present_visual_results. "
+            + "(5) For 'play it' or 'play the second one', call open_title_or_play(auto_play=true). For 'just play something good'/'surprise me', call play_surprise_pick. "
+            + "(6) For mood/dislike ('hide horror', 'light smart'), call update_taste_preference. For permanent rules ('remember I hate jump scares'), call remember_user_preference. "
+            + "(7) Keep final spoken replies warm, concise, and natural for TV TTS (2-4 short sentences, no markdown).";
     }
 
     private AgentTurnOutcome runOfflineDeterministicFallback(String userText, AuraToolContext ctx) {
