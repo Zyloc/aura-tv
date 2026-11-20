@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class ReserveSlateManager {
 
-    private static final ExecutorService WARM_EXEC = Executors.newSingleThreadExecutor();
+    private static final ExecutorService WARM_EXEC = AuraExecutors.serial();
     private static final AtomicBoolean WARMING = new AtomicBoolean(false);
     private static final int MIN_RESERVE_SIZE = 10;
 

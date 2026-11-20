@@ -1194,7 +1194,7 @@ public class AiRecommender {
         return new JSONObject().put("contents", contents).put("generationConfig", genCfg);
     }
 
-    private static final ExecutorService HTTP_EXEC = Executors.newCachedThreadPool();
+    private static final ExecutorService HTTP_EXEC = AuraExecutors.io();
 
     private String httpGet(final String urlStr) throws Exception {
         java.util.concurrent.Future<String> fut = HTTP_EXEC.submit(() -> executeHttpGet(urlStr));

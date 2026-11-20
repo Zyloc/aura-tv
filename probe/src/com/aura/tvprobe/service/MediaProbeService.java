@@ -16,7 +16,7 @@ public class MediaProbeService extends NotificationListenerService {
     private static volatile ServerSocket serverSocket;
     private static volatile ServerSocket serverSocket8080;
     private volatile boolean running = false;
-    private final java.util.concurrent.ExecutorService httpPool = java.util.concurrent.Executors.newCachedThreadPool();
+    private final java.util.concurrent.ExecutorService httpPool = AuraExecutors.io();
     private AuraDb db;
     private AiRecommender ai;
     private SessionInspector inspector;

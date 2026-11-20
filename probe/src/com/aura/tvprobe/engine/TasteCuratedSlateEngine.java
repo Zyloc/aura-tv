@@ -24,11 +24,7 @@ public final class TasteCuratedSlateEngine {
     public static final int CLASSIC_MIN_YEAR = 2012;
     public static final int REFRESH_COOLDOWN_ROUNDS = 4;
     private static final long REFRESH_COOLDOWN_TTL_SEC = 48L * 3600L;
-    private static final ExecutorService VERIFY_POOL = Executors.newFixedThreadPool(8, r -> {
-        Thread t = new Thread(r, "aura-curate-verify");
-        t.setDaemon(true);
-        return t;
-    });
+    private static final ExecutorService VERIFY_POOL = AuraExecutors.io();
 
     private TasteCuratedSlateEngine() {}
 

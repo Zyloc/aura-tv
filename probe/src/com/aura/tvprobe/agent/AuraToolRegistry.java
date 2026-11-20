@@ -15,7 +15,7 @@ import java.util.concurrent.Future;
  */
 public final class AuraToolRegistry {
 
-    private static final ExecutorService TOOL_POOL = Executors.newCachedThreadPool();
+    private static final ExecutorService TOOL_POOL = AuraExecutors.io();
     private final Map<String, AuraTool> tools = new LinkedHashMap<>();
 
     public AuraToolRegistry register(AuraTool tool) {

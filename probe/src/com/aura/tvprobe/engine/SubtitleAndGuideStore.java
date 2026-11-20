@@ -21,7 +21,7 @@ import java.util.concurrent.Executors;
  */
 public final class SubtitleAndGuideStore {
 
-    private static final ExecutorService PREFETCH_EXEC = Executors.newSingleThreadExecutor();
+    private static final ExecutorService PREFETCH_EXEC = AuraExecutors.serial();
 
     private SubtitleAndGuideStore() {}
 

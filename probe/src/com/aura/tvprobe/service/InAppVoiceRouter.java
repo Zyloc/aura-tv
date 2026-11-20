@@ -55,7 +55,7 @@ public final class InAppVoiceRouter {
         }
     }
 
-    private static final ExecutorService WORKER = Executors.newCachedThreadPool();
+    private static final ExecutorService WORKER = AuraExecutors.io();
     private static volatile Handler sMainHandler;
     private static volatile String sLastTranscript = "";
     private static volatile long sLastTranscriptMs = 0L;

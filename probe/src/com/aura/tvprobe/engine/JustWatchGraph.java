@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit;
 public class JustWatchGraph {
 
     private static final String GRAPHQL_URL = "https://apis.justwatch.com/graphql";
-    private static final ExecutorService NET_EXEC = Executors.newCachedThreadPool();
+    private static final ExecutorService NET_EXEC = AuraExecutors.io();
 
     private static final String NODE_FIELDS =
         "objectType " +

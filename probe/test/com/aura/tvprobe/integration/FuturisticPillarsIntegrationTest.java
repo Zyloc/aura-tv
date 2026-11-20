@@ -233,6 +233,14 @@ public class FuturisticPillarsIntegrationTest {
         assertFalse("Shown title must recycle after 48 hours", cdRecycledByTime.contains("thefamilyman"));
     }
 
+    @Test
+    public void testSharedAuraExecutorsUseAutoShrinkingDaemonThreads() throws Exception {
+        boolean ioDaemon = AuraExecutors.io().submit(() -> Thread.currentThread().isDaemon()).get();
+        boolean serialDaemon = AuraExecutors.serial().submit(() -> Thread.currentThread().isDaemon()).get();
+        assertTrue(ioDaemon);
+        assertTrue(serialDaemon);
+    }
+
     private static List<JSONObject> toList(JSONArray arr) {
         List<JSONObject> out = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {
