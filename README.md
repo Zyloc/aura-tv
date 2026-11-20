@@ -4,6 +4,10 @@
 
 Aura TV replaces your ad-filled stock TV home screen with a calm, ultra-light launcher that remembers what you watch across apps, learns what you like and skip, refreshes recommendations automatically, and lets you talk to your TV — from spoiler-free *"Catch me up"* recaps to *"Play it"* voice discovery.
 
+[![Watch the Aura TV Launch Video](docs/aura-tv-preview.png)](https://github.com/Zyloc/aura-tv/raw/main/docs/aura-tv-launch.mp4)
+
+> **▶ [Watch the 90-second Aura TV Launch Video (MP4)](https://github.com/Zyloc/aura-tv/raw/main/docs/aura-tv-launch.mp4)**
+
 ---
 
 ## Key Features
