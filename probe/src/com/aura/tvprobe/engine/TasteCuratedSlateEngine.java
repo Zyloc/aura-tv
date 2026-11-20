@@ -111,11 +111,13 @@ public final class TasteCuratedSlateEngine {
 
     private static String buildCuratedLanesPrompt(AuraDb db, String profileId, int currentYear) {
         String mem = UserMemoryStore.formatMemoriesForPrompt(db, profileId);
+        List<JSONObject> liveTrending = LiveTrendingCollector.collectQualityTrending(db, profileId, currentYear, 16);
         return "You are Aura's Elite TV & Film Curator for " + RegionProviderRegistry.getRegionDisplayName(db)
             + " (Year: " + currentYear + ").\n"
             + "USER LOVED / WATCHED / RATED FAVORITES: " + UserEngagementLedger.getTopLovedTitles(db, profileId, 10) + "\n"
             + "USER DISLIKED / DROPPED (AVOID): " + UserEngagementLedger.getDislikedOrDroppedTitles(db, profileId, 6) + "\n"
             + "LONG-TERM MEMORY & RULES: " + (mem.isEmpty() ? "None" : mem) + "\n"
+            + "LIVE TRENDING ACROSS ALL OTT APPS RIGHT NOW: " + LiveTrendingCollector.formatTrendingForPrompt(liveTrending) + "\n"
             + "SOFT COOLDOWN (avoid putting in top 6 if possible): " + collectSoftLastHeroKeys(db, profileId) + "\n"
             + buildCuratedLanesTaskRules(currentYear);
     }
@@ -123,12 +125,12 @@ public final class TasteCuratedSlateEngine {
     private static String buildCuratedLanesTaskRules(int currentYear) {
         return "TASK: Curate 24 genuinely acclaimed, high-IMDb (7.5+) TV series & movies available on major streaming apps "
             + "(Netflix, Prime Video, Apple TV+, Disney+ Hotstar, ZEE5) spanning 2012-" + currentYear + ":\n"
-            + "- 10 Core High-Stakes Thrillers / Crime / Espionage (matching their loved favorites)\n"
+            + "- 4-5 BEST TASTE-MATCHED PICKS FROM 'LIVE TRENDING ACROSS ALL OTT APPS RIGHT NOW' (ignore trending junk/soaps/kids)\n"
+            + "- 9 Core High-Stakes Thrillers / Crime / Espionage (matching their loved favorites)\n"
             + "- 6 Mind-Bending Sci-Fi / Mystery\n"
-            + "- 3 Smart Comedies / Sitcoms (witty, high-rated, never slapstick)\n"
-            + "- 5 Acclaimed 2024-" + currentYear + " Prestige Drops\n"
+            + "- 3-4 Smart Comedies / Sitcoms (witty, high-rated, never slapstick)\n"
             + "STRICT RULES: NEVER include watched/disliked titles, kids cartoons, anime, soap operas, or obscure low-vote filler. "
-            + "Return ONLY JSON: {\"picks\":[{\"title\":\"Exact Official Title\",\"reason\":\"12-16 word reason tying it to one of their favorites\"}]}.";
+            + "Return ONLY JSON: {\"picks\":[{\"title\":\"Exact Official Title\",\"reason\":\"12-16 word reason tying it to one of their favorites or why it is trending now\"}]}.";
     }
 
     private static List<String> collectSoftLastHeroKeys(AuraDb db, String profileId) {

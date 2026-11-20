@@ -208,6 +208,18 @@ public class FuturisticPillarsIntegrationTest {
         assertEquals("Balance guard must cap pure comedies to 3 before deferring", 3, pureComedies);
     }
 
+    @Test
+    public void testLiveTrendingQualityFilterAndPromptFormatting() throws Exception {
+        JSONObject good = new JSONObject().put("title", "The Body").put("year", 2026).put("app", "Netflix")
+            .put("imdb_raw", 7.5).put("imdb_votes", 13000).put("genres", "Drama, Thriller");
+        JSONObject junk = new JSONObject().put("title", "Low Rated Spam").put("year", 2026).put("app", "OTT")
+            .put("imdb_raw", 5.7).put("imdb_votes", 1100);
+        assertTrue(LiveTrendingCollector.passesTrendingQualityFilter(good));
+        assertFalse(LiveTrendingCollector.passesTrendingQualityFilter(junk));
+        String promptStr = LiveTrendingCollector.formatTrendingForPrompt(Collections.singletonList(good));
+        assertTrue(promptStr.contains("The Body (2026, Netflix, IMDb 7.5"));
+    }
+
     private static List<JSONObject> toList(JSONArray arr) {
         List<JSONObject> out = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {

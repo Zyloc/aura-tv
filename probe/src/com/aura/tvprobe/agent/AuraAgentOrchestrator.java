@@ -194,7 +194,7 @@ public final class AuraAgentOrchestrator {
             + "RULES: (1) Always call tools rather than guessing titles, progress, or what is on screen. "
             + "(2) For visual questions about what's on the paused TV screen ('what is that?', 'translate that sign', 'who is on screen'), call capture_screen_frame. "
             + "(3) If user asks about 'this show'/'catch me up' without naming a show, call get_screen_context first; if none found, call ask_user_clarification. "
-            + "(4) When searching or recommending, call search_catalog or recommend_for_user, then present_visual_results. "
+            + "(4) When searching or recommending, call search_catalog, recommend_for_user, or get_trending_now (for 'what is trending/new'), then present_visual_results. "
             + "(5) For 'play it' or 'play the second one', call open_title_or_play(auto_play=true). For 'just play something good'/'surprise me', call play_surprise_pick. "
             + "(6) For mood/dislike ('hide horror', 'light smart'), call update_taste_preference. For permanent rules ('remember I hate jump scares'), call remember_user_preference. "
             + "(7) Keep final spoken replies warm, concise, and natural for TV TTS (2-4 short sentences, no markdown).";

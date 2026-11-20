@@ -69,6 +69,13 @@ public class JustWatchGraph {
         "  }" +
         "}";
 
+    private static final String TRENDING_NOW_QUERY =
+        "query TrendingNow($country: Country!, $language: Language!, $filter: TitleFilter, $first: Int!) {" +
+        "  popularTitles(country: $country, sortBy: TRENDING, filter: $filter, first: $first) {" +
+        "    edges { node { " + NODE_FIELDS + " } }" +
+        "  }" +
+        "}";
+
     private static final String DYNAMIC_GRAPH_QUERY =
         "query DynamicGraph($country: Country!, $language: Language!, $filter: TitleFilter!, $first: Int!, $includeSimilar: Boolean!) {" +
         "  popularTitles(country: $country, filter: $filter, first: $first) {" +
@@ -234,6 +241,25 @@ public class JustWatchGraph {
     public static JSONArray fetchStructuredGenreCandidates(
             List<String> genreCodes, List<String> packageCodes, int minYear, int maxYear) {
         return fetchStructuredGenreCandidates(genreCodes, packageCodes, null, minYear, maxYear, false);
+    }
+
+    public static JSONArray fetchLiveTrendingTitles(int minYear, int maxYear, int limit) {
+        JSONArray out = new JSONArray();
+        try {
+            String country = RegionProviderRegistry.getCountryCode(null);
+            String lang = RegionProviderRegistry.getLanguageCode(null);
+            JSONObject filter = buildTrendingFilter(minYear, maxYear);
+            JSONObject vars = new JSONObject().put("country", country).put("language", lang)
+                .put("filter", filter).put("first", Math.max(8, Math.min(30, limit)));
+            collectValidCandidates(extractEdges(postGraphQl(TRENDING_NOW_QUERY, vars)), out, minYear, lang, false);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static JSONObject buildTrendingFilter(int minYear, int maxYear) throws Exception {
+        return new JSONObject().put("packages", getDefaultPackagesJson())
+            .put("monetizationTypes", new JSONArray().put("FLATRATE"))
+            .put("releaseYear", new JSONObject().put("min", minYear).put("max", maxYear));
     }
 
     public static JSONArray executeScatterGatherSpecs(JSONArray specs) {

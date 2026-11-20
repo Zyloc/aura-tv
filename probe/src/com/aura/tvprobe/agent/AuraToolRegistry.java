@@ -101,7 +101,7 @@ public final class AuraToolRegistry {
         AuraTool[] defaults = { new ScreenContextTool(), new TasteHistoryTool(), new SearchCatalogTool(),
             new RecommendTool(), new ExplainShowTool(), new InAppOttSearchTool(), new OpenOrPlayTool(),
             new UpdateTasteTool(), new TvControlTool(), new PresentResultsTool(), new AskClarificationTool(),
-            new RememberPreferenceTool(), new ScreenVisionTool(), new SurprisePlayTool() };
+            new RememberPreferenceTool(), new ScreenVisionTool(), new SurprisePlayTool(), new TrendingNowTool() };
         for (AuraTool t : defaults) r.register(t);
         return r;
     }
