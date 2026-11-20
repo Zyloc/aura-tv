@@ -202,7 +202,7 @@ def handle_conversational_turn(profile: str, message: str, reset: bool = False) 
             "🧟 Make it darker & scarier",
             "⏱️ Only movies/episodes under 90 mins",
             "🧠 More mind-bending plot twists",
-            "🇮🇳 Only on Netflix or Prime Video India",
+            "📺 Only on my streaming apps",
         ]
     else:
         reply = f"Matched your request for '{message}' using the open-source TVMaze/IMDb graph."
@@ -212,7 +212,7 @@ def handle_conversational_turn(profile: str, message: str, reset: bool = False) 
             "🧟 Make it darker & scarier",
             "⏱️ Only movies/episodes under 90 mins",
             "🧠 More mind-bending plot twists",
-            "🇮🇳 Only on Netflix or Prime Video India",
+            "📺 Only on my streaming apps",
         ]
 
     out = {

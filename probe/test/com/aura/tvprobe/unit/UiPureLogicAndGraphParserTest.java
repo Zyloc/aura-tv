@@ -26,7 +26,7 @@ public class UiPureLogicAndGraphParserTest {
     @Test
     public void testQrRemoteBuilderMatrixEncoderAcrossAllVersions() {
         boolean[][] v1 = QrRemoteBuilder.encode("http://mitv:8765");
-        boolean[][] v2 = QrRemoteBuilder.encode("http://192.168.1.4:8765/open");
+        boolean[][] v2 = QrRemoteBuilder.encode("http://192.168.1.100:8765/open");
         boolean[][] v3 = QrRemoteBuilder.encode("http://192-168-1-4.sslip.io:8765/api/state");
         boolean[][] v4 = QrRemoteBuilder.encode("http://192-168-1-4.sslip.io:8765/api/state?profile=member1&refresh=1");
         assertEquals(21, v1.length);
@@ -43,7 +43,7 @@ public class UiPureLogicAndGraphParserTest {
         assertNotNull(QrRemoteBuilder.getLiveArpPeers());
         Method fmt = QrRemoteBuilder.class.getDeclaredMethod("formatIp", int.class);
         fmt.setAccessible(true);
-        assertEquals("192.168.1.4", fmt.invoke(null, (4 << 24) | (1 << 16) | (168 << 8) | 192));
+        assertEquals("192.168.1.100", fmt.invoke(null, (100 << 24) | (1 << 16) | (168 << 8) | 192));
     }
 
     @Test

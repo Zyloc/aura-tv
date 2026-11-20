@@ -35,7 +35,7 @@ public final class TasteCuratedSlateEngine {
         int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
         Set<String> cooldownKeys = collectActiveRefreshCooldownKeys(db, epoch, System.currentTimeMillis() / 1000L);
         seenKeys.addAll(cooldownKeys);
-        String prompt = buildCuratedLanesPrompt(db, profileId, currentYear, cooldownKeys);
+        String prompt = buildCuratedLanesPrompt(db, profileId, taste, currentYear, cooldownKeys);
         JSONArray picks = parseCuratedPicksArray(ai.callGeminiJsonFast(prompt));
         if (picks.length() == 0) return new ArrayList<>();
         return verifyPicksOnJustWatch(db, picks, taste, seenKeys, currentYear);
@@ -152,8 +152,8 @@ public final class TasteCuratedSlateEngine {
         } catch (Exception ignored) {}
     }
 
-    private static String buildCuratedLanesPrompt(
-            AuraDb db, String profileId, int currentYear, Set<String> cooldownKeys) {
+    public static String buildCuratedLanesPrompt(
+            AuraDb db, String profileId, UserTasteProfile taste, int currentYear, Set<String> cooldownKeys) {
         String mem = UserMemoryStore.formatMemoriesForPrompt(db, profileId);
         List<JSONObject> liveTrending = LiveTrendingCollector.collectQualityTrending(db, profileId, currentYear, 16);
         List<String> avoidShown = buildAvoidShownList(db, profileId, cooldownKeys);
@@ -164,7 +164,7 @@ public final class TasteCuratedSlateEngine {
             + "LONG-TERM MEMORY & RULES: " + (mem.isEmpty() ? "None" : mem) + "\n"
             + "LIVE TRENDING ACROSS ALL OTT APPS RIGHT NOW: " + LiveTrendingCollector.formatTrendingForPrompt(liveTrending) + "\n"
             + "STRICTLY DO NOT REPEAT (SHOWN IN RECENT REFRESHES — PICK COMPLETELY NEW SHOWS): " + avoidShown + "\n"
-            + buildCuratedLanesTaskRules(currentYear);
+            + buildCuratedLanesTaskRules(db, taste, currentYear);
     }
 
     private static List<String> buildAvoidShownList(AuraDb db, String profileId, Set<String> cooldownKeys) {
@@ -180,15 +180,30 @@ public final class TasteCuratedSlateEngine {
         return out;
     }
 
-    private static String buildCuratedLanesTaskRules(int currentYear) {
-        return "TASK: Curate 24 genuinely acclaimed, high-IMDb (7.5+) TV series & movies available on major streaming apps "
-            + "(Netflix, Prime Video, Apple TV+, Disney+ Hotstar, ZEE5) spanning 2012-" + currentYear + ":\n"
-            + "- 4-5 BEST TASTE-MATCHED PICKS FROM 'LIVE TRENDING ACROSS ALL OTT APPS RIGHT NOW' (ignore trending junk/soaps/kids)\n"
-            + "- 9 Core High-Stakes Thrillers / Crime / Espionage (matching their loved favorites)\n"
-            + "- 6 Mind-Bending Sci-Fi / Mystery\n"
-            + "- 3-4 Smart Comedies / Sitcoms (witty, high-rated, never slapstick)\n"
-            + "STRICT RULES: NEVER include watched/disliked titles, kids cartoons, anime, soap operas, or obscure low-vote filler. "
+    private static String buildCuratedLanesTaskRules(AuraDb db, UserTasteProfile taste, int currentYear) {
+        String apps = formatRegionStreamingApps(db);
+        boolean allowAnime = taste != null && taste.isAnimeEnabled();
+        String exclusions = allowAnime ? "watched/disliked titles, soap operas, or obscure low-vote filler"
+            : "watched/disliked titles, kids cartoons, anime, soap operas, or obscure low-vote filler";
+        return "TASK: Curate 24 genuinely acclaimed, high-IMDb (7.5+) TV series & movies available on major streaming apps ("
+            + apps + ") spanning " + CLASSIC_MIN_YEAR + "-" + currentYear + ":\n"
+            + "- 4-5 BEST TASTE-MATCHED PICKS FROM 'LIVE TRENDING ACROSS ALL OTT APPS RIGHT NOW'\n"
+            + "- 12 CORE PICKS closely matching the user's loved favorites, genres, and tone (or diverse prestige dramas/thrillers/sci-fi if history is empty)\n"
+            + "- 4-5 FRESH DISCOVERY PICKS (critically acclaimed modern gems across complementary genres)\n"
+            + "- 2-3 SMART COMEDIES / LIGHTER PRESTIGE PICKS (witty, high-rated, never slapstick)\n"
+            + "STRICT RULES: NEVER include " + exclusions + ". "
             + "Return ONLY JSON: {\"picks\":[{\"title\":\"Exact Official Title\",\"reason\":\"12-16 word reason tying it to one of their favorites or why it is trending now\"}]}.";
+    }
+
+    private static String formatRegionStreamingApps(AuraDb db) {
+        String country = RegionProviderRegistry.getCountryCode(db);
+        List<String> codes = RegionProviderRegistry.getProvidersForCountry(country);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(6, codes.size()); i++) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(RegionProviderRegistry.normalizeProviderName(codes.get(i), codes.get(i)));
+        }
+        return sb.length() > 0 ? sb.toString() : "Netflix, Prime Video, Apple TV+, Disney+";
     }
 
     private static JSONArray parseCuratedPicksArray(String rawJson) {

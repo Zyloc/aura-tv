@@ -66,7 +66,7 @@ public class ServiceHttpMdnsAndSessionUnitTest {
     private JSONObject populateMockSyncRoot(JSONArray recos) throws Exception {
         JSONObject hist = new JSONObject().put("media_key", "nf:silo").put("title", "Silo").put("position_sec", 600).put("duration_sec", 2700);
         return new JSONObject()
-            .put("profile_labels", new JSONObject().put("member1", "Satyam"))
+            .put("profile_labels", new JSONObject().put("member1", "Alex"))
             .put("watched_items", new JSONArray().put(new JSONObject().put("title", "Old Film")))
             .put("history", new JSONArray().put(hist)).put("recommendations", recos)
             .put("voice_session", new JSONObject().put("results", new JSONArray().put(new JSONObject().put("title", "Andor"))));

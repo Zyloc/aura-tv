@@ -241,6 +241,17 @@ public class FuturisticPillarsIntegrationTest {
         assertTrue(serialDaemon);
     }
 
+    @Test
+    public void testTasteCuratedPromptAdaptsRegionAppsAndAnimePreference() {
+        InMemoryAuraDb db = new InMemoryAuraDb();
+        db.setSetting("region_country", "US");
+        UserTasteProfile animeUser = new UserTasteProfile(java.util.Collections.emptyList(), "US", "English Anime", "prestige", 1);
+        String prompt = TasteCuratedSlateEngine.buildCuratedLanesPrompt(db, "member1", animeUser, 2026, new java.util.HashSet<>());
+        assertTrue("US region prompt must include Max or Hulu", prompt.contains("Max") || prompt.contains("Hulu"));
+        assertFalse("US region prompt must not hardcode ZEE5", prompt.contains("ZEE5"));
+        assertFalse("Anime-enabled profile must not ban anime", prompt.contains("kids cartoons, anime"));
+    }
+
     private static List<JSONObject> toList(JSONArray arr) {
         List<JSONObject> out = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {

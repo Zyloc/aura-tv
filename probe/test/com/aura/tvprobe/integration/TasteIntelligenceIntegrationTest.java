@@ -76,7 +76,7 @@ public class TasteIntelligenceIntegrationTest {
         List<JSONObject> mixed = buildHouseholdMixedSlate();
         List<DynamicRailClusterer.RailGroup> rails = DynamicRailClusterer.buildRails(mixed);
         assertRailPresent(rails, "Live & Trending Across Your Apps");
-        assertRailPresent(rails, "Indian Crime, Drama & Regional Picks");
+        assertRailPresent(rails, RegionProviderRegistry.getRegionDisplayName(null) + " & Regional Picks");
         verifyMoodAndTimeOfDayReranking(mixed);
     }
 
@@ -85,8 +85,9 @@ public class TasteIntelligenceIntegrationTest {
         for (int i = 1; i <= 8; i++) list.add(makeItem("ForYou " + i, "Seed" + i, "US", "drm", "", 50, 10.0 - i * 0.1));
         list.add(makeItem("India vs Pakistan", "", "IN", "spt", "app_trending", 45, 9.2));
         list.add(makeItem("Doctor John", "", "KR", "drm,trl", "app_trending", 50, 9.0));
-        list.add(makeItem("Mirzapur", "", "IN", "crm,drm", "co_watch", 55, 8.8));
-        list.add(makeItem("Panchayat", "", "IN", "cmy,drm", "co_watch", 35, 8.7));
+        String activeCountry = RegionProviderRegistry.getCountryCode(null);
+        list.add(makeItem("Regional Crime", "", activeCountry, "crm,drm", "co_watch", 55, 8.8));
+        list.add(makeItem("Regional Comedy", "", activeCountry, "cmy,drm", "co_watch", 35, 8.7));
         list.add(makeItem("Dark Matter", "", "US", "scf,trl", "co_watch", 52, 8.6));
         list.add(makeItem("Long Epic", "", "US", "drm", "co_watch", 170, 8.9));
         return list;
@@ -98,7 +99,7 @@ public class TasteIntelligenceIntegrationTest {
         List<JSONObject> mind = TasteIntelligenceEngine.rerankForMoodAndContext(mixed, TasteIntelligenceEngine.MOOD_MIND_BENDING, 15, Calendar.TUESDAY);
         assertEquals("Dark Matter", mind.get(0).optString("title"));
         List<JSONObject> light = TasteIntelligenceEngine.rerankForMoodAndContext(mixed, TasteIntelligenceEngine.MOOD_LIGHT_SMART, 15, Calendar.TUESDAY);
-        assertEquals("Panchayat", light.get(0).optString("title"));
+        assertEquals("Regional Comedy", light.get(0).optString("title"));
         verifyRedesignedDetailUnifiedMeta();
     }
 

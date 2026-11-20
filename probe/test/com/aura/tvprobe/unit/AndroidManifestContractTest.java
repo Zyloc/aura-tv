@@ -128,7 +128,7 @@ public class AndroidManifestContractTest {
 
     @Test
     public void testQrCodeContrastFormatBitsTrailerAndRatingFocusContracts() throws Exception {
-        boolean[][] qr = QrRemoteBuilder.encode("http://192.168.1.4:8765");
+        boolean[][] qr = QrRemoteBuilder.encode("http://192.168.1.100:8765");
         assertNotNull("QR matrix must encode URL", qr);
         assertTrue("Top-left format MSB (8,0) must be true for 0x77C4", qr[8][0]);
         assertFalse("Top-left format LSB (0,8) must be false for 0x77C4", qr[0][8]);

@@ -32,7 +32,8 @@ public final class DynamicRailClusterer {
         Set<String> usedKeys = new HashSet<>();
         addRailIfNotEmpty(rails, "For You", buildForYouRail(all, usedKeys, 8));
         addRailIfMinSize(rails, "Live & Trending Across Your Apps", buildAppTrendingRail(all, usedKeys, 7), usedKeys, 2);
-        addRailIfMinSize(rails, "Indian Crime, Drama & Regional Picks", buildRegionalRail(all, usedKeys, 7), usedKeys, 2);
+        String country = RegionProviderRegistry.getCountryCode(null);
+        addRailIfMinSize(rails, buildRegionalRailTitle(country), buildRegionalRail(all, usedKeys, country, 7), usedKeys, 2);
         addRailIfNotEmpty(rails, "Sci-Fi, Crime & High-Stakes Thrillers", buildThrillerSciFiRail(all, usedKeys, 8));
         addRailIfMinSize(rails, "Sports, Docuseries & True Stories", buildSportsAndDocRail(all, usedKeys, 7), usedKeys, 2);
         addRailIfNotEmpty(rails, "Critically Acclaimed Across Your Apps", buildAcclaimedRail(all, usedKeys, 8));
@@ -48,10 +49,15 @@ public final class DynamicRailClusterer {
         return out;
     }
 
-    private static List<JSONObject> buildRegionalRail(List<JSONObject> all, Set<String> usedKeys, int maxCount) {
+    private static String buildRegionalRailTitle(String country) {
+        String region = RegionProviderRegistry.getRegionDisplayName(null);
+        return (region != null && !region.isEmpty()) ? (region + " & Regional Picks") : "Local & Regional Picks";
+    }
+
+    private static List<JSONObject> buildRegionalRail(List<JSONObject> all, Set<String> usedKeys, String country, int maxCount) {
         List<JSONObject> out = new ArrayList<>();
         for (JSONObject item : all) {
-            if ("IN".equalsIgnoreCase(item.optString("country")) && tryClaimItem(item, usedKeys, out) && out.size() >= maxCount) break;
+            if (country.equalsIgnoreCase(item.optString("country")) && tryClaimItem(item, usedKeys, out) && out.size() >= maxCount) break;
         }
         return out;
     }

@@ -126,10 +126,10 @@ public class AuraDbAndStorageUnitTest {
         invokeEnvLine(db, "GEMINI_API_KEY=test_key_123");
         invokeEnvLine(db, "AURA_REGION=in");
         invokeEnvLine(db, "AURA_LANGUAGE=EN");
-        invokeEnvLine(db, "AURA_PROFILE_VIP_NAME=Satyam");
+        invokeEnvLine(db, "AURA_PROFILE_VIP_NAME=Alex");
         invokeEnvLine(db, "AURA_PROFILE_VIP_TASTE=Sci-Fi");
         assertEquals("IN", db.getSetting("region_country", ""));
-        assertEquals("Satyam", db.getSetting("profile_name_vip", ""));
+        assertEquals("Alex", db.getSetting("profile_name_vip", ""));
         assertTrue(invokeHasStaleReco(db, new JSONArray(), new HashSet<>()));
     }
 
