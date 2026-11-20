@@ -711,6 +711,16 @@ public final class RailBuilder {
         return (scroll.getParent() instanceof LinearLayout) ? (LinearLayout) scroll.getParent() : null;
     }
 
+    public static JSONObject resolveFocusedItem(View focused) {
+        if (focused == null || !(focused.getParent() instanceof ViewGroup)) return null;
+        LinearLayout rail = findParentRail(focused);
+        if (rail == null || !(rail.getTag() instanceof List<?>)) return null;
+        int idx = ((ViewGroup) focused.getParent()).indexOfChild(focused);
+        List<?> items = (List<?>) rail.getTag();
+        if (idx < 0 || idx >= items.size() || !(items.get(idx) instanceof JSONObject)) return null;
+        return (JSONObject) items.get(idx);
+    }
+
     private static void focusClosestInTargetRail(View currentItem, View nextRailView) {
         if (!(nextRailView instanceof LinearLayout)) return;
         LinearLayout nextRow = findScrollContent((LinearLayout) nextRailView);

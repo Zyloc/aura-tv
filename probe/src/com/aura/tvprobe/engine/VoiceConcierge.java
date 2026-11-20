@@ -31,6 +31,47 @@ public class VoiceConcierge {
     ) {
         String prof = resolveValidProfile(profileId);
         if (reset) return resetSession(prof);
+        if (ai != null && ai.hasGeminiApiKey()) {
+            JSONObject agentSession = tryRunUnifiedToolAgent(prof, userText, progress);
+            if (agentSession != null) return syncAndReturn(agentSession);
+        }
+        return runLegacyOfflineTurn(prof, userText, progress);
+    }
+
+    private JSONObject tryRunUnifiedToolAgent(
+            String profileId, String userText, AiRecommender.AgentProgressListener progress) {
+        String q = userText != null ? userText.trim() : "";
+        if (q.isEmpty()) return null;
+        AuraToolContext ctx = new AuraToolContext(null, db, ai, null, null, profileId, "",
+            new AuraDefaultUiBridge(null, db, null, ""));
+        AuraAgentOrchestrator.AgentTurnOutcome out = AuraAgentOrchestrator.createDefault(ai).runTurn(q, ctx, progress);
+        if (out == null || out.usedOfflineFallback) return null;
+        if (!out.hasVisualResults() && out.companionRecap == null && out.spokenText.isEmpty()) return null;
+        return persistAgentOutcomeSession(profileId, q, out);
+    }
+
+    private JSONObject persistAgentOutcomeSession(
+            String profileId, String userText, AuraAgentOrchestrator.AgentTurnOutcome out) {
+        try {
+            JSONObject sess = buildAgentSessionJson(userText, out);
+            db.saveVoiceSession(profileId, sess);
+            return db.getVoiceSession(profileId);
+        } catch (Exception e) { return null; }
+    }
+
+    private JSONObject buildAgentSessionJson(String userText, AuraAgentOrchestrator.AgentTurnOutcome out) throws Exception {
+        JSONArray turns = new JSONArray()
+            .put(new JSONObject().put("role", "user").put("text", userText))
+            .put(new JSONObject().put("role", "assistant").put("text", out.spokenText));
+        JSONObject sess = new JSONObject().put("turns", turns).put("reply", out.spokenText)
+            .put("spoken_narration", out.spokenText).put("results", out.visualResults != null ? out.visualResults : new JSONArray())
+            .put("follow_ups", out.followUpChips != null ? out.followUpChips : new JSONArray());
+        if (out.companionRecap != null) sess.put("companion_recap", out.companionRecap);
+        return sess;
+    }
+
+    private JSONObject runLegacyOfflineTurn(
+            String prof, String userText, AiRecommender.AgentProgressListener progress) {
         if (ShowCompanionAgent.isShowCompanionQuery(userText)) {
             return runAgenticSearchTurn(prof, userText.trim(), new ArrayList<>(), progress);
         }
@@ -53,6 +94,7 @@ public class VoiceConcierge {
 
     private JSONObject resetSession(String profileId) {
         db.setSetting("voice_session_" + profileId, "");
+        AuraConversationSession.reset();
         new Thread(sync::syncWithHost).start();
         return db.getVoiceSession(profileId);
     }

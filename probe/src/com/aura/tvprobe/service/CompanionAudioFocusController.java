@@ -9,10 +9,14 @@ import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.KeyEvent;
 
 /**
- * Owns exclusive background audio muting and MediaSession pausing while
- * Catch Me Up is loading or speaking so only TTS audio is audible.
+ * Owns reliable background OTT video pausing and exclusive audio focus while
+ * Catch Me Up is loading or speaking, with a post-Katniss pause watchdog and
+ * auto-resume when narration completes or is cancelled.
  */
 public final class CompanionAudioFocusController {
 
@@ -20,6 +24,7 @@ public final class CompanionAudioFocusController {
     private static volatile boolean sSilenceActive = false;
     private static volatile AudioFocusRequest sActiveFocusRequest;
     private static volatile String sPausedExternalPkg = "";
+    private static volatile Handler sMainHandler;
 
     private CompanionAudioFocusController() {}
 
@@ -34,9 +39,13 @@ public final class CompanionAudioFocusController {
     public static synchronized void engageCompanionSilence(Context ctx) {
         sSilenceActive = true;
         if (ctx == null) return;
-        pauseAllExternalMediaSessions(ctx);
-        AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-        if (am != null) requestExclusiveAudioFocus(am);
+        forcePauseAndClaimFocus(ctx);
+        schedulePauseWatchdog(ctx);
+    }
+
+    public static synchronized void ensureBackgroundPausedBeforeSpeech(Context ctx) {
+        if (!sSilenceActive || ctx == null) return;
+        forcePauseAndClaimFocus(ctx);
     }
 
     public static synchronized void releaseCompanionSilence(Context ctx) {
@@ -47,6 +56,63 @@ public final class CompanionAudioFocusController {
         AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
         if (am != null) abandonExclusiveAudioFocus(am);
         if (!resumePkg.isEmpty()) resumePausedExternalSession(ctx, resumePkg);
+    }
+
+    private static void forcePauseAndClaimFocus(Context ctx) {
+        boolean pausedAny = pauseAllExternalMediaSessions(ctx);
+        AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        requestExclusiveAudioFocus(am);
+        if (pausedAny || am.isMusicActive()) dispatchHardwarePauseKey(am);
+    }
+
+    private static void schedulePauseWatchdog(Context ctx) {
+        Handler h = getMainHandlerSafe();
+        if (h == null) return;
+        final Context appCtx = ctx.getApplicationContext();
+        h.postDelayed(() -> { if (sSilenceActive) forcePauseAndClaimFocus(appCtx); }, 600L);
+        h.postDelayed(() -> { if (sSilenceActive) forcePauseAndClaimFocus(appCtx); }, 1400L);
+    }
+
+    private static Handler getMainHandlerSafe() {
+        if (sMainHandler != null) return sMainHandler;
+        try { sMainHandler = new Handler(Looper.getMainLooper()); } catch (Throwable ignored) {}
+        return sMainHandler;
+    }
+
+    public static boolean pauseAllExternalMediaSessions(Context ctx) {
+        if (ctx == null) return false;
+        try {
+            MediaSessionManager msm = (MediaSessionManager) ctx.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            return msm != null && pauseActiveControllers(msm.getActiveSessions(new ComponentName(ctx, MediaProbeService.class)));
+        } catch (Throwable ignored) { return false; }
+    }
+
+    private static boolean pauseActiveControllers(java.util.List<MediaController> controllers) {
+        boolean paused = false;
+        for (MediaController mc : controllers) {
+            if (pauseControllerIfActiveExternal(mc)) paused = true;
+        }
+        return paused;
+    }
+
+    public static boolean pauseControllerIfActiveExternal(MediaController mc) {
+        if (mc == null || isInternalOrTtsPackage(mc.getPackageName())) return false;
+        PlaybackState st = mc.getPlaybackState();
+        if (st != null && isActivePlaybackState(st.getState())) {
+            sPausedExternalPkg = mc.getPackageName();
+            try { mc.getTransportControls().pause(); } catch (Throwable ignored) {}
+            return true;
+        }
+        return false;
+    }
+
+    public static void dispatchHardwarePauseKey(AudioManager am) {
+        if (am == null) return;
+        try {
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE));
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE));
+        } catch (Throwable ignored) {}
     }
 
     private static void resumePausedExternalSession(Context ctx, String targetPkg) {
@@ -64,27 +130,6 @@ public final class CompanionAudioFocusController {
         PlaybackState st = mc.getPlaybackState();
         if (st != null && st.getState() == PlaybackState.STATE_PAUSED) {
             try { mc.getTransportControls().play(); } catch (Throwable ignored) {}
-        }
-    }
-
-    public static void pauseAllExternalMediaSessions(Context ctx) {
-        if (ctx == null) return;
-        try {
-            MediaSessionManager msm = (MediaSessionManager) ctx.getSystemService(Context.MEDIA_SESSION_SERVICE);
-            if (msm == null) return;
-            ComponentName comp = new ComponentName(ctx, MediaProbeService.class);
-            for (MediaController mc : msm.getActiveSessions(comp)) {
-                pauseControllerIfActiveExternal(mc);
-            }
-        } catch (Throwable ignored) {}
-    }
-
-    public static void pauseControllerIfActiveExternal(MediaController mc) {
-        if (mc == null || isInternalOrTtsPackage(mc.getPackageName())) return;
-        PlaybackState st = mc.getPlaybackState();
-        if (st != null && isActivePlaybackState(st.getState())) {
-            sPausedExternalPkg = mc.getPackageName();
-            try { mc.getTransportControls().pause(); } catch (Throwable ignored) {}
         }
     }
 
@@ -106,17 +151,17 @@ public final class CompanionAudioFocusController {
                 if (sActiveFocusRequest == null) sActiveFocusRequest = buildExclusiveFocusRequest();
                 am.requestAudioFocus(sActiveFocusRequest);
             } else {
-                am.requestAudioFocus(FOCUS_LISTENER, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE);
+                am.requestAudioFocus(FOCUS_LISTENER, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
             }
         } catch (Throwable ignored) {}
     }
 
     private static AudioFocusRequest buildExclusiveFocusRequest() {
         AudioAttributes attrs = new AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+            .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build();
-        return new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+        return new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(attrs)
             .setWillPauseWhenDucked(true)
             .setOnAudioFocusChangeListener(FOCUS_LISTENER)

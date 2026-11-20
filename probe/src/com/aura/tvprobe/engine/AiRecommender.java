@@ -1084,6 +1084,28 @@ public class AiRecommender {
 
     private static final ThreadLocal<Integer> TL_GEMINI_READ_TIMEOUT_MS = new ThreadLocal<>();
 
+    public boolean hasGeminiApiKey() {
+        return !getApiKey().isEmpty();
+    }
+
+    public String[] getGeminiModels() {
+        return MODELS.clone();
+    }
+
+    public String postGeminiRaw(String model, String jsonBody, int timeoutMs) {
+        String apiKey = getApiKey();
+        if (apiKey.isEmpty() || model == null || jsonBody == null) return null;
+        TL_GEMINI_READ_TIMEOUT_MS.set(timeoutMs);
+        try {
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+            return httpPost(url, jsonBody);
+        } catch (Exception e) {
+            return null;
+        } finally {
+            TL_GEMINI_READ_TIMEOUT_MS.remove();
+        }
+    }
+
     public String callGeminiJson(String prompt) {
         return callGeminiMultimodalJson(prompt, null);
     }

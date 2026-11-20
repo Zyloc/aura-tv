@@ -89,6 +89,36 @@ public final class SubtitleWordTracker {
         return assemblePageSlice(tokens, pageStart, clamped);
     }
 
+    public static List<String> splitIntoReadableCaptions(String script, int maxWords) {
+        List<String> captions = new ArrayList<>();
+        if (script == null || script.trim().isEmpty()) return captions;
+        int limit = Math.max(8, maxWords);
+        for (String sentence : script.trim().split("(?<=[.!?])\\s+")) {
+            appendSentenceAsCalmCaptions(sentence.trim(), limit, captions);
+        }
+        return captions;
+    }
+
+    private static void appendSentenceAsCalmCaptions(String sentence, int limit, List<String> out) {
+        if (sentence.isEmpty()) return;
+        String[] words = sentence.split("\\s+");
+        if (words.length <= limit) { out.add(sentence); return; }
+        splitLongSentenceByClauses(sentence, limit, out);
+    }
+
+    private static void splitLongSentenceByClauses(String sentence, int limit, List<String> out) {
+        StringBuilder cur = new StringBuilder();
+        int count = 0;
+        for (String clause : sentence.split("(?<=[,;:\u2014])\\s+")) {
+            int cw = clause.trim().split("\\s+").length;
+            if (count > 0 && (count + cw) > limit) { out.add(cur.toString().trim()); cur.setLength(0); count = 0; }
+            if (cur.length() > 0) cur.append(' ');
+            cur.append(clause.trim());
+            count += cw;
+        }
+        if (cur.length() > 0) out.add(cur.toString().trim());
+    }
+
     private static PageSlice assemblePageSlice(List<WordToken> tokens, int pageStart, int activeIdx) {
         StringBuilder sb = new StringBuilder();
         int hiStart = 0;

@@ -41,7 +41,7 @@ public final class AuraTtsNarrator {
     private static volatile int sSpeechEpoch = 0;
     private static volatile long sOutputLatencyMs = 320L;
     private static volatile String sPreferredAccent = "US";
-    private static volatile float sSpeechRate = 0.97f;
+    private static volatile float sSpeechRate = 0.92f;
 
     private static List<String> sSentences = new ArrayList<>();
     private static List<List<SubtitleWordTracker.WordToken>> sSentenceTokens = new ArrayList<>();
@@ -210,7 +210,7 @@ public final class AuraTtsNarrator {
         if (idx < 0 || idx >= sUtteranceStartMs.length) return;
         final int epoch = sSpeechEpoch;
         sUtteranceStartMs[idx] = System.currentTimeMillis();
-        postDelayedToMain(() -> startFallbackCounterIfNoRanges(epoch, idx), 650L);
+        postDelayedToMain(() -> { if (epoch == sSpeechEpoch) notifySentenceTransitionIfNeeded(idx); }, sOutputLatencyMs);
     }
 
     private static void handleUtteranceRange(String id, int start, int end, int frame) {
@@ -317,6 +317,7 @@ public final class AuraTtsNarrator {
         sLastSpokenScript = cleanSpokenText(script);
         sOnCompleteCallback = onComplete;
         prepareSentenceTrackingState(sLastSpokenScript);
+        CompanionAudioFocusController.ensureBackgroundPausedBeforeSpeech(ctx);
         VoiceSearchHelper.unmuteStreamMusicNow(ctx);
         enqueueOrPendSpeech(ctx);
     }
@@ -357,13 +358,7 @@ public final class AuraTtsNarrator {
     }
 
     public static List<String> splitIntoSentences(String cleanScript) {
-        List<String> list = new ArrayList<>();
-        if (cleanScript == null || cleanScript.isEmpty()) return list;
-        for (String s : cleanScript.split("(?<=[.!?])\\s+")) {
-            String trimmed = s.trim();
-            if (!trimmed.isEmpty()) list.add(trimmed);
-        }
-        return list;
+        return SubtitleWordTracker.splitIntoReadableCaptions(cleanScript, 16);
     }
 
     private static void enqueueSentences() {

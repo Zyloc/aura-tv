@@ -43,7 +43,8 @@ public final class LiveSubtitleBar {
         TextView tv = buildBlackoutStageTextView(ctx);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             GlassTheme.dp(ctx, BLACKOUT_STAGE_WIDTH_DP), FrameLayout.LayoutParams.WRAP_CONTENT);
-        lp.gravity = Gravity.CENTER;
+        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        lp.bottomMargin = GlassTheme.dp(ctx, 56);
         wrap.addView(tv, lp);
         return wrap;
     }
@@ -87,9 +88,10 @@ public final class LiveSubtitleBar {
         TextView tv = new TextView(ctx);
         tv.setTag(TAG_TEXT);
         tv.setBackgroundColor(Color.TRANSPARENT);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24.5f);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22.5f);
         tv.setTypeface(GlassTheme.FONT_BOLD);
         tv.setTextColor(Color.WHITE);
+        tv.setShadowLayer(14f, 0f, 3f, Color.BLACK);
         configureBlackoutStageBox(tv);
         return tv;
     }
@@ -102,8 +104,14 @@ public final class LiveSubtitleBar {
     }
 
     public static void animateNewSentence(FrameLayout wrap, String sentence) {
-        List<SubtitleWordTracker.WordToken> tokens = SubtitleWordTracker.tokenize(sentence);
-        renderWordByIndex(wrap, tokens, 0);
+        if (wrap == null || sentence == null || sentence.trim().isEmpty()) return;
+        ensureVisible(wrap);
+        TextView tv = wrap.findViewWithTag(TAG_TEXT);
+        if (tv == null || sentence.contentEquals(tv.getText())) return;
+        tv.animate().cancel();
+        tv.setAlpha(0.15f);
+        tv.setText(sentence.trim());
+        tv.animate().alpha(1f).setDuration(180).start();
     }
 
     public static void updateWordHighlight(FrameLayout wrap, String sentence, int wordStart, int wordEnd) {

@@ -364,10 +364,52 @@ public class AuraActivity extends Activity implements
 
     public static JSONObject getActiveCompanionItem(AuraDb db, String profileId) {
         AuraActivity inst = sActiveInstance;
-        if (inst == null || !DetailOverlay.isVisible(inst.detailOverlay) || inst.currentDetailItem == null) {
-            return null;
+        if (inst == null) return null;
+        JSONObject onScreen = inst.resolveOnScreenShowItem();
+        if (onScreen == null) return null;
+        return ShowCompanionAgent.mergeDetectedShowWithHistory(db, profileId, onScreen, onScreen);
+    }
+
+    public static boolean openItemDetailOrPlay(Context ctx, AuraDb db, JSONObject item, boolean autoPlay) {
+        if (item == null) return false;
+        AuraActivity inst = sActiveInstance;
+        if (autoPlay) {
+            Context target = inst != null ? inst : ctx;
+            if (target == null) return false;
+            MediaDeepLinkLauncher.launchMediaItem(target, db, item);
+            return true;
         }
-        return ShowCompanionAgent.mergeDetectedShowWithHistory(db, profileId, inst.currentDetailItem, inst.currentDetailItem);
+        if (inst != null) inst.ui.post(() -> inst.openDetailDrawer(item));
+        return inst != null;
+    }
+
+    public static void applyMoodAndRefreshFromAgent(String mood, boolean forceFresh) {
+        AuraActivity inst = sActiveInstance;
+        if (inst == null) return;
+        inst.ui.post(() -> {
+            if (mood != null && !mood.isEmpty()) inst.applyInstantMoodFilter(mood);
+            if (forceFresh) inst.refreshAllData(true);
+        });
+    }
+
+    public static void displayAgentSearchSession(Context ctx, JSONObject session) {
+        AuraActivity inst = sActiveInstance;
+        if (inst == null || session == null) return;
+        inst.ui.post(() -> {
+            if (!SearchOverlay.isVisible(inst.searchOverlay)) SearchOverlay.show(inst.searchOverlay, inst, false);
+            inst.displaySearchResults(session);
+        });
+    }
+
+    private JSONObject resolveOnScreenShowItem() {
+        if (DetailOverlay.isVisible(detailOverlay) && currentDetailItem != null) return currentDetailItem;
+        View focused = getCurrentFocus();
+        JSONObject focusedCard = RailBuilder.resolveFocusedItem(focused);
+        if (focusedCard != null) return focusedCard;
+        if (heroSlider != null && (focused == heroSlider || isDescendantOf(focused, heroSlider))) {
+            return HeroSliderBuilder.getCurrentItem(heroSlider);
+        }
+        return null;
     }
 
     public static Intent buildHomeLauncherIntent(Context ctx) {

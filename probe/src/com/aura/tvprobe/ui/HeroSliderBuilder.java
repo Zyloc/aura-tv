@@ -81,6 +81,11 @@ public final class HeroSliderBuilder {
         if (hero != null) hero.requestFocus();
     }
 
+    public static JSONObject getCurrentItem(FrameLayout hero) {
+        if (hero == null || !(hero.getTag() instanceof HeroState)) return null;
+        return ((HeroState) hero.getTag()).currentItem;
+    }
+
     public static void setItems(FrameLayout hero, List<JSONObject> items,
                                 Context ctx, HeroCallback callback) {
         HeroState st = getState(hero);

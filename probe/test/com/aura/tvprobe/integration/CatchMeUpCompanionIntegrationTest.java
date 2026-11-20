@@ -27,7 +27,9 @@ public class CatchMeUpCompanionIntegrationTest {
     public void testVideoPlaybackScreenCatchMeUpStaysInPlaceMutesAndCancelsOnBack() throws Exception {
         RecordingContext ctx = new RecordingContext();
         InMemoryAuraDb db = buildSeededPeripheralDb();
-        TestableAiRecommender ai = buildSummarizeReadyAi(db, "In Season 1, Episode 4, Flynne tests the headset in Clanton.");
+        TestableAiRecommender ai = new TestableAiRecommender(db);
+        ai.enqueueLlmResponse("{\"intent\":\"COMPANION\",\"lens\":\"FULL_RECAP\",\"target_title\":\"\",\"query\":\"\"}");
+        ai.enqueueLlmResponse("{\"headline\":\"The Peripheral \u00B7 Season 1, Episode 4\",\"spoken_narration\":\"In Season 1, Episode 4, Flynne tests the headset in Clanton.\",\"actor_to_search\":\"\"}");
         SessionInspector inspector = buildLivePlayerInspector(ctx, db, ai);
         RecordingTvOverlayManager overlay = new RecordingTvOverlayManager(ctx);
         triggerInAppVideoCatchMeUp(ctx, db, ai, inspector, overlay);
@@ -173,6 +175,74 @@ public class CatchMeUpCompanionIntegrationTest {
         assertTrue(overlay.cancelCompanionByBackKey());
         assertEquals("Cancel callback must fire exactly once (no double-wrap)", 1, calls[0]);
         assertFalse(overlay.cancelCompanionByBackKey());
+    }
+
+    @Test
+    public void testAgenticNaturalIntentRoutingAndCalmSubtitleChunking() throws Exception {
+        RecordingContext ctx = new RecordingContext();
+        InMemoryAuraDb db = buildSeededPeripheralDb();
+        TestableAiRecommender ai = new TestableAiRecommender(db);
+        ai.enqueueLlmResponse("{\"intent\":\"COMPANION\",\"lens\":\"FULL_RECAP\",\"target_title\":\"The Peripheral\",\"query\":\"\"}");
+        ai.enqueueLlmResponse("{\"headline\":\"The Peripheral \u00B7 Season 1, Episode 4\",\"spoken_narration\":\"Flynne enters the headset in Clanton, and Wilf explains the Jackpot.\",\"actor_to_search\":\"\"}");
+        assertFalse(ShowCompanionAgent.isShowCompanionQuery("I forgot where I left off on this series"));
+        verifyNaturalLauncherCompanionEndToEnd(ctx, db, ai);
+        verifyCalmClauseSubtitleChunking();
+    }
+
+    private void verifyNaturalLauncherCompanionEndToEnd(
+            RecordingContext ctx, InMemoryAuraDb db, TestableAiRecommender ai) throws Exception {
+        RecordingTvOverlayManager overlay = new RecordingTvOverlayManager(ctx);
+        SessionInspector inspector = new SessionInspector(ctx, null, db, ai);
+        InAppVoiceRouter.onVoiceTranscriptCaptured(ctx, db, ai, inspector, overlay, "I forgot where I left off on this series");
+        assertTrue("Agentic intent must route natural phrasing to Companion", overlay.awaitRecap(5000L));
+        assertTrue(CompanionAudioFocusController.isCompanionSilenceActive());
+        CompanionAudioFocusController.ensureBackgroundPausedBeforeSpeech(ctx);
+        assertBackKeyCancelsCleanlyWithoutNavigation(ctx, overlay);
+    }
+
+    private void verifyCalmClauseSubtitleChunking() {
+        String fourteenWords = "Flynne enters the advanced headset in Clanton while Wilf watches closely from London.";
+        List<String> steady = SubtitleWordTracker.splitIntoReadableCaptions(fourteenWords, 16);
+        assertEquals("14-word sentence must stay as 1 calm caption without mid-sentence wipe", 1, steady.size());
+        String longSentence = "Earlier in Clanton, Flynne discovered the headset connects to future London, and Wilf warned her that Cherise is tracking every move they make.";
+        List<String> clauses = SubtitleWordTracker.splitIntoReadableCaptions(longSentence, 16);
+        assertTrue("Long sentence must split cleanly into calm readable clauses", clauses.size() >= 2);
+        assertTrue(clauses.get(0).endsWith(","));
+    }
+
+    @Test
+    public void testConversationalClarificationAndMultiTurnFollowUpChatbot() throws Exception {
+        CompanionChatSession.reset();
+        RecordingContext ctx = new RecordingContext();
+        InMemoryAuraDb emptyDb = new InMemoryAuraDb();
+        RecordingTvOverlayManager clarifyOverlay = new RecordingTvOverlayManager(ctx);
+        InAppVoiceRouter.onVoiceTranscriptCaptured(ctx, emptyDb, new TestableAiRecommender(emptyDb), null, clarifyOverlay, "catch me up please");
+        assertTrue(clarifyOverlay.awaitRecap(4000L));
+        assertTrue("Must ask which show when none is identifiable", clarifyOverlay.deliveredRecap.optBoolean("is_clarification"));
+        assertTrue(CompanionChatSession.isAwaitingClarification());
+        verifyClarificationReplyAndMultiTurnFollowUp(ctx);
+    }
+
+    private void verifyClarificationReplyAndMultiTurnFollowUp(RecordingContext ctx) throws Exception {
+        InMemoryAuraDb db = buildSeededPeripheralDb();
+        TestableAiRecommender ai = new TestableAiRecommender(db);
+        ai.enqueueLlmResponse("{\"headline\":\"The Peripheral \u00B7 Season 1, Episode 4\",\"spoken_narration\":\"Flynne enters Clanton headset.\",\"actor_to_search\":\"\"}");
+        ai.enqueueLlmResponse("{\"headline\":\"The Peripheral \u00B7 Season 1, Episode 4\",\"spoken_narration\":\"Wilf warns Flynne about the Jackpot timeline.\",\"actor_to_search\":\"\"}");
+        RecordingTvOverlayManager replyOv = new RecordingTvOverlayManager(ctx);
+        InAppVoiceRouter.onVoiceTranscriptCaptured(ctx, db, ai, null, replyOv, "The Peripheral");
+        assertTrue(replyOv.awaitRecap(4000L));
+        assertFalse(CompanionChatSession.isAwaitingClarification());
+        verifyFollowUpIncludesPriorConversationHistory(ctx, db, ai);
+    }
+
+    private void verifyFollowUpIncludesPriorConversationHistory(
+            RecordingContext ctx, InMemoryAuraDb db, TestableAiRecommender ai) throws Exception {
+        RecordingTvOverlayManager followOv = new RecordingTvOverlayManager(ctx);
+        InAppVoiceRouter.onVoiceTranscriptCaptured(ctx, db, ai, null, followOv, "explain further about Wilf");
+        assertTrue(followOv.awaitRecap(4000L));
+        assertTrue("Follow-up prompt must include prior conversation history", ai.lastPromptText.contains("Ongoing Conversation History"));
+        assertTrue(followOv.deliveredRecap.optString("spoken_narration").contains("Wilf warns Flynne"));
+        CompanionChatSession.reset();
     }
 
     private InMemoryAuraDb buildSeededPeripheralDb() throws Exception {

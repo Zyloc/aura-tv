@@ -38,7 +38,8 @@ public final class AuraTestSuiteRunner {
         LiveJustWatchGraphIntegrationTest.class,
         CatchMeUpCompanionIntegrationTest.class,
         TasteIntelligenceIntegrationTest.class,
-        ReserveSyncAndTasteLifecycleIntegrationTest.class
+        ReserveSyncAndTasteLifecycleIntegrationTest.class,
+        AuraAgenticToolLoopIntegrationTest.class
     };
 
     public static void main(String[] args) {

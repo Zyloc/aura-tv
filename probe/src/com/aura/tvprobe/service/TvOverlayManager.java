@@ -118,13 +118,27 @@ public class TvOverlayManager {
     private FrameLayout buildCompanionBlackoutRoot(String spokenQuery, String initialStep) {
         FrameLayout root = new FrameLayout(ctx);
         root.setTag(TAG_BLACKOUT_ROOT);
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackground(buildTranslucentCinemaScrim());
         LinearLayout col = buildTaggedLoaderColumn(spokenQuery, initialStep);
         floatingSubtitleWrap = LiveSubtitleBar.buildBlackoutStage(ctx);
-        root.addView(col);
+        root.addView(col, buildLowerThirdLoaderParams());
         root.addView(floatingSubtitleWrap, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         return root;
+    }
+
+    private GradientDrawable buildTranslucentCinemaScrim() {
+        return new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{
+            Color.parseColor("#EB06080E"), Color.parseColor("#8C06080E"), Color.parseColor("#2406080E")
+        });
+    }
+
+    private FrameLayout.LayoutParams buildLowerThirdLoaderParams() {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        lp.bottomMargin = GlassTheme.dp(ctx, 48);
+        return lp;
     }
 
     private LinearLayout buildTaggedLoaderColumn(String spokenQuery, String initialStep) {
@@ -209,9 +223,7 @@ public class TvOverlayManager {
     private void bindBlackoutSubtitleListener() {
         AuraTtsNarrator.setSubtitleListener(new AuraTtsNarrator.SubtitleListener() {
             @Override public void onSentenceStart(String s) { transitionFromLoaderToSubtitle(s); }
-            @Override public void onWordHighlight(String s, int ws, int we) {
-                LiveSubtitleBar.updateWordHighlight(floatingSubtitleWrap, s, ws, we);
-            }
+            @Override public void onWordHighlight(String s, int ws, int we) {}
             @Override public void onNarrationStop() { LiveSubtitleBar.hide(floatingSubtitleWrap); }
         });
     }

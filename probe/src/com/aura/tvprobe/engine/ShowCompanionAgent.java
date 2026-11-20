@@ -76,16 +76,21 @@ public final class ShowCompanionAgent {
     public static JSONObject executeCompanionTurn(
             AiRecommender ai, AuraDb db, String profileId, String userQuery,
             JSONObject explicitItem, AiRecommender.AgentProgressListener stepListener) {
-        String lens = detectLens(userQuery);
+        String lens = resolveEffectiveLens(explicitItem, userQuery);
         JSONObject ctx = resolveTargetContext(db, profileId, userQuery, explicitItem);
         String cacheKey = buildRecapCacheKey(ctx, lens, userQuery);
-        if (LENS_FULL_RECAP.equals(lens)) {
-            JSONObject cached = tryReadCachedRecap(db, cacheKey);
-            if (cached != null) return cached;
-        }
+        boolean isFollowUp = CompanionChatSession.isFollowUpTurn(ctx, userQuery);
+        JSONObject cached = (LENS_FULL_RECAP.equals(lens) && !isFollowUp) ? tryReadCachedRecap(db, cacheKey) : null;
+        if (cached != null) { CompanionChatSession.recordTurn(ctx, userQuery, cached.optString("spoken_narration")); return cached; }
         JSONObject result = runAgenticLensSynthesis(ai, db, profileId, userQuery, lens, ctx, stepListener);
-        cacheRecapIfFromLlm(db, cacheKey, lens, result);
+        if (!isFollowUp) cacheRecapIfFromLlm(db, cacheKey, lens, result);
+        CompanionChatSession.recordTurn(ctx, userQuery, result.optString("spoken_narration"));
         return result;
+    }
+
+    private static String resolveEffectiveLens(JSONObject explicitItem, String userQuery) {
+        String agentLens = explicitItem != null ? explicitItem.optString("agent_lens", "").trim() : "";
+        return !agentLens.isEmpty() ? agentLens : detectLens(userQuery);
     }
 
     private static void cacheRecapIfFromLlm(AuraDb db, String cacheKey, String lens, JSONObject result) {
@@ -282,11 +287,13 @@ public final class ShowCompanionAgent {
             String priorStory, String dialogue, String castInfo) {
         String mmSs = SubtitleAndGuideStore.formatMmSs(posSec);
         String q = (userQuery == null || userQuery.isEmpty()) ? "Catch me up on what has happened so far" : userQuery;
-        return "Summarize what has happened so far in \"" + title + "\" (Season " + s + ", Episode " + e + ", paused at " + mmSs + ") for the viewer asking: \"" + q + "\".\n\n" +
-            "Previous Episode Context:\n" + priorStory + "\n\n" +
+        String chatHist = CompanionChatSession.formatConversationForPrompt();
+        String followUpBlock = chatHist.isEmpty() ? "" : ("\nOngoing Conversation History (DO NOT repeat what you already said; directly answer or go deeper on the user's follow-up):\n" + chatHist + "\n");
+        return "Respond conversationally about \"" + title + "\" (Season " + s + ", Episode " + e + ", paused at " + mmSs + ") for the viewer asking: \"" + q + "\".\n" +
+            followUpBlock + "\nPrevious Episode Context:\n" + priorStory + "\n\n" +
             "Compressed Subtitle Dialogue (00:00 to " + mmSs + "):\n" + (dialogue.isEmpty() ? "(No subtitle file found; use episode context above)" : dialogue) + castInfo + "\n\n" +
-            "Write a warm, friendly, natural spoken summary (130 to 200 words) like a friend catching you up on the couch. " +
-            "Use character names and actual events from the subtitles up to " + mmSs + " (strictly no spoilers past " + mmSs + "). " +
+            "Write a warm, friendly, natural spoken answer (100 to 180 words) like a smart friend on the couch. " +
+            "Use character names and actual events up to " + mmSs + " (strictly no spoilers past " + mmSs + "). " +
             "Never use codes like S1E1, brackets, markdown, or bullet symbols. " +
             "Return ONLY JSON: {\"headline\":\"" + title + " \u00B7 Season " + s + ", Episode " + e + "\",\"spoken_narration\":\"...\",\"actor_to_search\":\"\"}";
     }
