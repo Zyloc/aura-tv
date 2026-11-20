@@ -150,7 +150,7 @@ public class AiRecommender {
             String profileId, List<JSONObject> curated, UserTasteProfile taste, int currentYear, int epoch) {
         scoreAndRerankPool(curated, taste, currentYear);
         List<JSONObject> balanced = TasteCuratedSlateEngine.enforceTasteBalance(curated, 18, 4);
-        ImpressionTracker.recordSlateImpressions(db, epoch, balanced.subList(0, Math.min(6, balanced.size())));
+        ImpressionTracker.recordSlateImpressions(db, epoch, balanced.subList(0, Math.min(16, balanced.size())));
         return packRankedItems(balanced);
     }
 

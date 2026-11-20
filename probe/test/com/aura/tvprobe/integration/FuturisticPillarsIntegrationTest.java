@@ -220,6 +220,19 @@ public class FuturisticPillarsIntegrationTest {
         assertTrue(promptStr.contains("The Body (2026, Netflix, IMDb 7.5"));
     }
 
+    @Test
+    public void testRefreshCooldownBlocksRepeatsAndRecyclesAfterFourRounds() {
+        long nowSec = System.currentTimeMillis() / 1000L;
+        java.util.Map<String, ImpressionTracker.ImpressionRecord> map = new java.util.HashMap<>();
+        map.put("thefamilyman", new ImpressionTracker.ImpressionRecord(10, 1, nowSec));
+        java.util.Set<String> cdNext = TasteCuratedSlateEngine.collectCooldownKeysFromMap(map, 11, nowSec);
+        assertTrue("Shown title must be blocked on next refresh", cdNext.contains("thefamilyman"));
+        java.util.Set<String> cdRecycledByRound = TasteCuratedSlateEngine.collectCooldownKeysFromMap(map, 14, nowSec);
+        assertFalse("Shown title must recycle after 4 refreshes", cdRecycledByRound.contains("thefamilyman"));
+        java.util.Set<String> cdRecycledByTime = TasteCuratedSlateEngine.collectCooldownKeysFromMap(map, 11, nowSec + (50L * 3600L));
+        assertFalse("Shown title must recycle after 48 hours", cdRecycledByTime.contains("thefamilyman"));
+    }
+
     private static List<JSONObject> toList(JSONArray arr) {
         List<JSONObject> out = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {

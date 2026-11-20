@@ -57,7 +57,7 @@ public final class UpdateTasteTool implements AuraTool {
         JSONObject item = resolveTargetItem(title, ctx);
         if (item == null) return false;
         TasteIntelligenceEngine.recordNotInterested(ctx.db, ctx.profileId, item);
-        if (ctx.uiBridge != null) ctx.uiBridge.applyMoodAndRefresh(TasteIntelligenceEngine.MOOD_ALL, false);
+        if (ctx.uiBridge != null) ctx.uiBridge.applyMoodAndRefresh("", false);
         return true;
     }
 
@@ -67,7 +67,7 @@ public final class UpdateTasteTool implements AuraTool {
         if (item == null) return false;
         ctx.db.markTitleWatched(item, true);
         TasteIntelligenceEngine.buildAndPersistTasteDna(ctx.db, ctx.profileId);
-        if (ctx.uiBridge != null) ctx.uiBridge.applyMoodAndRefresh(TasteIntelligenceEngine.MOOD_ALL, false);
+        if (ctx.uiBridge != null) ctx.uiBridge.applyMoodAndRefresh("", false);
         return true;
     }
 

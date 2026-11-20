@@ -22,6 +22,8 @@ import java.util.concurrent.TimeUnit;
 public final class TasteCuratedSlateEngine {
 
     public static final int CLASSIC_MIN_YEAR = 2012;
+    public static final int REFRESH_COOLDOWN_ROUNDS = 4;
+    private static final long REFRESH_COOLDOWN_TTL_SEC = 48L * 3600L;
 
     private TasteCuratedSlateEngine() {}
 
@@ -29,10 +31,30 @@ public final class TasteCuratedSlateEngine {
             AiRecommender ai, AuraDb db, String profileId, UserTasteProfile taste,
             Set<String> seenKeys, int currentYear) {
         if (ai == null || db == null || !ai.hasGeminiApiKey()) return new ArrayList<>();
-        String prompt = buildCuratedLanesPrompt(db, profileId, currentYear);
+        int epoch = ImpressionTracker.getCurrentEpoch(db, profileId);
+        Set<String> cooldownKeys = collectActiveRefreshCooldownKeys(db, epoch, System.currentTimeMillis() / 1000L);
+        seenKeys.addAll(cooldownKeys);
+        String prompt = buildCuratedLanesPrompt(db, profileId, currentYear, cooldownKeys);
         JSONArray picks = parseCuratedPicksArray(ai.callGeminiJsonFast(prompt));
         if (picks.length() == 0) return new ArrayList<>();
         return verifyPicksOnJustWatch(picks, taste, seenKeys, currentYear);
+    }
+
+    public static Set<String> collectActiveRefreshCooldownKeys(AuraDb db, int currentEpoch, long nowSec) {
+        return collectCooldownKeysFromMap(ImpressionTracker.loadActiveImpressions(db), currentEpoch, nowSec);
+    }
+
+    public static Set<String> collectCooldownKeysFromMap(
+            java.util.Map<String, ImpressionTracker.ImpressionRecord> map, int currentEpoch, long nowSec) {
+        Set<String> out = new HashSet<>();
+        if (map == null) return out;
+        for (java.util.Map.Entry<String, ImpressionTracker.ImpressionRecord> e : map.entrySet()) {
+            ImpressionTracker.ImpressionRecord rec = e.getValue();
+            boolean withinRounds = (currentEpoch - rec.lastEpoch) < REFRESH_COOLDOWN_ROUNDS;
+            boolean withinTime = rec.lastShownAt <= 0L || (nowSec - rec.lastShownAt) < REFRESH_COOLDOWN_TTL_SEC;
+            if (withinRounds && withinTime) out.add(e.getKey());
+        }
+        return out;
     }
 
     public static boolean passesEliteQualityGate(JSONObject item, int currentYear) {
@@ -109,17 +131,30 @@ public final class TasteCuratedSlateEngine {
         } catch (Exception ignored) {}
     }
 
-    private static String buildCuratedLanesPrompt(AuraDb db, String profileId, int currentYear) {
+    private static String buildCuratedLanesPrompt(
+            AuraDb db, String profileId, int currentYear, Set<String> cooldownKeys) {
         String mem = UserMemoryStore.formatMemoriesForPrompt(db, profileId);
         List<JSONObject> liveTrending = LiveTrendingCollector.collectQualityTrending(db, profileId, currentYear, 16);
+        List<String> avoidShown = buildAvoidShownList(db, profileId, cooldownKeys);
         return "You are Aura's Elite TV & Film Curator for " + RegionProviderRegistry.getRegionDisplayName(db)
             + " (Year: " + currentYear + ").\n"
             + "USER LOVED / WATCHED / RATED FAVORITES: " + UserEngagementLedger.getTopLovedTitles(db, profileId, 10) + "\n"
             + "USER DISLIKED / DROPPED (AVOID): " + UserEngagementLedger.getDislikedOrDroppedTitles(db, profileId, 6) + "\n"
             + "LONG-TERM MEMORY & RULES: " + (mem.isEmpty() ? "None" : mem) + "\n"
             + "LIVE TRENDING ACROSS ALL OTT APPS RIGHT NOW: " + LiveTrendingCollector.formatTrendingForPrompt(liveTrending) + "\n"
-            + "SOFT COOLDOWN (avoid putting in top 6 if possible): " + collectSoftLastHeroKeys(db, profileId) + "\n"
+            + "STRICTLY DO NOT REPEAT (SHOWN IN RECENT REFRESHES — PICK COMPLETELY NEW SHOWS): " + avoidShown + "\n"
             + buildCuratedLanesTaskRules(currentYear);
+    }
+
+    private static List<String> buildAvoidShownList(AuraDb db, String profileId, Set<String> cooldownKeys) {
+        List<String> out = new ArrayList<>();
+        JSONArray prev = db.getProfileRecommendations(profileId);
+        for (int i = 0; i < prev.length() && out.size() < 24; i++) {
+            JSONObject o = prev.optJSONObject(i);
+            if (o != null && !o.optString("title", "").isEmpty()) out.add(o.optString("title"));
+        }
+        for (String k : cooldownKeys) if (out.size() < 48 && !out.contains(k)) out.add(k);
+        return out;
     }
 
     private static String buildCuratedLanesTaskRules(int currentYear) {
@@ -131,16 +166,6 @@ public final class TasteCuratedSlateEngine {
             + "- 3-4 Smart Comedies / Sitcoms (witty, high-rated, never slapstick)\n"
             + "STRICT RULES: NEVER include watched/disliked titles, kids cartoons, anime, soap operas, or obscure low-vote filler. "
             + "Return ONLY JSON: {\"picks\":[{\"title\":\"Exact Official Title\",\"reason\":\"12-16 word reason tying it to one of their favorites or why it is trending now\"}]}.";
-    }
-
-    private static List<String> collectSoftLastHeroKeys(AuraDb db, String profileId) {
-        List<String> keys = new ArrayList<>();
-        JSONArray prev = db.getProfileRecommendations(profileId);
-        for (int i = 0; i < prev.length() && i < 6; i++) {
-            JSONObject o = prev.optJSONObject(i);
-            if (o != null && !o.optString("title", "").isEmpty()) keys.add(o.optString("title"));
-        }
-        return keys;
     }
 
     private static JSONArray parseCuratedPicksArray(String rawJson) {

@@ -174,7 +174,9 @@ public class AuraAgenticToolLoopIntegrationTest {
         @Override public boolean openOrPlayTitle(JSONObject item, boolean autoPlay) {
             lastPlayedItem = item; lastAutoPlay = autoPlay; return true;
         }
-        @Override public void applyMoodAndRefresh(String mood, boolean forceFresh) { lastMoodApplied = mood; }
+        @Override public void applyMoodAndRefresh(String mood, boolean forceFresh) {
+            if (mood != null && !mood.isEmpty()) lastMoodApplied = mood;
+        }
         @Override public void presentVisualResults(JSONObject payload) { presentedSessions.add(payload); }
         @Override public boolean performInAppSearch(String pkg, String query) { lastInAppSearchQuery = query; return true; }
         @Override public void performTvControl(String command) {}
