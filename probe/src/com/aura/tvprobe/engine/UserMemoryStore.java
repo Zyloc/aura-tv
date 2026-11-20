@@ -50,7 +50,7 @@ public final class UserMemoryStore {
     public static List<String> listAutoMemories(AuraDb db, String profileId) {
         if (db == null) return new ArrayList<>();
         String prof = (profileId != null && !profileId.isEmpty()) ? profileId : AuraDb.DEFAULT_PROFILE;
-        return AutoMemoryDistiller.distillAndPersist(db, prof);
+        return AutoMemoryDistiller.distillFromHistory(db, prof, System.currentTimeMillis() / 1000L);
     }
 
     public static List<String> listAllMemories(AuraDb db, String profileId) {

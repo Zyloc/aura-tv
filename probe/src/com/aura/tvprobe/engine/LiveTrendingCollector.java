@@ -16,16 +16,33 @@ import java.util.Set;
  */
 public final class LiveTrendingCollector {
 
+    private static final long CACHE_TTL_MS = 15L * 60_000L;
+    private static volatile JSONArray sCachedJwTrending = new JSONArray();
+    private static volatile long sCacheSavedAtMs = 0L;
+
     private LiveTrendingCollector() {}
+
+    public static void clearCache() {
+        sCachedJwTrending = new JSONArray();
+        sCacheSavedAtMs = 0L;
+    }
 
     public static List<JSONObject> collectQualityTrending(AuraDb db, String profileId, int currentYear, int limit) {
         List<JSONObject> out = new ArrayList<>();
         Set<String> seen = initExcludedKeys(db, profileId);
-        appendTrendingArray(JustWatchGraph.fetchLiveTrendingTitles(currentYear - 2, currentYear, 24), seen, out, limit);
+        appendTrendingArray(getCachedOrLiveJwTrending(currentYear), seen, out, limit);
         if (db != null && out.size() < limit) {
             appendTrendingArray(db.getAppBroadcastTrends(), seen, out, limit);
         }
         return out;
+    }
+
+    private static JSONArray getCachedOrLiveJwTrending(int currentYear) {
+        long now = System.currentTimeMillis();
+        if (sCachedJwTrending.length() > 0 && (now - sCacheSavedAtMs) < CACHE_TTL_MS) return sCachedJwTrending;
+        JSONArray fresh = JustWatchGraph.fetchLiveTrendingTitles(currentYear - 2, currentYear, 24);
+        if (fresh != null && fresh.length() > 0) { sCachedJwTrending = fresh; sCacheSavedAtMs = now; }
+        return sCachedJwTrending;
     }
 
     public static String formatTrendingForPrompt(List<JSONObject> trending) {

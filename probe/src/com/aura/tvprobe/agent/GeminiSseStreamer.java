@@ -71,6 +71,8 @@ public final class GeminiSseStreamer {
         try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = br.readLine()) != null) lines.add(line);
+        } finally {
+            conn.disconnect();
         }
         return consumeSseLines(lines, callback);
     }

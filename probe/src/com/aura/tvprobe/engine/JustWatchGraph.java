@@ -1026,6 +1026,8 @@ public class JustWatchGraph {
             String line;
             while ((line = br.readLine()) != null) sb.append(line);
             return new JSONObject(sb.toString());
+        } finally {
+            conn.disconnect();
         }
     }
 

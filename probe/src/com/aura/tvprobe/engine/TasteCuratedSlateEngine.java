@@ -24,6 +24,11 @@ public final class TasteCuratedSlateEngine {
     public static final int CLASSIC_MIN_YEAR = 2012;
     public static final int REFRESH_COOLDOWN_ROUNDS = 4;
     private static final long REFRESH_COOLDOWN_TTL_SEC = 48L * 3600L;
+    private static final ExecutorService VERIFY_POOL = Executors.newFixedThreadPool(8, r -> {
+        Thread t = new Thread(r, "aura-curate-verify");
+        t.setDaemon(true);
+        return t;
+    });
 
     private TasteCuratedSlateEngine() {}
 
@@ -37,7 +42,7 @@ public final class TasteCuratedSlateEngine {
         String prompt = buildCuratedLanesPrompt(db, profileId, currentYear, cooldownKeys);
         JSONArray picks = parseCuratedPicksArray(ai.callGeminiJsonFast(prompt));
         if (picks.length() == 0) return new ArrayList<>();
-        return verifyPicksOnJustWatch(picks, taste, seenKeys, currentYear);
+        return verifyPicksOnJustWatch(db, picks, taste, seenKeys, currentYear);
     }
 
     public static Set<String> collectActiveRefreshCooldownKeys(AuraDb db, int currentEpoch, long nowSec) {
@@ -94,31 +99,51 @@ public final class TasteCuratedSlateEngine {
     }
 
     private static List<JSONObject> verifyPicksOnJustWatch(
-            JSONArray picks, UserTasteProfile taste, Set<String> seenKeys, int currentYear) {
+            AuraDb db, JSONArray picks, UserTasteProfile taste, Set<String> seenKeys, int currentYear) {
         List<JSONObject> verified = Collections.synchronizedList(new ArrayList<>());
-        ExecutorService pool = Executors.newFixedThreadPool(8);
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
         for (int i = 0; i < picks.length() && i < 26; i++) {
             final int rank = i;
             final JSONObject pick = picks.optJSONObject(i);
-            if (pick != null) pool.submit(() -> verifySinglePick(pick, rank, taste, seenKeys, currentYear, verified));
+            if (pick != null) futures.add(VERIFY_POOL.submit(() -> verifySinglePick(db, pick, rank, taste, seenKeys, currentYear, verified)));
         }
-        pool.shutdown();
-        try { pool.awaitTermination(7, TimeUnit.SECONDS); } catch (Exception ignored) {}
+        awaitFuturesBounded(futures, 7000L);
         verified.sort((a, b) -> Integer.compare(a.optInt("llm_rank", 99), b.optInt("llm_rank", 99)));
         return verified;
     }
 
+    private static void awaitFuturesBounded(List<java.util.concurrent.Future<?>> futures, long budgetMs) {
+        long deadline = System.currentTimeMillis() + budgetMs;
+        for (java.util.concurrent.Future<?> f : futures) {
+            long rem = Math.max(50L, deadline - System.currentTimeMillis());
+            try { f.get(rem, TimeUnit.MILLISECONDS); } catch (Exception ignored) { f.cancel(true); }
+        }
+    }
+
     private static void verifySinglePick(
-            JSONObject pick, int rank, UserTasteProfile taste, Set<String> seenKeys,
+            AuraDb db, JSONObject pick, int rank, UserTasteProfile taste, Set<String> seenKeys,
             int currentYear, List<JSONObject> out) {
         String title = pick.optString("title", "").trim();
         if (title.isEmpty() || seenKeys.contains(AuraDb.normalizeTitleKey(title))) return;
-        JSONObject hit = JustWatchGraph.lookupTitle(title);
+        JSONObject hit = lookupCachedOrLiveJustWatch(db, title);
         if (hit == null || !hit.optBoolean("has_flatrate_offer", false)) return;
         if (!passesEliteQualityGate(hit, currentYear)) return;
         if (CandidateValidator.isUnwantedAnimation(hit.optString("genre_codes", ""), taste.isAnimeEnabled())) return;
         if (!seenKeys.add(AuraDb.normalizeTitleKey(hit.optString("title", title)))) return;
         tagVerifiedCuratedHit(hit, pick, rank, out);
+    }
+
+    private static JSONObject lookupCachedOrLiveJustWatch(AuraDb db, String title) {
+        String cacheKey = "jw_imdb_v6:" + title.toLowerCase(Locale.US);
+        String raw = db != null ? db.getCachedGti(cacheKey) : null;
+        if (raw != null && !raw.isEmpty()) {
+            try { return new JSONObject(raw); } catch (Exception ignored) {}
+        }
+        JSONObject hit = JustWatchGraph.lookupTitle(title);
+        if (hit != null && db != null && hit.optBoolean("has_flatrate_offer", false)) {
+            db.saveCachedGti(cacheKey, hit.toString());
+        }
+        return hit;
     }
 
     private static void tagVerifiedCuratedHit(JSONObject hit, JSONObject pick, int rank, List<JSONObject> out) {
@@ -148,12 +173,14 @@ public final class TasteCuratedSlateEngine {
 
     private static List<String> buildAvoidShownList(AuraDb db, String profileId, Set<String> cooldownKeys) {
         List<String> out = new ArrayList<>();
+        Set<String> seenNorm = new HashSet<>();
         JSONArray prev = db.getProfileRecommendations(profileId);
         for (int i = 0; i < prev.length() && out.size() < 24; i++) {
             JSONObject o = prev.optJSONObject(i);
-            if (o != null && !o.optString("title", "").isEmpty()) out.add(o.optString("title"));
+            String t = o != null ? o.optString("title", "").trim() : "";
+            if (!t.isEmpty() && seenNorm.add(AuraDb.normalizeTitleKey(t))) out.add(t);
         }
-        for (String k : cooldownKeys) if (out.size() < 48 && !out.contains(k)) out.add(k);
+        for (String k : cooldownKeys) if (out.size() < 40 && seenNorm.add(k)) out.add(k);
         return out;
     }
 

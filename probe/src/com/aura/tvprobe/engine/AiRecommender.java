@@ -110,8 +110,7 @@ public class AiRecommender {
             int currentYear = JustWatchGraph.getCurrentYear();
             int minModernYear = JustWatchGraph.getDefaultMinModernYear();
             int epoch = ImpressionTracker.advanceEpoch(db, profileId);
-            JSONObject seedPlan = resolveSeedPlan(profileId, collectWatchedTitles(history), minModernYear, currentYear);
-            return buildSotaRecommendationsForEpoch(profileId, seedPlan, minModernYear, currentYear, epoch);
+            return buildSotaRecommendationsForEpoch(profileId, null, history, minModernYear, currentYear, epoch);
         } finally {
             narrator.stop();
         }
@@ -133,17 +132,18 @@ public class AiRecommender {
 
     public JSONArray buildSotaRecommendations(String profileId, JSONObject seedPlan, int minModernYear, int currentYear) {
         int epoch = ImpressionTracker.advanceEpoch(db, profileId);
-        return buildSotaRecommendationsForEpoch(profileId, seedPlan, minModernYear, currentYear, epoch);
+        return buildSotaRecommendationsForEpoch(profileId, seedPlan, null, minModernYear, currentYear, epoch);
     }
 
     private JSONArray buildSotaRecommendationsForEpoch(
-            String profileId, JSONObject seedPlan, int minModernYear, int currentYear, int epoch) {
+            String profileId, JSONObject seedPlan, JSONArray history, int minModernYear, int currentYear, int epoch) {
         final UserTasteProfile taste = new UserTasteProfile(db, profileId, epoch);
         final Set<String> seenKeys = initSeenTitleKeys(profileId, taste);
         AgentStatusNarrator.publishLiveStep("Curating elite picks for your taste");
         List<JSONObject> curated = TasteCuratedSlateEngine.curateAndVerifyElitePicks(this, db, profileId, taste, seenKeys, currentYear);
         if (curated.size() >= 10) return finalizeCuratedEliteSlate(profileId, curated, taste, currentYear, epoch);
-        return runFallbackScatterGatherSlate(profileId, seedPlan, minModernYear, currentYear, epoch, taste, seenKeys, curated);
+        JSONObject effectivePlan = seedPlan != null ? seedPlan : resolveSeedPlan(profileId, collectWatchedTitles(history), minModernYear, currentYear);
+        return runFallbackScatterGatherSlate(profileId, effectivePlan, minModernYear, currentYear, epoch, taste, seenKeys, curated);
     }
 
     private JSONArray finalizeCuratedEliteSlate(
@@ -1208,10 +1208,14 @@ public class AiRecommender {
 
     private String executeHttpGet(String urlStr) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-        conn.setConnectTimeout(3500);
-        conn.setReadTimeout(3500);
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)");
-        return readConnectionBody(conn);
+        try {
+            conn.setConnectTimeout(3500);
+            conn.setReadTimeout(3500);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)");
+            return readConnectionBody(conn);
+        } finally {
+            conn.disconnect();
+        }
     }
 
     private String httpPost(final String urlStr, final String jsonBody) throws Exception {
@@ -1229,13 +1233,17 @@ public class AiRecommender {
 
     private String executeHttpPost(String urlStr, String jsonBody, int readTimeoutMs) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-        conn.setConnectTimeout(6000);
-        conn.setReadTimeout(readTimeoutMs);
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        try (OutputStream os = conn.getOutputStream()) { os.write(jsonBody.getBytes(StandardCharsets.UTF_8)); }
-        return readConnectionBody(conn);
+        try {
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(readTimeoutMs);
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            try (OutputStream os = conn.getOutputStream()) { os.write(jsonBody.getBytes(StandardCharsets.UTF_8)); }
+            return readConnectionBody(conn);
+        } finally {
+            conn.disconnect();
+        }
     }
 
     private String readConnectionBody(HttpURLConnection conn) throws Exception {

@@ -88,15 +88,21 @@ public class VoiceConcierge {
     }
 
     private JSONObject syncAndReturn(JSONObject res) {
-        new Thread(sync::syncWithHost).start();
+        triggerHostSyncIfConfigured();
         return res;
     }
 
     private JSONObject resetSession(String profileId) {
         db.setSetting("voice_session_" + profileId, "");
         AuraConversationSession.reset();
-        new Thread(sync::syncWithHost).start();
+        triggerHostSyncIfConfigured();
         return db.getVoiceSession(profileId);
+    }
+
+    private void triggerHostSyncIfConfigured() {
+        if (sync != null && !sync.getTargetHostUrl().isEmpty()) {
+            new Thread(sync::syncWithHost, "aura-host-sync").start();
+        }
     }
 
     private String resolveEffectiveQuery(String userText, List<String> activeFilters) {
