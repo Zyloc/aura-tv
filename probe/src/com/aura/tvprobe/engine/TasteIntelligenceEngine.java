@@ -190,27 +190,13 @@ public final class TasteIntelligenceEngine {
 
     private static void populateTasteDnaFields(AuraDb db, String profileId, JSONObject dna) throws Exception {
         long nowSec = System.currentTimeMillis() / 1000L;
-        Map<String, Integer> ratings = db.getUserRatingsMap();
-        List<String> loved = new ArrayList<>();
-        List<String> bounced = new ArrayList<>();
-        classifyHistoryByEngagement(db.listHistory(profileId), nowSec, ratings, loved, bounced);
+        List<String> loved = UserEngagementLedger.getTopLovedTitles(db, profileId, 8);
+        List<String> bounced = UserEngagementLedger.getDislikedOrDroppedTitles(db, profileId, 6);
         dna.put("loved_anchors", toJsonArray(loved, 8));
         dna.put("bounced_anchors", toJsonArray(bounced, 6));
         dna.put("avoid_genres", toJsonArray(new ArrayList<>(buildNegativeGenrePenalties(db, profileId).keySet()), 6));
         dna.put("dismissed_count", loadDismissedArray(db, profileId).length());
         dna.put("updated_at", nowSec);
-    }
-
-    private static void classifyHistoryByEngagement(
-            JSONArray hist, long nowSec, Map<String, Integer> ratings, List<String> loved, List<String> bounced) {
-        for (int i = 0; i < hist.length(); i++) {
-            JSONObject h = hist.optJSONObject(i);
-            String title = extractDisplayTitle(h);
-            if (title.isEmpty()) continue;
-            double w = computeEngagementWeight(h, nowSec, ratings);
-            if (w >= 2.0 && !loved.contains(title)) loved.add(title);
-            else if (w < 0.0 && !bounced.contains(title)) bounced.add(title);
-        }
     }
 
     public static String getTasteDnaPromptSummary(AuraDb db, String profileId) {

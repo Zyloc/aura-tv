@@ -143,14 +143,48 @@ public class FuturisticPillarsIntegrationTest {
             .put("series_title", "Severance").put("title", "Severance").put("app", "Apple TV+")
             .put("season", 1).put("episode", 4).put("position_sec", 2700).put("duration_sec", 3000)
             .put("updated_at", lateNightSec));
+        db.upsertWatchItem(new JSONObject().put("profile_id", "member1").put("media_key", "nfx:tbbt")
+            .put("title", "The Big Bang Theory").put("app_name", "Netflix").put("watched", true)
+            .put("position_sec", 5600).put("duration_sec", 6400).put("updated_at", lateNightSec - 50000L));
         UserMemoryStore.saveMemory(db, "member1", "No jump scares");
         List<String> autoMem = AutoMemoryDistiller.distillAndPersist(db, "member1");
         String combined = UserMemoryStore.formatMemoriesForPrompt(db, "member1");
         assertFalse(autoMem.isEmpty());
         assertTrue(combined.contains("No jump scares"));
+        assertTrue(combined.contains("The Big Bang Theory"));
         assertTrue(combined.contains("MobLand"));
         assertTrue(combined.contains("Prime Video"));
         assertTrue(combined.contains("late at night"));
+    }
+
+    @Test
+    public void testUnifiedLedgerTracksRepeatNetflixAppleTvWatchedAndRatings() throws Exception {
+        long t0 = 1_770_000_000L;
+        // Netflix TBBT played across 3 episodes (S0 E0 same media_key, position resets)
+        db.upsertWatchItem(new JSONObject().put("profile_id", "member1").put("media_key", "nfx:tbbt")
+            .put("title", "The Big Bang Theory").put("app_name", "Netflix")
+            .put("position_sec", 1250).put("duration_sec", 1320).put("updated_at", t0));
+        db.upsertWatchItem(new JSONObject().put("profile_id", "member1").put("media_key", "nfx:tbbt")
+            .put("title", "The Big Bang Theory").put("app_name", "Netflix")
+            .put("position_sec", 1200).put("duration_sec", 1320).put("updated_at", t0 + 1800));
+        db.upsertWatchItem(new JSONObject().put("profile_id", "member1").put("media_key", "nfx:tbbt")
+            .put("title", "The Big Bang Theory").put("app_name", "Netflix")
+            .put("position_sec", 1100).put("duration_sec", 1320).put("updated_at", t0 + 3600));
+        // Standalone rated 10/10 show & low-rated 2/10 show + manually watched Apple TV+ show
+        db.rateTitle(new JSONObject().put("title", "Slow Horses").put("app", "Apple TV+"), 10);
+        db.rateTitle(new JSONObject().put("title", "Bad Horror Movie").put("app", "Netflix"), 2);
+        db.markTitleWatched(new JSONObject().put("title", "Dark Matter").put("app", "Apple TV+"), true);
+
+        List<String> loved = UserEngagementLedger.getTopLovedTitles(db, "member1", 8);
+        List<String> disliked = UserEngagementLedger.getDislikedOrDroppedTitles(db, "member1", 4);
+        List<String> anchors = db.getRotatingTasteAnchors("member1", 0);
+        assertTrue("Rated 10/10 must be in loved ledger", loved.contains("Slow Horses"));
+        assertTrue("Repeat Netflix TBBT must be in loved ledger", loved.contains("The Big Bang Theory"));
+        assertTrue("Manually watched Dark Matter must be in loved ledger", loved.contains("Dark Matter"));
+        assertTrue("Rated 2/10 must be in disliked ledger", disliked.contains("Bad Horror Movie"));
+        assertFalse("Rated 2/10 must never be in loved ledger", loved.contains("Bad Horror Movie"));
+        assertTrue("Recommendation anchors must include Netflix/rated/watched titles",
+            anchors.contains("Slow Horses") || anchors.contains("The Big Bang Theory") || anchors.contains("Dark Matter"));
     }
 
     private static List<JSONObject> toList(JSONArray arr) {

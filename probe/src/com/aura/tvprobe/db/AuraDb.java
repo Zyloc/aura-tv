@@ -37,12 +37,12 @@ public class AuraDb extends SQLiteOpenHelper {
     }
 
     AuraDb(boolean inMemoryTest) {
-        super(null, null, null, 8);
+        super(null, null, null, 9);
         this.appCtx = null;
     }
 
     public AuraDb(Context ctx) {
-        super(ctx.getApplicationContext(), "aura_tv_local.db", null, 8);
+        super(ctx.getApplicationContext(), "aura_tv_local.db", null, 9);
         setWriteAheadLoggingEnabled(true);
         this.appCtx = ctx.getApplicationContext();
         applyBundledEnvIfPresent();
@@ -127,7 +127,8 @@ public class AuraDb extends SQLiteOpenHelper {
             "app_pkg TEXT, app_name TEXT, title TEXT, series_title TEXT, " +
             "season INTEGER, episode INTEGER, synopsis TEXT, poster_url TEXT, " +
             "genres TEXT, runtime_min INTEGER DEFAULT 45, launch_uri TEXT, " +
-            "position_sec INTEGER, duration_sec INTEGER, updated_at INTEGER)");
+            "position_sec INTEGER, duration_sec INTEGER, updated_at INTEGER, " +
+            "play_count INTEGER DEFAULT 1, total_watch_sec INTEGER DEFAULT 0)");
     }
 
     private void createSupportTables(SQLiteDatabase db) {
@@ -155,6 +156,8 @@ public class AuraDb extends SQLiteOpenHelper {
     public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
         try { db.execSQL("ALTER TABLE watch_history ADD COLUMN profile_id TEXT DEFAULT 'family'"); } catch (Exception ignored) {}
         try { db.execSQL("ALTER TABLE watch_history ADD COLUMN runtime_min INTEGER DEFAULT 45"); } catch (Exception ignored) {}
+        try { db.execSQL("ALTER TABLE watch_history ADD COLUMN play_count INTEGER DEFAULT 1"); } catch (Exception ignored) {}
+        try { db.execSQL("ALTER TABLE watch_history ADD COLUMN total_watch_sec INTEGER DEFAULT 0"); } catch (Exception ignored) {}
         onCreate(db);
     }
 
@@ -574,10 +577,18 @@ public class AuraDb extends SQLiteOpenHelper {
     public List<String> getRotatingTasteAnchors(String profileId, int epoch) {
         List<JSONObject> validHistory = collectActiveHistoryAnchors(profileId);
         List<String> anchors = new ArrayList<>();
-        appendRotatingLibrarySeeds(anchors, epoch, 4);
+        appendRotatingLibrarySeeds(anchors, epoch, 3);
+        appendLedgerTopSeeds(profileId, anchors, 5);
         appendDiversifiedHistoryAnchors(validHistory, anchors, 6);
         if (anchors.size() < 6) appendRotatingLibrarySeeds(anchors, epoch + 1, 6);
         return anchors;
+    }
+
+    private void appendLedgerTopSeeds(String profileId, List<String> anchors, int maxSize) {
+        for (String title : UserEngagementLedger.getTopLovedTitles(this, profileId, 8)) {
+            if (anchors.size() >= maxSize) return;
+            if (title.length() >= 2 && !anchors.contains(title)) anchors.add(title);
+        }
     }
 
     private void appendDiversifiedHistoryAnchors(List<JSONObject> validHistory, List<String> anchors, int maxHistory) {
@@ -870,9 +881,34 @@ public class AuraDb extends SQLiteOpenHelper {
         if (rawKey.isEmpty() || (newPos == 1350 && newDur == 3000)) return;
         SQLiteDatabase db = getWritableDatabase();
         long updatedAt = resolveWatchItemTimestamp(db, item, rawKey, newPos);
-        ContentValues cv = buildWatchItemValues(item, rawKey, newPos, newDur, updatedAt);
+        int[] cumulative = resolveCumulativeStats(db, rawKey, newPos, updatedAt);
+        ContentValues cv = buildWatchItemValues(item, rawKey, newPos, newDur, updatedAt, cumulative[0], cumulative[1]);
         db.insertWithOnConflict("watch_history", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
         recordCompanionProgressAndPrefetch(item, newPos, newDur);
+    }
+
+    public static int[] computeCumulativeSessionStats(
+            int prevPos, long prevUpdated, int prevPlays, int prevTotalSec, int newPos, long newUpdated) {
+        int basePlays = Math.max(1, prevPlays);
+        int baseTotal = Math.max(prevTotalSec, Math.max(0, prevPos));
+        boolean restartedEpisode = prevPos >= 120 && (newPos + 60) < prevPos;
+        boolean newSessionGap = prevUpdated > 0 && (newUpdated - prevUpdated) >= 1200;
+        if (restartedEpisode || newSessionGap) {
+            return new int[]{basePlays + 1, baseTotal + Math.max(0, newPos)};
+        }
+        int delta = Math.max(0, newPos - Math.max(0, prevPos));
+        return new int[]{basePlays, Math.max(baseTotal + delta, Math.max(0, newPos))};
+    }
+
+    private int[] resolveCumulativeStats(SQLiteDatabase db, String mediaKey, int newPos, long newUpdated) {
+        try (Cursor c = db.rawQuery(
+                "SELECT position_sec, updated_at, play_count, total_watch_sec FROM watch_history WHERE media_key = ?",
+                new String[]{mediaKey})) {
+            if (c.moveToFirst()) {
+                return computeCumulativeSessionStats(c.getInt(0), c.getLong(1), c.getInt(2), c.getInt(3), newPos, newUpdated);
+            }
+        } catch (Exception ignored) {}
+        return new int[]{1, Math.max(0, newPos)};
     }
 
     private void recordCompanionProgressAndPrefetch(JSONObject item, int newPos, int newDur) {
@@ -882,7 +918,8 @@ public class AuraDb extends SQLiteOpenHelper {
         DatabaseJanitor.recordEpisodeCheckpoint(this, baseTitle, s, e, newPos, newDur);
     }
 
-    private ContentValues buildWatchItemValues(JSONObject item, String rawKey, int newPos, int newDur, long updatedAt) {
+    private ContentValues buildWatchItemValues(
+            JSONObject item, String rawKey, int newPos, int newDur, long updatedAt, int playCount, int totalWatchSec) {
         ContentValues cv = new ContentValues();
         cv.put("media_key", rawKey);
         cv.put("profile_id", item.optString("profile_id", getSetting("active_profile", DEFAULT_PROFILE)));
@@ -890,6 +927,8 @@ public class AuraDb extends SQLiteOpenHelper {
         cv.put("app_name", item.optString("app_name"));
         cv.put("title", item.optString("title"));
         cv.put("series_title", item.optString("series_title"));
+        cv.put("play_count", playCount);
+        cv.put("total_watch_sec", totalWatchSec);
         populateWatchItemDetailValues(cv, item, newPos, newDur, updatedAt);
         return cv;
     }
@@ -971,6 +1010,8 @@ public class AuraDb extends SQLiteOpenHelper {
         o.put("synopsis", getStr(c, "synopsis")).put("poster_url", getStr(c, "poster_url"));
         o.put("genres", getStr(c, "genres")).put("runtime_min", getInt(c, "runtime_min"));
         o.put("launch_uri", getStr(c, "launch_uri")).put("position_sec", getInt(c, "position_sec"));
+        o.put("play_count", Math.max(1, getInt(c, "play_count")));
+        o.put("total_watch_sec", Math.max(getInt(c, "total_watch_sec"), getInt(c, "position_sec")));
         return o.put("duration_sec", getInt(c, "duration_sec")).put("updated_at", getLong(c, "updated_at"));
     }
 

@@ -29,23 +29,24 @@ public final class AutoMemoryDistiller {
     public static List<String> distillFromHistory(AuraDb db, String profileId, long nowSec) {
         JSONArray hist = db != null ? db.listHistory(profileId) : new JSONArray();
         List<String> out = new ArrayList<>();
-        if (hist.length() == 0) return out;
-        addIfNonEmpty(out, buildBingeMemory(hist, nowSec, db.getUserRatingsMap()));
-        addIfNonEmpty(out, buildAppAffinityMemory(hist));
-        addIfNonEmpty(out, buildSessionAndTimeMemory(hist));
-        addIfNonEmpty(out, buildDropOrAvoidMemory(hist, nowSec, db.getUserRatingsMap()));
+        if (db == null) return out;
+        addIfNonEmpty(out, buildUnifiedLovedMemory(db, profileId));
+        if (hist.length() > 0) {
+            addIfNonEmpty(out, buildAppAffinityMemory(hist));
+            addIfNonEmpty(out, buildSessionAndTimeMemory(hist));
+        }
+        addIfNonEmpty(out, buildUnifiedAvoidMemory(db, profileId));
         return out;
     }
 
-    private static String buildBingeMemory(JSONArray hist, long nowSec, Map<String, Integer> ratings) {
-        List<String> loved = new ArrayList<>();
-        for (int i = 0; i < hist.length() && loved.size() < 4; i++) {
-            JSONObject h = hist.optJSONObject(i);
-            if (h != null && TasteIntelligenceEngine.computeEngagementWeight(h, nowSec, ratings) >= 2.2) {
-                addUniqueTitle(loved, extractTitle(h));
-            }
-        }
-        return loved.isEmpty() ? "" : ("Binge-watches and finishes titles like " + String.join(", ", loved));
+    private static String buildUnifiedLovedMemory(AuraDb db, String profileId) {
+        List<String> topLoved = UserEngagementLedger.getTopLovedTitles(db, profileId, 8);
+        return topLoved.isEmpty() ? "" : ("Most-watched, rated, and binged titles: " + String.join(", ", topLoved));
+    }
+
+    private static String buildUnifiedAvoidMemory(AuraDb db, String profileId) {
+        List<String> avoid = UserEngagementLedger.getDislikedOrDroppedTitles(db, profileId, 4);
+        return avoid.isEmpty() ? "" : ("Quickly drops or dislikes titles like " + String.join(", ", avoid));
     }
 
     private static String buildAppAffinityMemory(JSONArray hist) {
@@ -89,17 +90,6 @@ public final class AutoMemoryDistiller {
         if (min >= 15 && min <= 240) { acc[4] += min; acc[5]++; }
     }
 
-    private static String buildDropOrAvoidMemory(JSONArray hist, long nowSec, Map<String, Integer> ratings) {
-        List<String> dropped = new ArrayList<>();
-        for (int i = 0; i < hist.length() && dropped.size() < 3; i++) {
-            JSONObject h = hist.optJSONObject(i);
-            if (h != null && TasteIntelligenceEngine.computeEngagementWeight(h, nowSec, ratings) < 0.0) {
-                addUniqueTitle(dropped, extractTitle(h));
-            }
-        }
-        return dropped.isEmpty() ? "" : ("Quickly drops or dislikes titles like " + String.join(", ", dropped));
-    }
-
     private static void persistAutoMemories(AuraDb db, String profileId, List<String> list) {
         JSONArray arr = new JSONArray();
         for (String s : list) arr.put(s);
@@ -124,7 +114,7 @@ public final class AutoMemoryDistiller {
     }
 
     private static String resolveAppLabel(JSONObject h) {
-        String app = h.optString("app", "").trim();
+        String app = h.optString("app_name", h.optString("app", "")).trim();
         if (!app.isEmpty() && !"TV".equalsIgnoreCase(app)) return app;
         return SessionInspector.friendlyApp(h.optString("app_pkg", ""));
     }

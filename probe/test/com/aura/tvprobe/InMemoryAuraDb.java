@@ -97,9 +97,25 @@ public class InMemoryAuraDb extends AuraDb {
         try {
             JSONObject copy = new JSONObject(item.toString());
             if (!copy.has("profile_id")) copy.put("profile_id", getValidActiveProfile());
-            if (copy.optLong("updated_at", 0L) <= 0L) copy.put("updated_at", System.currentTimeMillis() / 1000L);
+            long ts = copy.optLong("updated_at", 0L) > 0L ? copy.optLong("updated_at") : System.currentTimeMillis() / 1000L;
+            copy.put("updated_at", ts);
+            applyCumulativeStatsIfExisting(key, copy, ts);
             history.put(key, copy);
         } catch (Exception ignored) {}
+    }
+
+    private void applyCumulativeStatsIfExisting(String key, JSONObject copy, long ts) throws Exception {
+        JSONObject prev = history.get(key);
+        int newPos = copy.optInt("position_sec", 0);
+        if (prev != null) {
+            int[] st = AuraDb.computeCumulativeSessionStats(
+                prev.optInt("position_sec", 0), prev.optLong("updated_at", 0L),
+                prev.optInt("play_count", 1), prev.optInt("total_watch_sec", 0), newPos, ts);
+            copy.put("play_count", st[0]).put("total_watch_sec", st[1]);
+        } else {
+            copy.put("play_count", Math.max(1, copy.optInt("play_count", 1)))
+                .put("total_watch_sec", Math.max(copy.optInt("total_watch_sec", 0), newPos));
+        }
     }
 
     @Override

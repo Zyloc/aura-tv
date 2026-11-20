@@ -48,16 +48,9 @@ public final class UserMemoryStore {
     }
 
     public static List<String> listAutoMemories(AuraDb db, String profileId) {
-        List<String> out = new ArrayList<>();
-        if (db == null) return out;
+        if (db == null) return new ArrayList<>();
         String prof = (profileId != null && !profileId.isEmpty()) ? profileId : AuraDb.DEFAULT_PROFILE;
-        JSONArray arr = parseArray(db.getSetting("auto_memories_" + prof, "[]"));
-        if (arr.length() == 0) return AutoMemoryDistiller.distillAndPersist(db, prof);
-        for (int i = 0; i < arr.length(); i++) {
-            String s = arr.optString(i, "").trim();
-            if (!s.isEmpty()) out.add(s);
-        }
-        return out;
+        return AutoMemoryDistiller.distillAndPersist(db, prof);
     }
 
     public static List<String> listAllMemories(AuraDb db, String profileId) {
