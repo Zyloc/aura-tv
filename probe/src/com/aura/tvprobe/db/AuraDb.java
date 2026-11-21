@@ -999,8 +999,11 @@ public class AuraDb extends SQLiteOpenHelper {
 
     private JSONObject parseHistoryRowWithWatchedFlag(Cursor c, Set<String> watchedKeys) throws Exception {
         JSONObject o = cursorToWatchJson(c);
-        String tKey = normalizeTitleKey(o.optString("series_title").isEmpty() ? o.optString("title") : o.optString("series_title"));
-        if (watchedKeys.contains(tKey)) o.put("watched", true);
+        String series = o.optString("series_title", "");
+        String tKey = normalizeTitleKey(series.isEmpty() ? o.optString("title") : series);
+        boolean activeUnfinishedEpisode = (!series.isEmpty() || o.optInt("episode", 0) > 0)
+            && ContinueWatchingSelector.isUnfinishedProgress(o);
+        if (watchedKeys.contains(tKey) && !activeUnfinishedEpisode) o.put("watched", true);
         return o;
     }
 

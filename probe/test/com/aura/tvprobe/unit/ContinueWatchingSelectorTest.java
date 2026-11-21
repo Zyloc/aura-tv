@@ -67,6 +67,17 @@ public class ContinueWatchingSelectorTest {
         assertEquals("KPop Demon Hunters", selected.get(1).optString("title"));
     }
 
+    @Test
+    public void testKeepsUnfinishedSeriesEpisodeEvenWhenParentSeriesWasPreviouslyWatched() throws Exception {
+        List<JSONObject> raw = new ArrayList<>();
+        JSONObject moblandEp9 = makeSession("S1 E9 Beggars Banquet", "Disney+ Hotstar", "in.startv.hotstar", 442, 2861)
+            .put("series_title", "MobLand").put("season", 1).put("episode", 9).put("watched", true);
+        raw.add(moblandEp9);
+        List<JSONObject> selected = ContinueWatchingSelector.selectDiversified(raw, 5);
+        assertEquals(1, selected.size());
+        assertEquals("MobLand", selected.get(0).optString("series_title"));
+    }
+
     private static JSONObject makeSession(String title, String app, String pkg,
                                           int pos, int dur) throws Exception {
         return new JSONObject()

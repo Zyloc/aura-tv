@@ -39,7 +39,7 @@ public final class ContinueWatchingSelector {
     }
 
     public static boolean isEligibleSession(JSONObject item, Set<String> seenTitles) {
-        if (item == null || item.optBoolean("watched", false)) return false;
+        if (item == null || isBlockedByWatchedFlag(item)) return false;
         if (SessionInspector.isOrphanEpisodeCodeTitle(item.optString("series_title"), item.optString("title"))) return false;
         String title = extractDisplayTitle(item);
         String pkg = item.optString("app_pkg", "").toLowerCase();
@@ -48,6 +48,13 @@ public final class ContinueWatchingSelector {
         if (title.equalsIgnoreCase(cleanApp) || !isUnfinishedProgress(item)) return false;
         String normKey = AuraDb.normalizeTitleKey(title);
         return !normKey.isEmpty() && seenTitles.add(normKey);
+    }
+
+    private static boolean isBlockedByWatchedFlag(JSONObject item) {
+        if (!item.optBoolean("watched", false)) return false;
+        boolean hasEpisode = !item.optString("series_title", "").isEmpty()
+            || item.optInt("season", 0) > 0 || item.optInt("episode", 0) > 0;
+        return !(hasEpisode && isUnfinishedProgress(item));
     }
 
     public static boolean isExcludedPackage(String pkg) {
