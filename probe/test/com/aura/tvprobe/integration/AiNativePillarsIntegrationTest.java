@@ -24,6 +24,7 @@ public class AiNativePillarsIntegrationTest {
         assertEquals("llama3.2", openAi.getString("model"));
         assertEquals(2, openAi.getJSONArray("messages").length());
         assertEquals("blend_profiles", openAi.getJSONArray("tools").getJSONObject(0).getJSONObject("function").getString("name"));
+        assertEquals("object", openAi.getJSONArray("tools").getJSONObject(0).getJSONObject("function").getJSONObject("parameters").getString("type"));
         assertEquals("http://192.168.1.20:11434/v1/chat/completions", LocalLlmClient.resolveEndpointUrl("http://192.168.1.20:11434/v1/"));
         String resp = "{\"choices\":[{\"message\":{\"content\":\"\",\"tool_calls\":[{\"function\":{\"name\":\"blend_profiles\",\"arguments\":\"{\\\"profile_a\\\":\\\"member1\\\",\\\"profile_b\\\":\\\"partner\\\"}\"}}]}}]}";
         ToolModelClient.ModelTurnResult turn = LocalLlmClient.parseOpenAiToolResponse(resp);

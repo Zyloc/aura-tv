@@ -128,11 +128,26 @@ public final class LocalLlmClient implements ToolModelClient {
     }
 
     private static JSONObject wrapOpenAiFunction(JSONObject decl) throws Exception {
+        JSONObject rawParams = decl.optJSONObject("parameters");
+        JSONObject normParams = rawParams != null ? normalizeSchemaTypes(rawParams) : new JSONObject().put("type", "object");
         JSONObject fn = new JSONObject()
             .put("name", decl.optString("name", ""))
             .put("description", decl.optString("description", ""))
-            .put("parameters", decl.optJSONObject("parameters") != null ? decl.optJSONObject("parameters") : new JSONObject().put("type", "object"));
+            .put("parameters", normParams);
         return new JSONObject().put("type", "function").put("function", fn);
+    }
+
+    static JSONObject normalizeSchemaTypes(JSONObject src) throws Exception {
+        JSONObject out = new JSONObject();
+        java.util.Iterator<String> it = src.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            Object v = src.opt(k);
+            if ("type".equals(k) && v instanceof String) out.put(k, ((String) v).toLowerCase(java.util.Locale.US));
+            else if (v instanceof JSONObject) out.put(k, normalizeSchemaTypes((JSONObject) v));
+            else out.put(k, v);
+        }
+        return out;
     }
 
     static ModelTurnResult parseOpenAiToolResponse(String rawJson) {
@@ -150,8 +165,13 @@ public final class LocalLlmClient implements ToolModelClient {
     private static ModelTurnResult buildTurnFromOpenAiMessage(JSONObject msg) throws Exception {
         List<ToolCall> calls = extractOpenAiToolCalls(msg.optJSONArray("tool_calls"));
         String text = msg.isNull("content") ? "" : msg.optString("content", "").trim();
+        if (calls.isEmpty() && isRawToolSchemaEcho(text)) return null;
         if (calls.isEmpty() && text.isEmpty()) return null;
         return new ModelTurnResult(calls, text, buildGeminiRawModelContent(calls, text));
+    }
+
+    private static boolean isRawToolSchemaEcho(String text) {
+        return text.startsWith("{") && text.contains("\"type\":\"function\"") && text.contains("\"properties\"");
     }
 
     private static List<ToolCall> extractOpenAiToolCalls(JSONArray arr) {
