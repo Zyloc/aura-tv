@@ -111,12 +111,17 @@ public final class HeroSliderBuilder {
 
     public static void startAutoRotate(FrameLayout hero, Handler handler) {
         stopAutoRotate(hero, handler);
+        if (hero == null || hero.getWindowVisibility() != View.VISIBLE) return;
         HeroState st = getState(hero);
         st.runnable = () -> tickAutoRotate(hero, handler, st);
         handler.postDelayed(st.runnable, AUTO_INTERVAL);
     }
 
     private static void tickAutoRotate(FrameLayout hero, Handler handler, HeroState st) {
+        if (hero == null || hero.getWindowVisibility() != View.VISIBLE) {
+            stopAutoRotate(hero, handler);
+            return;
+        }
         nextSlide(hero);
         if (st.runnable != null) handler.postDelayed(st.runnable, AUTO_INTERVAL);
     }

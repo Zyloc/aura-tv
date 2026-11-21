@@ -65,4 +65,12 @@ public class RailNavigationMathTest {
         }
         assertEquals(0, curScrollX);
     }
+
+    @Test
+    public void testScrollLayoutRetryStopsWhenHiddenOrExhausted() {
+        assertTrue(RailBuilder.shouldRetryScrollLayout(2, android.view.View.VISIBLE, true));
+        assertFalse(RailBuilder.shouldRetryScrollLayout(0, android.view.View.VISIBLE, true));
+        assertFalse(RailBuilder.shouldRetryScrollLayout(2, android.view.View.GONE, true));
+        assertFalse(RailBuilder.shouldRetryScrollLayout(2, android.view.View.VISIBLE, false));
+    }
 }

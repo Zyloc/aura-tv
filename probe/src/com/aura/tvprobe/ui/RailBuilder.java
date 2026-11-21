@@ -599,13 +599,23 @@ public final class RailBuilder {
     }
 
     private static void scrollToChild(View child) {
+        scrollToChildWithRetries(child, 2);
+    }
+
+    static boolean shouldRetryScrollLayout(int retriesLeft, int windowVisibility, boolean attached) {
+        return retriesLeft > 0 && attached && windowVisibility == View.VISIBLE;
+    }
+
+    private static void scrollToChildWithRetries(View child, int retriesLeft) {
         if (!(child.getParent() instanceof ViewGroup)) return;
         ViewGroup row = (ViewGroup) child.getParent();
         if (!(row.getParent() instanceof HorizontalScrollView)) return;
         HorizontalScrollView scroll = (HorizontalScrollView) row.getParent();
         row.setTag(TAG_LAST_FOCUSED_INDEX, row.indexOfChild(child));
         if (row.getWidth() <= 0 || child.getWidth() <= 0) {
-            scroll.post(() -> scrollToChild(child));
+            if (shouldRetryScrollLayout(retriesLeft, scroll.getWindowVisibility(), scroll.isAttachedToWindow())) {
+                scroll.postDelayed(() -> scrollToChildWithRetries(child, retriesLeft - 1), 32L);
+            }
             return;
         }
         applyHorizontalScroll(scroll, row, child);
