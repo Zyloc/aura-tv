@@ -282,6 +282,7 @@ public class MediaProbeService extends NotificationListenerService {
     private boolean handleConfigRoute(OutputStream out, Uri uri) throws Exception {
         saveOptionalSetting(uri, "gemini_api_key");
         if ("1".equals(optParam(uri, "clear_local_llm", ""))) db.setSetting("local_llm_url", "");
+        saveOptionalSetting(uri, "llm_provider");
         saveOptionalSetting(uri, "local_llm_url");
         saveOptionalSetting(uri, "local_llm_model");
         saveOptionalSetting(uri, "local_llm_api_key");

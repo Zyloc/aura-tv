@@ -10,13 +10,28 @@ https://github.com/user-attachments/assets/d993c287-e06e-4972-ada3-58f4b044038e
 
 ## Key Features
 
-- **Calm, Ad-Free Android TV Launcher** — Unifies your installed streaming apps (Netflix, Prime Video, Apple TV+, Disney+, Max, Hulu, YouTube, and regional apps worldwide) in one fast home screen.
-- **Intelligent On-Device Memory** — Naturally remembers what you watch across apps via Android TV's `MediaSession` & `UsageStats` APIs, plus your ratings, skips, and spoken preferences — stored locally in SQLite on your TV.
-- **Auto-Refreshing Taste Curation** — Combines your watch history, likes/skips, and live cross-OTT trending into *Tonight’s Picks* and *For You* rails with a 4-refresh / 48-hour no-repeat cooldown.
-- **Live Spoiler-Free "Catch Me Up"** — Because Aura knows the exact episode and minute you stopped on, ask *"Catch me up"* for a live translucent lower-third recap right over your screen with zero spoilers.
-- **Conversational AI Companion** — Ditch the TV keyboard. Ask for a mood, compare picks, ask follow-ups, remember preferences (*"I love slow-burn sci-fi"*), and say *"Play it"* to deep-link straight into the native app.
-- **Local-First & Flexible AI** — Zero ads, zero telemetry. Bring your own **Gemini API key** (or connect a local/OpenAI-compatible LLM via your companion host).
-- **Ultra-Light Native Footprint** — Zero bloated frameworks; pure native Android Java designed to run effortlessly on any Android TV or streaming stick.
+- **Calm, Ad-Free Android TV Launcher** — Unifies your installed streaming apps (Netflix, Prime Video, Apple TV+, Disney+, Max, Hulu, YouTube, and regional apps worldwide) in one clean home screen with a streamlined sidebar and instant HDMI/profile switching.
+- **Intelligent On-Device Memory** — Remembers what you watch across apps via Android TV's `MediaSession` & `UsageStats` APIs, plus your ratings, skips, and spoken preferences — stored locally in SQLite on your TV.
+- **Auto-Refreshing Taste Curation & Mood Morphing** — Combines your watch history, likes/skips, and live cross-OTT trending into *Tonight’s Picks* and *For You* rails with a 4-refresh / 48-hour no-repeat cooldown. Say *"Make tonight cozy"* or *"Switch to dark thrillers"* to dynamically morph your entire home screen on the fly.
+- **Movie Night Blend (Multi-Profile Mixer)** — Watching with a partner, family, or friends? Blend two or more household taste profiles in one click or voice prompt to generate a consensus slate everyone will enjoy.
+- **Live Spoiler-Free "Catch Me Up" & Episode Vibe Check** — Because Aura knows the exact episode and minute you stopped on, ask *"Catch me up"* for a translucent lower-third recap right over your screen with zero spoilers, or ask *"Is this episode slow or intense?"* before pressing play.
+- **4-Tab Phone QR Companion (No App Required)** — Scan the TV's QR code from any phone on your Wi-Fi to unlock a mobile web companion with **Co-Pilot** (voice/text search, live recap, mood morph, Movie Night Blend), **Remote** (D-pad, playback, volume, HDMI), **Discover** (instant app launcher, quick rating, RAM Boost), and **Setup** (paste API keys & switch AI providers at runtime).
+- **Runtime AI Provider Switching (Cloud, Local, or Hybrid)** — Zero ads, zero telemetry. Switch live between **Gemini Cloud**, **Local LLM Only (Ollama / LM Studio)**, or **Auto (Local → Cloud Fallback)** right from TV Settings or your Phone Companion — no rebuild or `.env` editing needed.
+- **Ultra-Light Native Footprint** — Zero bloated frameworks; pure native Android Java (~10 MB RAM, <1% idle CPU) engineered to fly on any Android TV or streaming stick.
+
+---
+
+## Which LLM Provider Should I Pick?
+
+Aura TV lets you switch AI engines **at runtime** inside **TV → Aura Settings → 5. AI Provider** or **Phone QR Companion → Setup tab**:
+
+| Mode | Best For | Speed & Quality | Privacy / Offline | Requirements |
+| :--- | :--- | :--- | :--- | :--- |
+| **`Gemini Cloud`** *(Recommended)* | Daily living-room use, best tool-calling, nuanced recaps, Movie Night Blend, & home mood morphing | **Fast (~1–2s) & highest accuracy** across all 17 AI tools | Cloud API (free tier available, zero telemetry from Aura) | Free Gemini API key from [Google AI Studio](https://aistudio.google.com/) |
+| **`Auto (Local → Cloud)`** | Users with a laptop/NAS running Ollama or LM Studio on LAN who want local-first speed with cloud safety net | Local speed when host is awake; seamless Gemini fallback if host sleeps | Local LAN first; falls back to Gemini only if local endpoint is unreachable | Local LLM URL + Gemini API key |
+| **`Local LLM Only`** | 100% offline / air-gapped LAN privacy with zero cloud calls | Depends on host GPU/RAM (`qwen2.5:3b` or `llama3.2:3b` recommended for tool-calling) | **100% local LAN** — never sends prompts to Google | Ollama (`OLLAMA_HOST=0.0.0.0:11434`) or LM Studio OpenAI-compatible server on your LAN |
+
+> **Tip for Ollama / LM Studio users:** Use a tool-calling capable model such as **`qwen2.5:3b`**, **`qwen2.5:7b`**, or **`llama3.2:3b`**. When exposing Ollama on macOS/Linux to your TV over Wi-Fi, start it with `OLLAMA_HOST=0.0.0.0:11434 ollama serve` and enter `http://<YOUR_PC_IP>:11434/v1` in the Phone Companion **Setup** tab.
 
 ---
 
@@ -26,7 +41,7 @@ https://github.com/user-attachments/assets/d993c287-e06e-4972-ada3-58f4b044038e
 
 1. Download **`aura-tv-v1.0.0.apk`** from **[GitHub Releases](https://github.com/Zyloc/aura-tv/releases/latest)** and sideload it onto your Android TV (using the *Downloader* app, USB, or `adb install -r aura-tv-v1.0.0.apk`).
 2. Open **Aura TV** → `☰` → **Phone Remote (QR)** and scan with your phone.
-3. Tap the **Setup** tab on your phone and paste your **Gemini API key** (or local **Ollama** URL) — no TV keyboard typing required!
+3. Open the **Setup** tab on your phone, choose your **AI Provider** (`Gemini Cloud`, `Auto`, or `Local LLM Only`), and paste your **Gemini API key** or **Local LLM URL** — zero TV keyboard typing required!
 
 *(Optional: for hardware mic interception inside Netflix/Prime/Hotstar and setting Aura as your default launcher on locked OEM TVs, run the 1-time ADB permission commands listed on the Release page.)*
 
@@ -95,37 +110,41 @@ What `deploy_tv.sh` does:
 > ```bash
 > ./scripts/build_apk.sh
 > ```
-> **Update API key or settings at runtime (no rebuild needed):**
+> **Update API key, AI provider mode, or settings at runtime (no rebuild needed):**
 > ```bash
-> curl "http://<AURA_TV_IP>:8765/api/config?gemini_api_key=<YOUR_KEY>&region_country=US"
+> curl "http://<AURA_TV_IP>:8765/api/config?llm_provider=gemini&gemini_api_key=<YOUR_KEY>&region_country=US"
+> # Or switch to Local LLM Only (Ollama / LM Studio):
+> curl "http://<AURA_TV_IP>:8765/api/config?llm_provider=local&local_llm_url=http://<PC_IP>:11434/v1&local_llm_model=qwen2.5:3b"
 > ```
 
 ---
 
 ### 3. Optional: Run the Companion Host Server
 
-Aura TV runs **100% standalone** on your TV (with an embedded HTTP server & QR phone remote on port `8765`). If you also want a desktop/phone dashboard and backup sync on port `7070`:
+Aura TV runs **100% standalone** on your TV (with an embedded HTTP server & 4-tab QR Phone Companion on port `8765`). If you also want a desktop/phone dashboard and backup sync on port `7070`:
 
 ```bash
 pip install -r requirements.txt
 python3 app.py
 ```
 
-Open `http://localhost:7070` — or scan the QR code inside Aura TV's Settings to open the built-in phone remote directly at `http://<AURA_TV_IP>:8765`.
+Open `http://localhost:7070` — or scan the QR code inside Aura TV's sidebar to open the built-in 4-tab Phone Companion directly at `http://<AURA_TV_IP>:8765`.
 
 ---
 
 ## How to Use
 
-- **Home Screen & Moods** — Browse *Tonight’s Picks*, your installed apps, *Continue Watching*, and auto-refreshing personalized rails. Use mood/duration filters or hit **Refresh** for a completely fresh slate.
-- **Talk to Aura (Voice & Search)** — Open the Aura orb with your remote or phone companion and speak naturally:
+- **Home Screen & Dynamic Mood Morphing** — Browse *Tonight’s Picks*, your installed apps, *Continue Watching*, and auto-refreshing personalized rails. Say *"Make tonight cozy"* or *"Switch to mind-bending sci-fi"* to reshape the home screen on the fly, or hit **Refresh** for a fresh slate.
+- **Talk to Aura (Voice & Search)** — Open the Aura orb from the sidebar, remote, or Phone Companion and speak naturally:
   - *"Dark sci-fi like Severance under an hour"*
   - *"Tell me more about the second one"* → *"Play it"*
+  - *"Blend my taste with Partner for movie night"*
   - *"What's trending on Netflix right now?"*
   - *"Remember I love slow-burn mysteries and skip horror"*
   - *"Surprise me with something light tonight"*
-- **Catch Me Up (Spoiler-Free Recaps)** — While returning to a show you paused days ago, ask *"Catch me up"* to get a calm, lower-third recap up to your exact episode and minute.
-- **Rate & Refine** — Mark shows as watched, rate what you loved/skipped, or switch household profiles anytime from the top bar.
+- **Catch Me Up & Episode Vibe Check** — Returning to a show you paused days ago? Ask *"Catch me up"* for a calm, lower-third recap up to your exact episode and minute, or ask *"What's the vibe of this episode?"* for a spoiler-free mood check.
+- **4-Tab Phone QR Companion** — Scan the QR code in Aura's sidebar to use your phone as a **Co-Pilot** (voice/text AI, recaps, blend, mood morph), **Remote** (D-pad, media keys, volume, HDMI), **Discover** (launch TV apps, quick-rate titles, 1-tap RAM Boost), and **Setup** (switch AI providers & save keys at runtime).
+- **Rate, Blend & Switch Profiles** — Mark shows as watched, rate what you loved/skipped, blend profiles for **Movie Night**, or switch household profiles anytime from the left sidebar.
 
 ---
 
@@ -135,17 +154,19 @@ Open `http://localhost:7070` — or scan the QR code inside Aura TV's Settings t
 aura-tv/
 ├── probe/                          # Native Android TV Launcher (com.aura.tvprobe)
 │   ├── src/com/aura/tvprobe/
-│   │   ├── app/                    # Activity, MediaProbeService, DeepLinkLauncher, Executors
+│   │   ├── agent/                  # 17-tool Agent orchestrator, GeminiToolClient, LocalLlmClient,
+│   │   │                           # BlendProfilesTool, MorphHomeMoodTool, ExplainShowTool, etc.
+│   │   ├── app/                    # AuraActivity, DeepLinkLauncher, Executors, SystemResourceMonitor
 │   │   ├── db/                     # Local SQLite store, UserEngagementLedger, UserMemoryStore
-│   │   ├── engine/                 # Agent orchestrator, tool registry, TasteCuratedSlateEngine,
+│   │   ├── engine/                 # TasteCuratedSlateEngine, HouseholdBlendEngine,
 │   │   │                           # LiveTrendingCollector, RegionProviderRegistry, JustWatchGraph
-│   │   ├── net/                    # Embedded HTTP API (:8765), mDNS discovery, SyncManager
-│   │   └── ui/                     # D-pad Home, Search Overlay, Lower-Third Subtitles, QR Remote
-│   └── test/                       # 148 unit & integration tests (JUnit 4)
+│   │   ├── service/                # MediaProbeService (:8765), PhoneCompanionController, SyncManager
+│   │   └── ui/                     # D-pad Home, Sidebar, Settings, Lower-Third Subtitles, 4-Tab WebUI
+│   └── test/                       # 155+ unit & integration tests (JUnit 4)
 ├── scripts/
 │   ├── build_apk.sh                # Pure Android SDK build (no Gradle required)
 │   ├── deploy_tv.sh                # ADB install, permission grants & home-launcher setup
-│   └── run_tests.sh                # Compiles APK + runs all 148 unit & integration tests
+│   └── run_tests.sh                # Compiles APK + runs all 155+ unit & integration tests
 ├── app.py / recommender.py / ...   # Optional FastAPI companion & backup sync server
 └── .env.example                    # Environment configuration template
 ```
@@ -154,7 +175,7 @@ aura-tv/
 
 ## Contributing
 
-Contributions, bug reports, regional provider mappings, and local-LLM adapters are very welcome!
+Contributions, bug reports, regional provider mappings, and new AI tools are very welcome!
 
 ### Development Workflow
 
@@ -167,12 +188,12 @@ Contributions, bug reports, regional provider mappings, and local-LLM adapters a
 bash scripts/run_tests.sh
 ```
 
-All **148+ tests** must pass with zero regressions and `probe/aura-probe.apk` must compile cleanly.
+All **155+ tests** must pass with zero regressions and `probe/aura-probe.apk` must compile cleanly.
 
 ### Good First Contributions
 
 - Adding streaming app package IDs & deep-link templates for additional regions in `RegionProviderRegistry.java` and `MediaDeepLinkLauncher.java`
-- Adding OpenAI-compatible / Ollama local LLM client support alongside `GeminiToolClient.java`
+- Expanding local LLM prompt templates & tool-calling adapters in `LocalLlmClient.java`
 - Improving D-pad focus ergonomics or adding localized UI strings
 
 ### Pull Request Checklist

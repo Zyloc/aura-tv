@@ -29,6 +29,19 @@ public final class LocalLlmClient implements ToolModelClient {
         return !getBaseUrl().isEmpty();
     }
 
+    public String getProviderMode() {
+        String mode = db != null ? db.getSetting("llm_provider", "auto").trim().toLowerCase(java.util.Locale.US) : "auto";
+        return ("gemini".equals(mode) || "local".equals(mode)) ? mode : "auto";
+    }
+
+    public boolean shouldTryLocal() {
+        return isConfigured() && !"gemini".equals(getProviderMode());
+    }
+
+    public boolean shouldAllowGemini() {
+        return !"local".equals(getProviderMode());
+    }
+
     public String getBaseUrl() {
         return db != null ? db.getSetting("local_llm_url", "").trim() : "";
     }

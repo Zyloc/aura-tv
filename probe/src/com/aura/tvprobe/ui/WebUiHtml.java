@@ -110,15 +110,19 @@ public final class WebUiHtml {
         "<div class='statbox'><div style='font-size:11px;color:var(--sub)'>FREE RAM</div><div id='s-ram' class='statval'>--</div></div>" +
         "<div class='statbox'><div style='font-size:11px;color:var(--sub)'>TV CPU</div><div id='s-cpu' class='statval'>--</div></div></div>" +
         "<button class='pill acc' style='width:100%;padding:11px' onclick='boostRam()'>⚡ Boost TV RAM Now</button></div>" +
-        "<div class='card'><div class='lbl'>AI & REGION SETUP (PASTE FROM PHONE)</div>" +
+        "<div class='card'><div class='lbl'>AI PROVIDER & REGION (SWITCH AT RUNTIME)</div>" +
         "<div style='display:flex;flex-direction:column;gap:9px'>" +
+        "<select id='c-prov'>" +
+        "<option value='gemini'>Gemini Cloud (Recommended · Fastest)</option>" +
+        "<option value='auto'>Auto (Local LLM First → Gemini Fallback)</option>" +
+        "<option value='local'>Local LLM Only (100% Offline · Ollama / LM Studio)</option></select>" +
         "<input id='c-gem' type='password' placeholder='Gemini API Key (leave blank to keep current)'>" +
-        "<input id='c-lurl' placeholder='Optional Local LLM URL (e.g. http://192.168.1.20:11434/v1)'>" +
-        "<input id='c-lmod' placeholder='Local LLM Model (e.g. qwen2.5:3b or llama3.2)'>" +
+        "<input id='c-lurl' placeholder='Local LLM URL (e.g. http://192.168.1.20:11434/v1)'>" +
+        "<input id='c-lmod' placeholder='Local LLM Model (e.g. qwen2.5:3b or llama3.2:3b)'>" +
         "<input id='c-reg' placeholder='2-letter Region Code (e.g. US, GB, IN, JP)'>" +
         "<div class='row'>" +
         "<button class='pill acc' style='flex:1;padding:10px' onclick='saveCfg(false)'>Save Settings</button>" +
-        "<button class='pill rose' onclick='saveCfg(true)'>Use Gemini Only</button></div></div></div></div>" +
+        "<button class='pill rose' onclick='saveCfg(true)'>Reset to Gemini</button></div></div></div></div>" +
 
         /* BOTTOM NAV */
         "<nav class='tabs'>" +
@@ -133,7 +137,7 @@ public final class WebUiHtml {
         "function toast(t,m){const e=document.getElementById('toast');e.className='toast '+t;e.innerHTML=(t==='load'?'<div class=\"spin\"></div>':'')+'<span>'+m+'</span>';if(t==='ok')setTimeout(()=>{if(e.className==='toast ok')e.className='toast'},3200);}" +
         "function go(tab){curTab=tab;['copilot','remote','discover','setup'].forEach(k=>{document.getElementById('t-'+k).className='sec'+(k===tab?' on':'');document.getElementById('nb-'+k).className='tab'+(k===tab?' on':'');});if(tab==='setup')loadSys();if(tab==='discover'&&!apps.length)loadApps();}" +
         "async function loadAll(force=false){if(force)toast('load','Refreshing TV picks…');const r=await fetch(force?'/api/state?refresh=1':'/api/state');st=await r.json();render();if(force)toast('ok','Picks refreshed!');}" +
-        "async function loadSys(){const r=await fetch('/api/system');sys=await r.json();document.getElementById('s-ram').textContent=(sys.avail_ram_mb||'--')+' MB';document.getElementById('s-cpu').textContent=(sys.cpu_load_pct||'--')+'%';document.getElementById('c-lurl').value=sys.local_llm_url||'';document.getElementById('c-lmod').value=sys.local_llm_model||'';document.getElementById('c-reg').value=sys.region_country||'';}" +
+        "async function loadSys(){const r=await fetch('/api/system');sys=await r.json();document.getElementById('s-ram').textContent=(sys.avail_ram_mb||'--')+' MB';document.getElementById('s-cpu').textContent=(sys.cpu_load_pct||'--')+'%';document.getElementById('c-prov').value=sys.llm_provider||'auto';document.getElementById('c-lurl').value=sys.local_llm_url||'';document.getElementById('c-lmod').value=sys.local_llm_model||'';document.getElementById('c-reg').value=sys.region_country||'';}" +
         "async function loadApps(){const r=await fetch('/api/apps');const d=await r.json();apps=d.apps||[];document.getElementById('apps').innerHTML=apps.map(a=>`<button class='appbtn' onclick='fetch(\"/launch?pkg=${encodeURIComponent(a.pkg||\"\")}\");toast(\"ok\",\"Launching ${a.name}…\")'>${a.name}</button>`).join('')||'No apps found';}" +
         "function render(){if(!st)return;const p=st.active_profile||'member1',pn=(st.profile_labels&&st.profile_labels[p])||p;" +
         "document.getElementById('pbtn').textContent='👤 '+pn;" +
@@ -159,8 +163,8 @@ public final class WebUiHtml {
         "async function sendTvText(){const t=document.getElementById('tvtxt').value.trim();if(!t)return;document.getElementById('tvtxt').value='';await fetch('/api/remote?text='+encodeURIComponent(t));toast('ok','Sent to TV!');}" +
         "async function rate(t,r){await fetch('/api/rate?title='+encodeURIComponent(t)+'&rating='+r);toast('ok',r>=8?'Loved '+t:'Skipped '+t);loadAll(false);}" +
         "async function boostRam(){toast('load','Boosting TV RAM…');const r=await fetch('/api/system/boost');const d=await r.json();await loadSys();toast('ok','Freed +'+(d.freed_mb||0)+' MB RAM!');}" +
-        "async function saveCfg(clearLocal){const qs=[];const g=document.getElementById('c-gem').value.trim(),u=document.getElementById('c-lurl').value.trim(),m=document.getElementById('c-lmod').value.trim(),rg=document.getElementById('c-reg').value.trim();" +
-        "if(g)qs.push('gemini_api_key='+encodeURIComponent(g));if(clearLocal)qs.push('clear_local_llm=1');else if(u)qs.push('local_llm_url='+encodeURIComponent(u));if(m)qs.push('local_llm_model='+encodeURIComponent(m));if(rg)qs.push('region_country='+encodeURIComponent(rg));" +
+        "async function saveCfg(clearLocal){const qs=[];const pr=clearLocal?'gemini':document.getElementById('c-prov').value,g=document.getElementById('c-gem').value.trim(),u=document.getElementById('c-lurl').value.trim(),m=document.getElementById('c-lmod').value.trim(),rg=document.getElementById('c-reg').value.trim();" +
+        "qs.push('llm_provider='+encodeURIComponent(pr));if(g)qs.push('gemini_api_key='+encodeURIComponent(g));if(clearLocal)qs.push('clear_local_llm=1');else if(u)qs.push('local_llm_url='+encodeURIComponent(u));if(m)qs.push('local_llm_model='+encodeURIComponent(m));if(rg)qs.push('region_country='+encodeURIComponent(rg));" +
         "await fetch('/api/config?'+qs.join('&'));document.getElementById('c-gem').value='';await loadSys();toast('ok','Settings saved to TV!');}" +
         "async function cycleProf(){const p=(st&&st.active_profile)||'member1',n=PROFS[(PROFS.indexOf(p)+1)%PROFS.length];await fetch('/api/set-profile?profile='+n);await loadAll(false);toast('ok','Switched profile');}" +
         "function startMic(){const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){toast('ok','Use keyboard mic');return;}const r=new SR();r.lang=navigator.language||'en-US';toast('load','Listening…');r.onresult=e=>{ask(e.results[0][0].transcript);};r.start();}" +

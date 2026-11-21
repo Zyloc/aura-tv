@@ -22,7 +22,7 @@ public final class GeminiToolClient implements ToolModelClient {
         if (ai == null || requestPayload == null) return null;
         ModelTurnResult local = ai.callLocalLlmToolTurn(requestPayload, timeoutMs);
         if (local != null) return local;
-        if (!ai.hasGeminiApiKey()) return null;
+        if (!ai.shouldAllowGemini() || !ai.hasGeminiApiKey()) return null;
         String body = requestPayload.toString();
         for (String model : ai.getGeminiModels()) {
             if (Thread.currentThread().isInterrupted()) return null;

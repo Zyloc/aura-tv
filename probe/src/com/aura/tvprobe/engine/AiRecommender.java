@@ -1101,12 +1101,17 @@ public class AiRecommender {
     private static final ThreadLocal<Integer> TL_GEMINI_READ_TIMEOUT_MS = new ThreadLocal<>();
 
     public boolean hasGeminiApiKey() {
-        return !getApiKey().isEmpty() || new LocalLlmClient(db).isConfigured();
+        LocalLlmClient local = new LocalLlmClient(db);
+        return (local.shouldAllowGemini() && !getApiKey().isEmpty()) || local.shouldTryLocal();
+    }
+
+    public boolean shouldAllowGemini() {
+        return new LocalLlmClient(db).shouldAllowGemini();
     }
 
     public ToolModelClient.ModelTurnResult callLocalLlmToolTurn(JSONObject requestPayload, int timeoutMs) {
         LocalLlmClient local = new LocalLlmClient(db);
-        return local.isConfigured() ? local.generateNextTurn(requestPayload, timeoutMs) : null;
+        return local.shouldTryLocal() ? local.generateNextTurn(requestPayload, timeoutMs) : null;
     }
 
     public String[] getGeminiModels() {
@@ -1138,10 +1143,12 @@ public class AiRecommender {
     }
 
     public String callGeminiMultimodalJson(String prompt, String base64Jpeg) {
-        if (base64Jpeg == null) {
-            String local = new LocalLlmClient(db).generateSimpleText(prompt, true, 12_000);
-            if (local != null) return local;
+        LocalLlmClient local = new LocalLlmClient(db);
+        if (base64Jpeg == null && local.shouldTryLocal()) {
+            String res = local.generateSimpleText(prompt, true, 12_000);
+            if (res != null) return res;
         }
+        if (!local.shouldAllowGemini()) return null;
         String apiKey = getApiKey();
         if (apiKey.isEmpty()) return null;
         int maxAttempts = TL_GEMINI_READ_TIMEOUT_MS.get() != null ? 1 : 2;

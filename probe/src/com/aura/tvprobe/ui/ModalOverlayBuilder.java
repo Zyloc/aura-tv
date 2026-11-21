@@ -480,7 +480,7 @@ public final class ModalOverlayBuilder {
         View firstQualityBtn = addQualityAndRankingSections(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
         addPreferredLanguagesSection(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
         addCompanionVoiceAndSpeedSection(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
-        addAiEngineAndActionsSection(body, ctx, db, remotePort, hostContainer, actions);
+        addAiEngineAndActionsSection(body, ctx, db, activeProfile, remotePort, hostContainer, actions);
         return firstQualityBtn;
     }
 
@@ -599,15 +599,34 @@ public final class ModalOverlayBuilder {
         showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
     }
 
-    // Section 4: AI Engine & Phone Web Config
+    // Section 5: AI Provider Switcher & Phone Web Config
     private static void addAiEngineAndActionsSection(LinearLayout body, Context ctx, AuraDb db,
-                                                     int remotePort, FrameLayout hostContainer, ModalActions actions) {
-        String keyVal = db.getSetting("gemini_api_key", "");
-        String keyStatus = keyVal.isEmpty() ? "Offline JustWatch Graph Mode" : "Aura Agentic Engine + JustWatch Graph Active \u2713";
-        addSettingSectionHeader(body, ctx, "4. AI ENGINE & MOBILE REMOTE",
-            "Status: " + keyStatus + "   \u00B7   Phone Remote URL: http://"
-            + QrRemoteBuilder.getTvIpAddress(ctx) + ":" + remotePort);
+                                                     String activeProfile, int remotePort,
+                                                     FrameLayout hostContainer, ModalActions actions) {
+        String mode = db.getSetting("llm_provider", "auto").trim().toLowerCase();
+        String[][] providers = {{"gemini", "Gemini Cloud (Recommended)"}, {"auto", "Auto (Local \u2192 Cloud)"}, {"local", "Local LLM Only (Offline)"}};
+        addSettingSectionHeader(body, ctx, "5. AI PROVIDER & MOBILE REMOTE",
+            buildAiEngineStatusLine(ctx, db, mode, remotePort));
+        addOptionSelectorRow(body, ctx, providers, mode,
+            k -> applyLlmProviderAndReopen(hostContainer, ctx, db, activeProfile, remotePort, actions, k), hostContainer, actions);
         body.addView(buildSettingsActionRow(ctx, hostContainer, actions));
+    }
+
+    private static String buildAiEngineStatusLine(Context ctx, AuraDb db, String mode, int remotePort) {
+        String key = db.getSetting("gemini_api_key", "").trim();
+        String localUrl = db.getSetting("local_llm_url", "").trim();
+        String status = "local".equals(mode)
+            ? (localUrl.isEmpty() ? "Local LLM Only (Set URL in Phone Setup)" : "Local LLM Active (" + localUrl + ")")
+            : ("gemini".equals(mode) ? (key.isEmpty() ? "Gemini Cloud (Set Key in Phone Setup)" : "Gemini Cloud Active \u2713")
+                : (localUrl.isEmpty() ? (key.isEmpty() ? "Offline JustWatch Graph" : "Auto \u2192 Gemini Cloud \u2713") : "Auto \u2192 Local + Cloud Fallback \u2713"));
+        return "Status: " + status + "   \u00B7   Phone Companion: http://" + QrRemoteBuilder.getTvIpAddress(ctx) + ":" + remotePort;
+    }
+
+    private static void applyLlmProviderAndReopen(
+            FrameLayout hostContainer, Context ctx, AuraDb db, String activeProfile,
+            int remotePort, ModalActions actions, String newMode) {
+        db.setSetting("llm_provider", newMode);
+        showAuraSettingsModal(hostContainer, ctx, db, activeProfile, remotePort, actions);
     }
 
     private static LinearLayout buildSettingsActionRow(Context ctx, FrameLayout hostContainer, ModalActions actions) {

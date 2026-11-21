@@ -98,6 +98,7 @@ public final class PhoneCompanionController {
         JSONObject snap = SystemResourceMonitor.collectLightweightTelemetry(ctx, db);
         try {
             snap.put("region_country", RegionProviderRegistry.getCountryCode(db));
+            snap.put("llm_provider", new LocalLlmClient(db).getProviderMode());
             snap.put("local_llm_url", db != null ? db.getSetting("local_llm_url", "") : "");
             snap.put("local_llm_model", db != null ? db.getSetting("local_llm_model", "llama3.2") : "llama3.2");
             snap.put("has_gemini_key", db != null && !db.getSetting("gemini_api_key", "").trim().isEmpty());

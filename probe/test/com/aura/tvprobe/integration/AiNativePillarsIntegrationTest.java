@@ -87,5 +87,15 @@ public class AiNativePillarsIntegrationTest {
         assertNotNull(sysJson);
         assertTrue(sysJson.contains("\"region_country\":\"US\""));
         assertTrue(WebUiHtml.PAGE.contains("t-remote") && WebUiHtml.PAGE.contains("t-setup") && WebUiHtml.PAGE.contains("Movie Night Blend"));
+        db.setSetting("local_llm_url", "http://192.168.1.20:11434/v1");
+        LocalLlmClient client = new LocalLlmClient(db);
+        db.setSetting("llm_provider", "gemini");
+        assertFalse(client.shouldTryLocal());
+        assertTrue(client.shouldAllowGemini());
+        db.setSetting("llm_provider", "local");
+        assertTrue(client.shouldTryLocal());
+        assertFalse(client.shouldAllowGemini());
+        db.setSetting("llm_provider", "auto");
+        assertTrue(client.shouldTryLocal() && client.shouldAllowGemini());
     }
 }
