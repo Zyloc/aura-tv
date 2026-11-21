@@ -279,6 +279,10 @@ public class MediaProbeService extends NotificationListenerService {
 
     private boolean handleConfigRoute(OutputStream out, Uri uri) throws Exception {
         saveOptionalSetting(uri, "gemini_api_key");
+        saveOptionalSetting(uri, "local_llm_url");
+        saveOptionalSetting(uri, "local_llm_model");
+        saveOptionalSetting(uri, "local_llm_api_key");
+        saveOptionalSetting(uri, "region_country");
         saveOptionalSetting(uri, "mac_host");
         saveOptionalSetting(uri, "phone_host");
         saveOptionalSetting(uri, "remote_url");

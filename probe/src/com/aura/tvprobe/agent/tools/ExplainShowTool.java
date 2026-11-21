@@ -19,7 +19,7 @@ public final class ExplainShowTool implements AuraTool {
     public JSONObject declaration() {
         JSONObject props = buildProps();
         return AuraToolSchemaBuilder.declare(name(),
-            "Explain a show, recap up to the user's spoiler-safe episode/timestamp, identify cast, or answer follow-up questions.",
+            "Explain a show, recap up to the user's spoiler-safe episode/timestamp, identify cast, give a spoiler-free episode vibe check (heavy vs light/fun), or answer follow-up questions.",
             props, "question");
     }
 

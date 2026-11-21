@@ -40,7 +40,8 @@ public final class AuraTestSuiteRunner {
         TasteIntelligenceIntegrationTest.class,
         ReserveSyncAndTasteLifecycleIntegrationTest.class,
         AuraAgenticToolLoopIntegrationTest.class,
-        FuturisticPillarsIntegrationTest.class
+        FuturisticPillarsIntegrationTest.class,
+        AiNativePillarsIntegrationTest.class
     };
 
     public static void main(String[] args) {

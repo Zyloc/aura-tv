@@ -19,7 +19,10 @@ public final class GeminiToolClient implements ToolModelClient {
 
     @Override
     public ModelTurnResult generateNextTurn(JSONObject requestPayload, int timeoutMs) {
-        if (ai == null || !ai.hasGeminiApiKey() || requestPayload == null) return null;
+        if (ai == null || requestPayload == null) return null;
+        ModelTurnResult local = ai.callLocalLlmToolTurn(requestPayload, timeoutMs);
+        if (local != null) return local;
+        if (!ai.hasGeminiApiKey()) return null;
         String body = requestPayload.toString();
         for (String model : ai.getGeminiModels()) {
             if (Thread.currentThread().isInterrupted()) return null;

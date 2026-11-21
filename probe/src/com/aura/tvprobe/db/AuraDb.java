@@ -280,6 +280,9 @@ public class AuraDb extends SQLiteOpenHelper {
 
     private void applyEnvKeyValue(String k, String v) {
         if ("GEMINI_API_KEY".equals(k)) setSetting("gemini_api_key", v);
+        else if ("AURA_LOCAL_LLM_URL".equals(k)) setSetting("local_llm_url", v);
+        else if ("AURA_LOCAL_LLM_MODEL".equals(k)) setSetting("local_llm_model", v);
+        else if ("AURA_LOCAL_LLM_KEY".equals(k)) setSetting("local_llm_api_key", v);
         else if ("AURA_HOST_URL".equals(k)) setSetting("mac_host", v);
         else if ("AURA_PHONE_URL".equals(k)) setSetting("phone_host", v);
         else applyEnvProfileName(k, v);
