@@ -22,7 +22,19 @@ https://github.com/user-attachments/assets/d993c287-e06e-4972-ada3-58f4b044038e
 
 ## Setup
 
-### Prerequisites
+### Option A: 60-Second Install (Pre-Built APK — No Build Required)
+
+1. Download **`aura-tv-v1.0.0.apk`** from **[GitHub Releases](https://github.com/Zyloc/aura-tv/releases/latest)** and sideload it onto your Android TV (using the *Downloader* app, USB, or `adb install -r aura-tv-v1.0.0.apk`).
+2. Open **Aura TV** → `☰` → **Phone Remote (QR)** and scan with your phone.
+3. Tap the **Setup** tab on your phone and paste your **Gemini API key** (or local **Ollama** URL) — no TV keyboard typing required!
+
+*(Optional: for hardware mic interception inside Netflix/Prime/Hotstar and setting Aura as your default launcher on locked OEM TVs, run the 1-time ADB permission commands listed on the Release page.)*
+
+---
+
+### Option B: Build from Source
+
+#### Prerequisites
 
 - **Android TV / Google TV** device with **Developer Options → Network ADB Debugging** enabled
 - **Java 11+** and **Android SDK** (`build-tools`, `platforms`, `platform-tools` / `adb`)
