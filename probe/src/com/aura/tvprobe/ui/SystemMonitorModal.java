@@ -51,7 +51,7 @@ public final class SystemMonitorModal {
             @Override
             public void run() {
                 if (host.getVisibility() != View.VISIBLE || body.getChildCount() == 0) return;
-                JSONObject snap = SystemResourceMonitor.collectTelemetrySnapshot(ctx, db);
+                JSONObject snap = SystemResourceMonitor.collectLightweightTelemetry(ctx, db);
                 body.removeViewAt(0);
                 body.addView(buildVisualTelemetryHero(ctx, snap), 0);
                 host.postDelayed(this, 2500L);

@@ -60,6 +60,18 @@ public final class SystemResourceMonitor {
         if (db != null) db.setSetting("auto_ram_guard", enabled ? "true" : "false");
     }
 
+    public static JSONObject collectLightweightTelemetry(Context ctx, AuraDb db) {
+        JSONObject out = new JSONObject();
+        try {
+            Map<String, Long> mem = readProcMemInfo();
+            populateMemoryMetrics(ctx, out, mem);
+            populateCpuMetrics(out, mem);
+            recordTelemetrySample(out);
+            out.put("device_profile", TvDeviceProfile.buildDeviceProfileJson(ctx, db));
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     public static JSONObject collectTelemetrySnapshot(Context ctx, AuraDb db) {
         JSONObject out = new JSONObject();
         try {
@@ -173,7 +185,7 @@ public final class SystemResourceMonitor {
     static int estimateFallbackCpuPct(int avgMhz, int minMhz, int maxMhz, double auraCpu) {
         int span = Math.max(100, maxMhz - minMhz);
         double norm = Math.max(0.0, Math.min(1.0, (avgMhz - minMhz) / (double) span));
-        int baselinePct = 6 + (int) Math.round(norm * 22.0);
+        int baselinePct = 3 + (int) Math.round(norm * 8.0);
         return Math.max(1, Math.min(98, (int) Math.round(baselinePct + auraCpu)));
     }
 
