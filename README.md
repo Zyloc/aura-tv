@@ -39,7 +39,7 @@ Aura TV lets you switch AI engines **at runtime** inside **TV → Aura Settings 
 
 ### Option A: 60-Second Install (Pre-Built APK — No Build Required)
 
-1. Download **`aura-tv-v1.0.0.apk`** from **[GitHub Releases](https://github.com/Zyloc/aura-tv/releases/latest)** and sideload it onto your Android TV (using the *Downloader* app, USB, or `adb install -r aura-tv-v1.0.0.apk`).
+1. Download **`aura-tv-v1.0.1.apk`** from **[GitHub Releases](https://github.com/Zyloc/aura-tv/releases/latest)** and sideload it onto your Android TV (using the *Downloader* app, USB, or `adb install -r aura-tv-v1.0.1.apk`).
 2. Open **Aura TV** → `☰` → **Phone Remote (QR)** and scan with your phone.
 3. Open the **Setup** tab on your phone, choose your **AI Provider** (`Gemini Cloud`, `Auto`, or `Local LLM Only`), and paste your **Gemini API key** or **Local LLM URL** — zero TV keyboard typing required!
 
