@@ -640,14 +640,13 @@ public class AiRecommender {
     public JSONArray buildRichWatchedContext(String profileId) {
         List<String> anchors = db.getDynamicTasteAnchors(profileId);
         final JSONObject[] entries = new JSONObject[Math.min(6, anchors.size())];
-        ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, entries.length));
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
         for (int i = 0; i < entries.length; i++) {
             final int idx = i;
             final String title = anchors.get(i);
-            pool.submit(() -> entries[idx] = buildRichAnchorEntry(title));
+            futures.add(AuraExecutors.io().submit(() -> entries[idx] = buildRichAnchorEntry(title)));
         }
-        pool.shutdown();
-        try { pool.awaitTermination(2500, TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
+        AuraExecutors.awaitAll(futures, 2500L);
         return packNonNullEntries(entries);
     }
 
@@ -969,14 +968,13 @@ public class AiRecommender {
     }
 
     private void runParallelEnrichTasks(JSONArray raw, int minAllowedYear, int maxAllowedYear, JSONObject[] results) {
-        ExecutorService pool = Executors.newFixedThreadPool(4);
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
         for (int i = 0; i < raw.length(); i++) {
             final int idx = i;
             final JSONObject p = raw.optJSONObject(i);
-            if (p != null) pool.submit(() -> results[idx] = enrichSingleItem(p, idx, minAllowedYear, maxAllowedYear));
+            if (p != null) futures.add(AuraExecutors.io().submit(() -> results[idx] = enrichSingleItem(p, idx, minAllowedYear, maxAllowedYear)));
         }
-        pool.shutdown();
-        try { pool.awaitTermination(8, TimeUnit.SECONDS); } catch (Exception ignored) {}
+        AuraExecutors.awaitAll(futures, 8000L);
     }
 
     private JSONObject enrichSingleItem(JSONObject p, int idx, int minAllowedYear, int maxAllowedYear) {

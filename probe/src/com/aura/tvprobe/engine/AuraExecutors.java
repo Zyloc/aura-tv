@@ -1,6 +1,8 @@
 package com.aura.tvprobe;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -25,6 +27,15 @@ public final class AuraExecutors {
 
     public static ExecutorService serial() {
         return SERIAL_POOL;
+    }
+
+    public static void awaitAll(List<Future<?>> futures, long timeoutMs) {
+        if (futures == null || futures.isEmpty()) return;
+        long deadline = System.currentTimeMillis() + Math.max(50L, timeoutMs);
+        for (Future<?> f : futures) {
+            long rem = Math.max(10L, deadline - System.currentTimeMillis());
+            try { f.get(rem, TimeUnit.MILLISECONDS); } catch (Exception ignored) { f.cancel(true); }
+        }
     }
 
     private static ExecutorService buildAutoShrinkingPool(int core, int max, String prefix) {

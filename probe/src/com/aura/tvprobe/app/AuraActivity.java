@@ -69,11 +69,12 @@ public class AuraActivity extends Activity implements
     private static volatile long sLastTakeoverBurstMs = 0L;
     private static volatile long sLastHomeKeyMs = 0L;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final ExecutorService bgPool = Executors.newFixedThreadPool(3);
+    private final ExecutorService bgPool = AuraExecutors.io();
     private final Runnable idleScreensaverTask = this::activateScreensaver;
     private final Runnable homeSearchHintTask = this::runHomeSearchHintLoop;
     private final Runnable hourlyRecoRefreshTask = this::runHourlyRecoRefreshLoop;
     private volatile boolean refreshInFlight = false;
+    private volatile boolean pendingHomeRender = false;
     private volatile boolean loaderDismissedByUser = false;
     private volatile int activeSearchTurnId = 0;
     private long lastSilenceScheduleMs = 0L;
@@ -211,8 +212,9 @@ public class AuraActivity extends Activity implements
     private void maybeRefreshOnResume() {
         if (!initialFocusSet || refreshInFlight) return;
         boolean stale = !db.isRecoCacheFresh(activeProfile);
-        boolean updatedInBg = db.getRecoUpdatedAt(activeProfile) > lastRenderedRecoSec;
+        boolean updatedInBg = pendingHomeRender || db.getRecoUpdatedAt(activeProfile) > lastRenderedRecoSec;
         if (stale || updatedInBg) {
+            pendingHomeRender = false;
             refreshAllData(stale);
         } else {
             syncContinueWatchingOnResume();
@@ -331,6 +333,7 @@ public class AuraActivity extends Activity implements
         HeroSliderBuilder.stopAutoRotate(heroSlider, ui);
         ui.removeCallbacks(homeSearchHintTask);
         ui.removeCallbacks(idleScreensaverTask);
+        ui.removeCallbacks(hourlyRecoRefreshTask);
     }
 
     @Override
@@ -346,7 +349,6 @@ public class AuraActivity extends Activity implements
         if (sActiveInstance == this) sActiveInstance = null;
         sIsInForeground = false;
         ui.removeCallbacksAndMessages(null);
-        bgPool.shutdownNow();
         try { unregisterReceiver(homeKeyReceiver); } catch (Exception ignored) {}
         super.onDestroy();
     }
@@ -1008,6 +1010,11 @@ public class AuraActivity extends Activity implements
     }
 
     private void renderHomeContent(JSONArray recos) {
+        if (!sIsInForeground && initialFocusSet) {
+            pendingHomeRender = true;
+            return;
+        }
+        pendingHomeRender = false;
         lastRenderedRecoSec = Math.max(System.currentTimeMillis() / 1000L, db.getRecoUpdatedAt(activeProfile));
         final int savedScrollY = resolveSavedScrollY();
         final int[] savedRailFocus = resolveSavedRailFocus();

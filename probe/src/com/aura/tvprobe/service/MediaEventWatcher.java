@@ -90,9 +90,15 @@ public final class MediaEventWatcher implements MediaSessionManager.OnActiveSess
 
     private void runKatnissVoiceLogLoop() {
         while (katnissWatcherRunning) {
+            long startMs = System.currentTimeMillis();
             streamKatnissTranscriptsOnce();
-            try { Thread.sleep(250L); } catch (InterruptedException ignored) {}
+            long backoff = computeKatnissBackoffMs(System.currentTimeMillis() - startMs);
+            try { Thread.sleep(backoff); } catch (InterruptedException ignored) {}
         }
+    }
+
+    static long computeKatnissBackoffMs(long runDurationMs) {
+        return runDurationMs < 2000L ? 30_000L : 250L;
     }
 
     private void streamKatnissTranscriptsOnce() {

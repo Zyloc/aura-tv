@@ -252,6 +252,18 @@ public class FuturisticPillarsIntegrationTest {
         assertFalse("Anime-enabled profile must not ban anime", prompt.contains("kids cartoons, anime"));
     }
 
+    @Test
+    public void testKatnissBackoffAndSharedExecutorAwaitAll() {
+        assertEquals(30_000L, MediaEventWatcher.computeKatnissBackoffMs(120L));
+        assertEquals(250L, MediaEventWatcher.computeKatnissBackoffMs(5_000L));
+        java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger(0);
+        List<java.util.concurrent.Future<?>> futs = new ArrayList<>();
+        futs.add(AuraExecutors.io().submit(done::incrementAndGet));
+        futs.add(AuraExecutors.io().submit(done::incrementAndGet));
+        AuraExecutors.awaitAll(futs, 2000L);
+        assertEquals(2, done.get());
+    }
+
     private static List<JSONObject> toList(JSONArray arr) {
         List<JSONObject> out = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {

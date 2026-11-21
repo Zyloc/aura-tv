@@ -66,14 +66,13 @@ public final class AgenticSearchOrchestrator {
     }
 
     private static List<JSONObject> gatherParallelCandidates(String userQuery, JSONObject plan, int minModernYear) {
-        ExecutorService exec = Executors.newFixedThreadPool(4);
+        ExecutorService exec = AuraExecutors.io();
         JSONArray pq = plan != null ? plan.optJSONArray("primary_queries") : null;
         String fmt = plan != null ? plan.optString("format", "") : "";
         Future<JSONObject[]> pqFut = exec.submit(() -> lookupTitlesInParallel(pq, pq != null ? Math.min(12, pq.length()) : 0));
         Future<JSONArray> castFut = exec.submit(() -> JustWatchGraph.fetchCastSeedCandidates(plan != null ? plan.optJSONArray("cast_seed_titles") : null, fmt));
         Future<JSONArray> specFut = exec.submit(() -> JustWatchGraph.executeScatterGatherSpecs(plan != null ? plan.optJSONArray("queries") : null));
         Future<JSONArray> simFut = exec.submit(() -> fetchDirectSimIfSimple(userQuery));
-        exec.shutdown();
         return collectParallelFutures(pqFut, castFut, specFut, simFut, plan, minModernYear);
     }
 
@@ -111,14 +110,13 @@ public final class AgenticSearchOrchestrator {
     public static JSONObject[] lookupTitlesInParallel(JSONArray titles, int count) {
         if (titles == null || count <= 0) return new JSONObject[0];
         final JSONObject[] hits = new JSONObject[count];
-        ExecutorService exec = Executors.newFixedThreadPool(Math.max(1, Math.min(6, count)));
+        List<Future<?>> futures = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             final int idx = i;
             final String q = titles.optString(i, "").trim();
-            if (!q.isEmpty()) exec.submit(() -> hits[idx] = JustWatchGraph.lookupTitle(q));
+            if (!q.isEmpty()) futures.add(AuraExecutors.io().submit(() -> hits[idx] = JustWatchGraph.lookupTitle(q)));
         }
-        exec.shutdown();
-        try { exec.awaitTermination(8000, TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
+        AuraExecutors.awaitAll(futures, 8000L);
         return hits;
     }
 

@@ -273,13 +273,12 @@ public class JustWatchGraph {
     }
 
     private static void runScatterGatherPool(JSONArray specs, Set<String> seenKeys, List<JSONObject> gathered) {
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(Math.min(6, specs.length()));
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
         for (int i = 0; i < specs.length() && i < 6; i++) {
             final JSONObject spec = specs.optJSONObject(i);
-            if (spec != null) pool.submit(() -> collectSpecCandidates(spec, seenKeys, gathered));
+            if (spec != null) futures.add(AuraExecutors.io().submit(() -> collectSpecCandidates(spec, seenKeys, gathered)));
         }
-        pool.shutdown();
-        try { pool.awaitTermination(8, TimeUnit.SECONDS); } catch (Exception ignored) {}
+        AuraExecutors.awaitAll(futures, 8000L);
     }
 
     private static void collectSpecCandidates(JSONObject spec, Set<String> seenKeys, List<JSONObject> gathered) {
