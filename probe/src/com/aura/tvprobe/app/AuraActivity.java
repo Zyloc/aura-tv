@@ -394,6 +394,16 @@ public class AuraActivity extends Activity implements
         });
     }
 
+    public static boolean dispatchRemoteKeyFromPhone(int keyCode) {
+        AuraActivity inst = sActiveInstance;
+        if (inst == null) return false;
+        inst.ui.post(() -> {
+            inst.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, keyCode));
+            inst.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, keyCode));
+        });
+        return true;
+    }
+
     public static void displayAgentSearchSession(Context ctx, JSONObject session) {
         AuraActivity inst = sActiveInstance;
         if (inst == null || session == null) return;

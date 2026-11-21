@@ -261,6 +261,8 @@ public class MediaProbeService extends NotificationListenerService {
         if ("/api/set-profile".equals(p)) return handleSetProfileRoute(out, uri);
         if ("/api/config".equals(p)) return handleConfigRoute(out, uri);
         if ("/api/set-server".equals(p)) return handleSetServerRoute(out, uri);
+        String companionJson = PhoneCompanionController.tryHandleRoute(this, db, uri, p);
+        if (companionJson != null) { writeHttpResponse(out, "application/json", companionJson); return true; }
         return false;
     }
 

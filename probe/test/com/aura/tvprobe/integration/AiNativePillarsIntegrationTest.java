@@ -75,4 +75,17 @@ public class AiNativePillarsIntegrationTest {
         assertTrue(UserMemoryStore.formatMemoriesForPrompt(db, "member1").contains("cozy light shows"));
         assertTrue(AuraToolRegistry.createDefaultRegistry().size() >= 17);
     }
+
+    @Test
+    public void testPhoneCompanionControllerRoutesAndKeyMapping() {
+        InMemoryAuraDb db = new InMemoryAuraDb();
+        db.setSetting("region_country", "US");
+        assertEquals(android.view.KeyEvent.KEYCODE_DPAD_UP, PhoneCompanionController.mapKeyCode("UP"));
+        assertEquals(android.view.KeyEvent.KEYCODE_BACK, PhoneCompanionController.mapKeyCode("BACK"));
+        assertEquals(-1, PhoneCompanionController.mapKeyCode("INVALID"));
+        String sysJson = PhoneCompanionController.tryHandleRoute(null, db, null, "/api/system");
+        assertNotNull(sysJson);
+        assertTrue(sysJson.contains("\"region_country\":\"US\""));
+        assertTrue(WebUiHtml.PAGE.contains("t-remote") && WebUiHtml.PAGE.contains("t-setup") && WebUiHtml.PAGE.contains("Movie Night Blend"));
+    }
 }
