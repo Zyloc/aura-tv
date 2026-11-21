@@ -262,6 +262,9 @@ public class FuturisticPillarsIntegrationTest {
         futs.add(AuraExecutors.io().submit(done::incrementAndGet));
         AuraExecutors.awaitAll(futs, 2000L);
         assertEquals(2, done.get());
+        assertEquals(7, SystemResourceMonitor.estimateFallbackCpuPct(1100, 1100, 1400, 0.5));
+        assertTrue(SystemResourceMonitor.estimateFallbackCpuPct(1400, 1100, 1400, 3.0) < 40);
+        assertTrue(SystemResourceMonitor.estimateFallbackCpuPct(1400, 1100, 1400, 85.0) >= 95);
     }
 
     private static List<JSONObject> toList(JSONArray arr) {

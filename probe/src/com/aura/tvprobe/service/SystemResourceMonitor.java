@@ -164,10 +164,24 @@ public final class SystemResourceMonitor {
     private static int sampleSystemCpuLoadPct(int[] freqsMhz, double auraCpu, Map<String, Long> mem) {
         int procStatPct = trySampleProcStatCpuPct();
         if (procStatPct >= 0) return procStatPct;
-        int avgMhz = (freqsMhz[0] + freqsMhz[1] + freqsMhz[2] + freqsMhz[3]) / 4;
-        int freqRatioPct = Math.max(12, Math.min(85, ((avgMhz - 1000) * 100) / 450));
-        int memPressure = mem.getOrDefault("MemAvailable", 450000L) < 280000L ? 14 : 4;
-        return Math.min(98, (int) Math.round(freqRatioPct + auraCpu + memPressure));
+        int avgMhz = averageCoreMhz(freqsMhz);
+        int minMhz = (int) (parseLongSafe(readFirstLine("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq"), 1100000L) / 1000L);
+        int maxMhz = (int) (parseLongSafe(readFirstLine("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"), 1450000L) / 1000L);
+        return estimateFallbackCpuPct(avgMhz, minMhz, maxMhz, auraCpu);
+    }
+
+    static int estimateFallbackCpuPct(int avgMhz, int minMhz, int maxMhz, double auraCpu) {
+        int span = Math.max(100, maxMhz - minMhz);
+        double norm = Math.max(0.0, Math.min(1.0, (avgMhz - minMhz) / (double) span));
+        int baselinePct = 6 + (int) Math.round(norm * 22.0);
+        return Math.max(1, Math.min(98, (int) Math.round(baselinePct + auraCpu)));
+    }
+
+    private static int averageCoreMhz(int[] freqsMhz) {
+        if (freqsMhz == null || freqsMhz.length == 0) return 1100;
+        long sum = 0L;
+        for (int f : freqsMhz) sum += f;
+        return (int) (sum / freqsMhz.length);
     }
 
     private static int trySampleProcStatCpuPct() {
