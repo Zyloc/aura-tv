@@ -44,8 +44,19 @@ public final class MorphHomeMoodTool implements AuraTool {
         boolean forceFresh = args.optBoolean("force_fresh", false);
         if (!note.isEmpty() && ctx.db != null) UserMemoryStore.saveMemory(ctx.db, ctx.profileId, note);
         if (ctx.uiBridge != null) ctx.uiBridge.applyMoodAndRefresh(mood, forceFresh);
+        ctx.visualHeadline = "Home Mood Updated";
+        ctx.visualSpokenSummary = buildSpokenConfirmation(mood, note);
         ctx.actionExecutedDirectly = true;
         return buildResponse(mood, note, forceFresh);
+    }
+
+    private static String buildSpokenConfirmation(String mood, String note) {
+        String label = TasteIntelligenceEngine.MOOD_LIGHT_SMART.equals(mood) ? "Light & Smart"
+            : TasteIntelligenceEngine.MOOD_MIND_BENDING.equals(mood) ? "Mind-Bending"
+            : TasteIntelligenceEngine.MOOD_EDGE_OF_SEAT.equals(mood) ? "Edge-of-Seat"
+            : TasteIntelligenceEngine.MOOD_UNDER_2H.equals(mood) ? "Quick Under-2h" : "All";
+        return note.isEmpty() ? ("Morphed your Home screen to " + label + " mode.")
+            : ("Morphed your Home screen to " + label + " mode and remembered your preference.");
     }
 
     private static JSONObject buildResponse(String mood, String note, boolean forceFresh) {

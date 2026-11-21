@@ -70,6 +70,7 @@ public class AiNativePillarsIntegrationTest {
             .put("remember_note", "Prefers cozy light shows this week"), ctx);
         assertEquals("morphed", res.getString("status"));
         assertEquals(TasteIntelligenceEngine.MOOD_LIGHT_SMART, appliedMood[0]);
+        assertFalse(ctx.visualSpokenSummary.isEmpty());
         assertTrue(UserMemoryStore.formatMemoriesForPrompt(db, "member1").contains("cozy light shows"));
         assertTrue(AuraToolRegistry.createDefaultRegistry().size() >= 17);
     }
