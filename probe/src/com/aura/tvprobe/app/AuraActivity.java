@@ -1178,6 +1178,9 @@ public class AuraActivity extends Activity implements
     @Override
     public void onNavigate(String destination) {
         if ("home".equals(destination)) refreshAllData(false);
+        else if ("ask_ai".equals(destination)) SearchOverlay.show(searchOverlay, this, true);
+        else if ("movie_blend".equals(destination)) runSearchQuery("Movie night blend for me and partner tonight");
+        else if ("surprise_me".equals(destination)) runSearchQuery("Surprise me and play something great tonight");
         else if ("refresh_recos".equals(destination)) refreshAllData(true, true);
         else if ("ram_guardian".equals(destination)) showSystemMonitorDialog();
         else if ("guide_ai".equals(destination)) showGuideAiDialog();
